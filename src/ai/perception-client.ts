@@ -1,6 +1,7 @@
 import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from 'firebase/ai';
 import type { Perception, PerceptionIntent, PerceptionTone } from '../cognition/cognition-types';
 import { getFirebaseApp, isFirebaseConfigured } from '../storage/firebase';
+import { runtimeGeminiModel } from '../config/runtime-config';
 
 const intents: PerceptionIntent[] = [
   'question', 'statement', 'request', 'disclosure', 'affection', 'apology', 'disagreement', 'invitation', 'boundary', 'unknown',
@@ -33,7 +34,7 @@ export async function analyzeUserMessage(userText: string): Promise<Perception |
   try {
     const ai = getAI(app, { backend: new GoogleAIBackend() });
     const model = getGenerativeModel(ai, {
-      model: import.meta.env.VITE_GEMINI_MODEL || 'gemini-3.8-flash',
+      model: runtimeGeminiModel,
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: schema,

@@ -1,20 +1,17 @@
 import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, type AppCheck } from 'firebase/app-check';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import {
+  runtimeAppCheckDebugEnabled,
+  runtimeAppCheckDebugToken,
+  runtimeFirebaseConfig,
+  runtimeRecaptchaEnterpriseSiteKey,
+} from '../config/runtime-config';
 
-const env = import.meta.env;
-
-export const firebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: env.VITE_FIREBASE_APP_ID,
-};
+export const firebaseConfig = runtimeFirebaseConfig;
 
 export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId);
-export const appCheckSiteKey = String(env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY ?? '').trim();
+export const appCheckSiteKey = runtimeRecaptchaEnterpriseSiteKey;
 
 export type AppCheckState = 'disabled' | 'missing_site_key' | 'debug' | 'active' | 'error';
 
@@ -41,11 +38,9 @@ export function initializeFirebaseAppCheck(): AppCheckState {
   }
 
   try {
-    const debugToken = String(env.VITE_APP_CHECK_DEBUG_TOKEN ?? '').trim();
-    const debugEnabled = String(env.VITE_APP_CHECK_DEBUG ?? '').toLowerCase() === 'true';
-    if (debugToken || debugEnabled) {
-      // Firebase reads this global before App Check initialization.
-      (globalThis as typeof globalThis & { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken || true;
+    if (runtimeAppCheckDebugToken || runtimeAppCheckDebugEnabled) {
+      (globalThis as typeof globalThis & { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
+        runtimeAppCheckDebugToken || true;
       appCheckState = 'debug';
     } else {
       appCheckState = 'active';

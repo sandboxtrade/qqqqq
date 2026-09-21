@@ -1,5 +1,6 @@
 import { getAI, getGenerativeModel, GoogleAIBackend } from 'firebase/ai';
 import { getFirebaseApp, isFirebaseConfigured } from '../storage/firebase';
+import { runtimeGeminiModel } from '../config/runtime-config';
 import type { CharacterCore } from '../character/character-types';
 import type { EmotionalState } from '../emotions/emotion-types';
 import type { RelationshipState } from '../relationship/relationship-types';
@@ -29,7 +30,7 @@ export async function generateCharacterReply(request: LanguageRequest): Promise<
 
   try {
     const ai = getAI(app, { backend: new GoogleAIBackend() });
-    const model = getGenerativeModel(ai, { model: import.meta.env.VITE_GEMINI_MODEL || 'gemini-3.8-flash' });
+    const model = getGenerativeModel(ai, { model: runtimeGeminiModel });
 
     const memoryText = request.memoryContext.memories.map((m) => `- ${m.summary}`).join('\n') || '- none relevant';
     const factText = request.memoryContext.facts
@@ -117,7 +118,7 @@ export async function generateInitiativeMessage(request: InitiativeLanguageReque
 
   try {
     const ai = getAI(app, { backend: new GoogleAIBackend() });
-    const model = getGenerativeModel(ai, { model: import.meta.env.VITE_GEMINI_MODEL || 'gemini-3.8-flash' });
+    const model = getGenerativeModel(ai, { model: runtimeGeminiModel });
     const prompt = `
 You are only the language renderer for one persistent adult fictional character initiating a conversation on her own.
 The local engine already chose the initiative. Render one short, natural opening message in Russian.
