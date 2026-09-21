@@ -168,3 +168,185 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(165,109,2
   .stage { min-height: 285px; }
   .chat-scroll { max-height: 31dvh; }
 }
+
+
+/* v0.5.2 — single-photo live character prototype */
+.live-photo-stage {
+  min-height: clamp(430px, 58dvh, 610px);
+  background: #100d12;
+}
+
+.character-preload {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.live-avatar {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: #171116;
+}
+
+.live-avatar-frame {
+  position: absolute;
+  inset: -1.2%;
+  overflow: hidden;
+  transform-origin: 50% 40%;
+  animation: liveAvatarIdle 8.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.live-photo-layer {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center 12%;
+  backface-visibility: hidden;
+}
+
+.live-photo-base {
+  transform: scale(1.015);
+  filter: saturate(.98) contrast(1.015) brightness(.985);
+}
+
+.live-photo-hair {
+  opacity: .55;
+  -webkit-mask-image: radial-gradient(ellipse 24% 29% at 37% 34%, #000 0 48%, transparent 74%);
+  mask-image: radial-gradient(ellipse 24% 29% at 37% 34%, #000 0 48%, transparent 74%);
+  animation: liveHair 6.8s ease-in-out infinite;
+  transform-origin: 39% 31%;
+  will-change: transform;
+}
+
+.live-photo-hand-face {
+  opacity: .72;
+  -webkit-mask-image: radial-gradient(ellipse 14% 17% at 68% 37%, #000 0 44%, rgba(0,0,0,.74) 58%, transparent 76%);
+  mask-image: radial-gradient(ellipse 14% 17% at 68% 37%, #000 0 44%, rgba(0,0,0,.74) 58%, transparent 76%);
+  animation: liveHandFace 5.4s ease-in-out infinite;
+  transform-origin: 68% 42%;
+  will-change: transform;
+}
+
+.live-photo-hand-bed {
+  opacity: .48;
+  -webkit-mask-image: radial-gradient(ellipse 16% 11% at 15% 88%, #000 0 42%, rgba(0,0,0,.68) 58%, transparent 78%);
+  mask-image: radial-gradient(ellipse 16% 11% at 15% 88%, #000 0 42%, rgba(0,0,0,.68) 58%, transparent 78%);
+  animation: liveHandBed 7.2s ease-in-out infinite;
+  transform-origin: 18% 85%;
+  will-change: transform;
+}
+
+.live-blink {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.live-eyelid {
+  position: absolute;
+  top: 18.7%;
+  width: 7.2%;
+  height: 2.8%;
+  border-radius: 50% 50% 60% 60%;
+  background: linear-gradient(180deg, rgba(228,166,161,.98), rgba(205,127,135,.98));
+  border-bottom: 1.5px solid rgba(68,31,43,.74);
+  opacity: 0;
+  transform: scaleY(.08);
+  transform-origin: 50% 50%;
+  filter: blur(.15px);
+  transition: opacity 36ms linear, transform 70ms ease-in;
+}
+
+.live-eyelid-left {
+  left: 43.1%;
+  transform: rotate(-4deg) scaleY(.08);
+}
+
+.live-eyelid-right {
+  left: 52.5%;
+  transform: rotate(5deg) scaleY(.08);
+}
+
+.live-blink.closed .live-eyelid {
+  opacity: .98;
+}
+
+.live-blink.closed .live-eyelid-left {
+  transform: rotate(-4deg) scaleY(1);
+}
+
+.live-blink.closed .live-eyelid-right {
+  transform: rotate(5deg) scaleY(1);
+}
+
+.live-photo-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(4,3,6,.06) 0%, transparent 19%, transparent 64%, rgba(5,4,7,.30) 100%),
+    radial-gradient(circle at 50% 35%, transparent 48%, rgba(4,3,6,.08) 100%);
+}
+
+.live-photo-stage.is-thinking .live-avatar-frame {
+  animation: liveAvatarThinking 3.8s ease-in-out infinite;
+}
+
+.live-photo-stage.is-thinking .live-photo-hand-face {
+  animation-duration: 3.4s;
+}
+
+@keyframes liveAvatarIdle {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.006) rotate(0deg); }
+  25% { transform: translate3d(.15%, -.10%, 0) scale(1.010) rotate(.035deg); }
+  50% { transform: translate3d(0, -.28%, 0) scale(1.015) rotate(0deg); }
+  75% { transform: translate3d(-.13%, -.08%, 0) scale(1.010) rotate(-.035deg); }
+}
+
+@keyframes liveAvatarThinking {
+  0%, 100% { transform: translate3d(0, -.05%, 0) scale(1.010) rotate(0deg); }
+  50% { transform: translate3d(.20%, -.34%, 0) scale(1.016) rotate(.045deg); }
+}
+
+@keyframes liveHair {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  50% { transform: translate3d(-.12%, .10%, 0) rotate(-.08deg) scale(1.001); }
+}
+
+@keyframes liveHandFace {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  45% { transform: translate3d(.18%, -.16%, 0) rotate(.16deg); }
+  68% { transform: translate3d(.08%, -.05%, 0) rotate(.07deg); }
+}
+
+@keyframes liveHandBed {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(-.15%, .09%, 0) rotate(-.10deg); }
+}
+
+@media (max-height: 760px) {
+  .live-photo-stage { min-height: 400px; }
+}
+
+@media (min-width: 700px) {
+  .live-photo-stage { min-height: 580px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-avatar-frame,
+  .live-photo-hair,
+  .live-photo-hand-face,
+  .live-photo-hand-bed {
+    animation: none !important;
+  }
+
+  .live-eyelid {
+    transition: none;
+  }
+}

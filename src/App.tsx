@@ -47,7 +47,7 @@ export default function App() {
         <div className="top-status"><span className={ready ? 'status-dot online' : 'status-dot'} /><span>{isFirebaseConfigured ? 'cloud' : 'local'}</span></div>
       </header>
 
-      <CharacterStage runtime={runtime} onNavigate={setActiveTab} />
+      <CharacterStage runtime={runtime} busy={busy} onNavigate={setActiveTab} />
 
       {error && (
         <div className="error-banner">
