@@ -1,9 +1,16 @@
 # Character assets
 
-For the current v0.5 preview, put the main PNG here with the exact filename:
+## v0.5.2 live-photo prototype
 
-`avatar-main.png`
+Current test image:
 
-Recommended now: transparent PNG, vertical canvas, character centered with margin around the body.
+`avatar-main.jpg`
 
-Future versions will introduce an asset manifest and separate pose/outfit/expression compatibility instead of relying on one image.
+The stage uses this single image for a lightweight "alive" prototype:
+- randomized blink timing;
+- subtle breathing / body sway;
+- tiny hair movement;
+- tiny masked hand movement;
+- slightly different idle motion while the app is waiting for a reply.
+
+This is intentionally a temporary one-photo prototype. It does not replace the planned layered avatar system.
