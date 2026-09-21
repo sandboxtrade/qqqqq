@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { defaultCharacter } from '../../character/default-character';
 import type { RuntimeState } from '../../engine/runtime';
 import { Icon } from './Icon';
@@ -23,41 +23,126 @@ const activityLabel: Record<string, string> = {
 const timeLabel: Record<string, string> = { night: 'ночь', morning: 'утро', day: 'день', evening: 'вечер' };
 const relationshipLabel: Record<string, string> = { new: 'знакомство', familiar: 'близко', close: 'очень близко', deep: 'глубокая связь' };
 
-export function CharacterStage({ runtime, onNavigate }: { runtime: RuntimeState | null; onNavigate: (tab: AppTab) => void }) {
-  const [imageReady, setImageReady] = useState(true);
+export function CharacterStage({
+  runtime,
+  busy = false,
+  onNavigate,
+}: {
+  runtime: RuntimeState | null;
+  busy?: boolean;
+  onNavigate: (tab: AppTab) => void;
+}) {
+  const [imageState, setImageState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [blinking, setBlinking] = useState(false);
+
   const mood = runtime?.emotion.mood ?? 0.5;
   const moodLabel = mood > 0.7 ? 'хорошее настроение' : mood < 0.36 ? 'немного закрыта' : 'спокойная';
-  const avatarSrc = `${import.meta.env.BASE_URL}assets/character/avatar-main.png`;
+  const avatarSrc = `${import.meta.env.BASE_URL}assets/character/avatar-main.jpg`;
+  const photoStyle: CSSProperties = { backgroundImage: `url("${avatarSrc}")` };
+
+  useEffect(() => {
+    let stopped = false;
+    let nextBlink = 0;
+    let blinkEnd = 0;
+    let secondBlink = 0;
+    let secondBlinkEnd = 0;
+
+    const schedule = () => {
+      const delay = 2800 + Math.random() * 4300;
+      nextBlink = window.setTimeout(() => {
+        if (stopped) return;
+        setBlinking(true);
+
+        blinkEnd = window.setTimeout(() => {
+          if (stopped) return;
+          setBlinking(false);
+
+          if (Math.random() < 0.2) {
+            secondBlink = window.setTimeout(() => {
+              if (stopped) return;
+              setBlinking(true);
+              secondBlinkEnd = window.setTimeout(() => {
+                if (!stopped) setBlinking(false);
+                schedule();
+              }, 105);
+            }, 145);
+          } else {
+            schedule();
+          }
+        }, 115);
+      }, delay);
+    };
+
+    schedule();
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(nextBlink);
+      window.clearTimeout(blinkEnd);
+      window.clearTimeout(secondBlink);
+      window.clearTimeout(secondBlinkEnd);
+    };
+  }, []);
 
   return (
-    <section className="stage">
+    <section className={`stage live-photo-stage ${busy ? 'is-thinking' : ''}`}>
       <div className="stage-ambient" />
       <div className="stage-grid" />
-      {imageReady && (
-        <img
-          className="character-image"
-          src={avatarSrc}
-          alt={defaultCharacter.name}
-          onError={() => setImageReady(false)}
-        />
+
+      <img
+        className="character-preload"
+        src={avatarSrc}
+        alt=""
+        aria-hidden="true"
+        onLoad={() => setImageState('ready')}
+        onError={() => setImageState('error')}
+      />
+
+      {imageState === 'ready' && (
+        <div className="live-avatar" role="img" aria-label={defaultCharacter.name}>
+          <div className="live-avatar-frame">
+            <div className="live-photo-layer live-photo-base" style={photoStyle} />
+            <div className="live-photo-layer live-photo-hair" style={photoStyle} aria-hidden="true" />
+            <div className="live-photo-layer live-photo-hand-face" style={photoStyle} aria-hidden="true" />
+            <div className="live-photo-layer live-photo-hand-bed" style={photoStyle} aria-hidden="true" />
+
+            <div className={`live-blink ${blinking ? 'closed' : ''}`} aria-hidden="true">
+              <span className="live-eyelid live-eyelid-left" />
+              <span className="live-eyelid live-eyelid-right" />
+            </div>
+
+            <div className="live-photo-vignette" aria-hidden="true" />
+          </div>
+        </div>
       )}
-      {!imageReady && (
+
+      {imageState !== 'ready' && (
         <div className="avatar-placeholder" aria-label="Место для изображения персонажа">
           <div className="avatar-halo" />
           <div className="avatar-silhouette"><span>{defaultCharacter.name.slice(0, 1)}</span></div>
-          <small>PNG персонажа появится здесь</small>
+          <small>{imageState === 'error' ? 'Не удалось загрузить фото' : 'Фото загружается…'}</small>
         </div>
       )}
 
       <div className="stage-topline">
-        <div className="presence-pill"><span className={runtime?.world.isAwake === false ? 'presence-dot sleeping' : 'presence-dot'} />{runtime ? activityLabel[runtime.world.currentActivity] ?? runtime.world.currentActivity : 'загрузка'}</div>
-        <button className="glass-icon-button" type="button" onClick={() => onNavigate('settings')} aria-label="Настройки"><Icon name="settings" size={18} /></button>
+        <div className="presence-pill">
+          <span className={runtime?.world.isAwake === false ? 'presence-dot sleeping' : 'presence-dot'} />
+          {busy ? 'думает…' : runtime ? activityLabel[runtime.world.currentActivity] ?? runtime.world.currentActivity : 'загрузка'}
+        </div>
+        <button className="glass-icon-button" type="button" onClick={() => onNavigate('settings')} aria-label="Настройки">
+          <Icon name="settings" size={18} />
+        </button>
       </div>
 
       <div className="stage-bottom">
         <div className="character-title">
-          <div><h1>{defaultCharacter.name}</h1><p>{moodLabel} · {timeLabel[runtime?.world.timeOfDay ?? ''] ?? 'сейчас'}</p></div>
-          <span className="relationship-badge">{relationshipLabel[runtime?.relationship.stage ?? 'new'] ?? 'знакомство'}</span>
+          <div>
+            <h1>{defaultCharacter.name}</h1>
+            <p>{moodLabel} · {timeLabel[runtime?.world.timeOfDay ?? ''] ?? 'сейчас'}</p>
+          </div>
+          <span className="relationship-badge">
+            {relationshipLabel[runtime?.relationship.stage ?? 'new'] ?? 'знакомство'}
+          </span>
         </div>
         <div className="quick-actions">
           <button type="button" onClick={() => onNavigate('together')}><Icon name="together" size={18} /><span>Вместе</span></button>
