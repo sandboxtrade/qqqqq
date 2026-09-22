@@ -25,16 +25,31 @@ function profile(user: User): AuthProfile {
   };
 }
 
-export function waitForInitialAuth(): Promise<AuthProfile | null> {
+export function waitForInitialAuth(timeoutMs = 6000): Promise<AuthProfile | null> {
   if (!isFirebaseConfigured) return Promise.resolve(null);
   const app = getFirebaseApp();
   if (!app) return Promise.resolve(null);
   const auth = getAuth(app);
+
   return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+
+    const finish = (user: User | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      unsubscribe?.();
       resolve(user ? profile(user) : null);
-    });
+    };
+
+    const timer = window.setTimeout(() => finish(auth.currentUser), timeoutMs);
+
+    unsubscribe = onAuthStateChanged(
+      auth,
+      (user) => finish(user),
+      () => finish(auth.currentUser),
+    );
   });
 }
 
