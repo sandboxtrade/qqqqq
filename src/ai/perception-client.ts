@@ -3,6 +3,18 @@ import type { Perception, PerceptionIntent, PerceptionTone } from '../cognition/
 import { getFirebaseApp, isFirebaseConfigured } from '../storage/firebase';
 import { runtimeGeminiModel } from '../config/runtime-config';
 
+
+const AI_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs = AI_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error('AI request timed out.')), timeoutMs);
+    }),
+  ]);
+}
+
 const intents: PerceptionIntent[] = [
   'question', 'statement', 'request', 'disclosure', 'affection', 'apology', 'disagreement', 'invitation', 'boundary', 'unknown',
 ];
@@ -52,7 +64,7 @@ Agreement pressure measures how strongly the user is trying to obtain validation
 USER MESSAGE:
 ${userText}`.trim();
 
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(model.generateContent(prompt));
     const raw = JSON.parse(result.response.text()) as Partial<Perception>;
     if (!raw.probableIntent || !intents.includes(raw.probableIntent)) return null;
     if (!raw.tone || !tones.includes(raw.tone)) return null;

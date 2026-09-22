@@ -9,6 +9,18 @@ import type { MemoryContext } from '../memory/memory-types';
 import type { WorldState } from '../world/world-types';
 import type { CharacterInitiative } from '../initiative/initiative-types';
 
+
+const AI_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs = AI_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error('AI request timed out.')), timeoutMs);
+    }),
+  ]);
+}
+
 export interface LanguageRequest {
   userText: string;
   character: CharacterCore;
@@ -94,7 +106,7 @@ ${request.userText}
 
 Write only her natural reply.`.trim();
 
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(model.generateContent(prompt));
     const text = result.response.text().trim();
     return text || null;
   } catch {
@@ -150,7 +162,7 @@ ${JSON.stringify(request.initiative)}
 
 Write only her natural opening message.`.trim();
 
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(model.generateContent(prompt));
     const text = result.response.text().trim();
     return text || null;
   } catch {
