@@ -7,7 +7,7 @@ import type { RelationshipState } from '../relationship/relationship-types';
 import { buildThought, decide, interpret, localPerception, mergePerceptions, planResponse } from '../cognition/local-cognition';
 import { inferStateEffects } from '../cognition/state-effects';
 import { getCompanionRepository } from '../storage/repository-factory';
-import { generateCharacterReply, generateInitiativeMessage } from '../ai/gemini-client';
+import { generateCharacterReply } from '../ai/gemini-client';
 import { analyzeUserMessage } from '../ai/perception-client';
 import { localFallbackReply } from '../dialogue/local-response';
 import { retrieveMemoryContext } from '../memory/memory-context';
@@ -16,7 +16,7 @@ import { getMemoryHealth, type MemoryHealthSnapshot } from '../memory/memory-hea
 import type { MemoryConsolidationReport, MemoryContext } from '../memory/memory-types';
 import { applyWorldSimulationEmotion, createInitialWorldState, markUserInteraction, simulateWorld } from '../world/world-engine';
 import type { WorldSimulationResult, WorldState } from '../world/world-types';
-import { getReadyInitiative, markInitiativeSurfaced, refreshInitiatives, renderLocalInitiative } from '../initiative/initiative-engine';
+import { refreshInitiatives } from '../initiative/initiative-engine';
 import type { CharacterInitiative } from '../initiative/initiative-types';
 
 export interface RuntimeState {
@@ -104,34 +104,51 @@ async function persistWorldSimulation(simulation: WorldSimulationResult) {
   return events;
 }
 
-async function advanceWorld(state: RuntimeState, now = Date.now()) {
+function advanceWorldLocally(state: RuntimeState, now = Date.now()) {
   const decayedEmotion = decayEmotions(state.emotion, now);
   const simulation = simulateWorld(state.world, decayedEmotion, now);
   const emotion = applyWorldSimulationEmotion(decayedEmotion, simulation, now);
-  await persistWorldSimulation(simulation);
-  await repository.saveWorldState(simulation.world);
-  const initiatives = await refreshInitiatives(repository, defaultCharacter, emotion, state.relationship, simulation.world, now);
 
   return {
     state: { ...state, emotion, world: simulation.world },
     simulation,
-    initiatives,
   };
 }
 
-async function hydrateRuntime(now = Date.now()) {
-  await recoverRecentMemory(repository, 120);
+async function runStartupMaintenance(
+  state: RuntimeState,
+  simulation: WorldSimulationResult,
+  now: number,
+) {
+  try {
+    await persistWorldSimulation(simulation);
+    await Promise.all([
+      repository.saveWorldState(state.world),
+      repository.saveSnapshot({ emotion: state.emotion, relationship: state.relationship }),
+    ]);
 
-  const [stored, storedWorld] = await Promise.all([repository.loadSnapshot(), repository.loadWorldState()]);
+    // Memory repair/consolidation can require many Firestore reads/writes.
+    // It must never block the first usable frame of the app.
+    await recoverRecentMemory(repository, 40);
+    await refreshInitiatives(repository, defaultCharacter, state.emotion, state.relationship, state.world, now);
+  } catch {
+    // Startup maintenance is best-effort. Core UI/chat boot must remain usable.
+  }
+}
+
+async function hydrateRuntimeFast(now = Date.now()) {
+  const [stored, storedWorld] = await Promise.all([
+    repository.loadSnapshot(),
+    repository.loadWorldState(),
+  ]);
+
   const baseState: RuntimeState = {
     emotion: stored?.emotion ?? { ...initialEmotionalState, updatedAt: now },
     relationship: stored?.relationship ?? { ...initialRelationshipState, updatedAt: now },
     world: storedWorld ?? createInitialWorldState(now),
   };
 
-  const advanced = await advanceWorld(baseState, now);
-  await repository.saveSnapshot({ emotion: advanced.state.emotion, relationship: advanced.state.relationship });
-  return advanced.state;
+  return advanceWorldLocally(baseState, now);
 }
 
 async function loadRecentConversation(maxEvents = 80): Promise<ConversationLine[]> {
@@ -152,42 +169,29 @@ async function loadRecentConversation(maxEvents = 80): Promise<ConversationLine[
 }
 
 export async function bootstrapRuntime(now = Date.now()): Promise<RuntimeBootstrapResult> {
-  const state = await hydrateRuntime(now);
+  const hydrated = await hydrateRuntimeFast(now);
   const recentConversation = await loadRecentConversation();
-  const initiative = await getReadyInitiative(repository, now);
-  if (!initiative) return { state, proactiveMessage: null, surfacedInitiative: null, recentConversation };
 
-  let proactiveMessage = await generateInitiativeMessage({
-    character: defaultCharacter,
-    emotion: state.emotion,
-    relationship: state.relationship,
-    world: state.world,
-    initiative,
-  });
-  if (!proactiveMessage) proactiveMessage = renderLocalInitiative(initiative);
+  // Do not await memory recovery, initiative generation or world persistence here.
+  // Those were the main reason the UI could stay on "Инициализация..." for a very long time.
+  void runStartupMaintenance(hydrated.state, hydrated.simulation, now);
 
-  await markInitiativeSurfaced(repository, initiative);
-  await repository.appendEvent(createEvent({
-    type: 'character_action',
-    source: 'character',
-    payload: {
-      text: proactiveMessage,
-      initiativeId: initiative.id,
-      initiativeKind: initiative.kind,
-    },
-    importance: initiative.priority * 0.55,
-  }));
-
-  return { state, proactiveMessage, surfacedInitiative: initiative, recentConversation };
+  return {
+    state: hydrated.state,
+    proactiveMessage: null,
+    surfacedInitiative: null,
+    recentConversation,
+  };
 }
 
 export async function loadRuntimeState(): Promise<RuntimeState> {
-  return hydrateRuntime();
+  const hydrated = await hydrateRuntimeFast();
+  return hydrated.state;
 }
 
 export async function handleUserMessage(userText: string, currentState: RuntimeState): Promise<RuntimeResult> {
   const now = Date.now();
-  const advanced = await advanceWorld(currentState, now);
+  const advanced = advanceWorldLocally(currentState, now);
   const stateBeforeInteraction = advanced.state;
 
   const userEvent = createEvent({
@@ -249,6 +253,7 @@ export async function handleUserMessage(userText: string, currentState: RuntimeS
   });
   await repository.appendEvent(characterEvent);
 
+  await persistWorldSimulation(advanced.simulation);
   const consolidation = await consolidateEvents([userEvent, characterEvent], repository);
   const world = markUserInteraction(stateBeforeInteraction.world, now);
   const state = { emotion, relationship, world };
