@@ -20,6 +20,26 @@ import { normalizeKnowledgeFact, normalizeMemoryRecord, normalizeOpenThread } fr
 import { getFirebaseDb } from '../firebase';
 import { getAuthenticatedUid } from '../auth';
 
+
+function sanitizeForFirestore<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const clean: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item === undefined) continue;
+      clean[key] = sanitizeForFirestore(item);
+    }
+    return clean as T;
+  }
+
+  return value;
+}
+
 export class FirestoreCompanionRepository implements CompanionRepository {
   constructor(private readonly characterId: string) {}
 
@@ -44,7 +64,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async appendEvent(event: CharacterEvent) {
-    await setDoc(this.childDoc('events', event.id), event);
+    await setDoc(this.childDoc('events', event.id), sanitizeForFirestore(event));
   }
 
   async listRecentEvents(max = 30) {
@@ -59,7 +79,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async markEventConsolidated(eventId: string, timestamp: number) {
-    await setDoc(this.childDoc('memoryProcessed', eventId), { eventId, timestamp });
+    await setDoc(this.childDoc('memoryProcessed', eventId), sanitizeForFirestore({ eventId, timestamp }));
   }
 
   async loadSnapshot(): Promise<CompanionSnapshot | null> {
@@ -68,7 +88,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveSnapshot(snapshot: CompanionSnapshot) {
-    await setDoc(this.childDoc('state', 'current'), snapshot, { merge: true });
+    await setDoc(this.childDoc('state', 'current'), sanitizeForFirestore(snapshot), { merge: true });
   }
 
   async loadWorldState(): Promise<WorldState | null> {
@@ -77,7 +97,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveWorldState(world: WorldState) {
-    await setDoc(this.childDoc('world', 'current'), world, { merge: true });
+    await setDoc(this.childDoc('world', 'current'), sanitizeForFirestore(world), { merge: true });
   }
 
   async listInitiatives(options?: { limit?: number }) {
@@ -88,7 +108,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveInitiative(initiative: CharacterInitiative) {
-    await setDoc(this.childDoc('initiatives', initiative.id), initiative);
+    await setDoc(this.childDoc('initiatives', initiative.id), sanitizeForFirestore(initiative));
   }
 
   async listMemories(options?: { includeArchived?: boolean; limit?: number }) {
@@ -101,7 +121,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveMemory(memory: MemoryRecord) {
-    await setDoc(this.childDoc('memories', memory.id), memory);
+    await setDoc(this.childDoc('memories', memory.id), sanitizeForFirestore(memory));
   }
 
   async listKnowledgeFacts() {
@@ -110,7 +130,7 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveKnowledgeFact(fact: KnowledgeFact) {
-    await setDoc(this.childDoc('knowledge', fact.id), fact);
+    await setDoc(this.childDoc('knowledge', fact.id), sanitizeForFirestore(fact));
   }
 
   async listOpenThreads() {
@@ -119,6 +139,6 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   }
 
   async saveOpenThread(thread: OpenThread) {
-    await setDoc(this.childDoc('openThreads', thread.id), thread);
+    await setDoc(this.childDoc('openThreads', thread.id), sanitizeForFirestore(thread));
   }
 }
