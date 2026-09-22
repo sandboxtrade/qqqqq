@@ -14,6 +14,17 @@ export interface ChatMessage {
 
 export type AuthStatus = 'local' | 'checking' | 'signed_out' | 'signed_in';
 
+const BOOT_TIMEOUT_MS = 12000;
+
+function withBootTimeout<T>(promise: Promise<T>): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error('Запуск занял слишком много времени. Нажми «Повторить».')), BOOT_TIMEOUT_MS);
+    }),
+  ]);
+}
+
 interface AppStore {
   ready: boolean;
   initializing: boolean;
@@ -33,7 +44,7 @@ interface AppStore {
 }
 
 async function bootRuntime(set: (updater: (state: AppStore) => Partial<AppStore>) => void) {
-  const bootstrap = await bootstrapRuntime();
+  const bootstrap = await withBootTimeout(bootstrapRuntime());
   const history: ChatMessage[] = bootstrap.recentConversation.map((line) => ({
     id: line.id,
     role: line.role,
