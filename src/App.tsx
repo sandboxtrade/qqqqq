@@ -170,7 +170,7 @@ export default function App() {
             onSignOut={() => void signOut()}
             onClearConversationAndMemory={clearConversationAndMemory}
             clearingData={resettingData}
-            resetDisabled={!ready || busy || resettingData}
+            resetDisabled={!ready || resettingData}
             intimacyEnabled={runtime?.intimacy?.adultModeEnabled === true}
             intimacyPhase={runtime?.intimacy?.phase ?? "normal"}
             intimacyUpdating={updatingIntimacyMode}
