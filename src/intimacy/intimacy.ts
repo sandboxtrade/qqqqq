@@ -403,8 +403,9 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
   if (signal.kind === "aftercare") {
     state.phase = "aftercare";
     state.interactionStatus = "open";
-    state.comfort = clampIntimacy(state.comfort + 0.08 * Math.max(0.5, strength));
-    state.arousal = clampIntimacy(state.arousal * 0.42);
+    state.comfort = clampIntimacy(state.comfort + 0.12 * Math.max(0.5, strength));
+    state.interest = clampIntimacy(state.interest + 0.025 * strength);
+    state.arousal = clampIntimacy(state.arousal * 0.32);
     state.initiativeDrive = 0;
     state.activeScene = null;
     state.lastInteractionAt = input.now;
@@ -458,9 +459,11 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
   if (signal.kind === "affection" || signal.kind === "flirt") {
     state.phase = nextIntimacyPhase(state.phase, "close");
     state.interactionStatus = "open";
-    state.interest = clampIntimacy(state.interest + 0.06 * strength);
-    state.arousal = clampIntimacy(state.arousal + (signal.kind === "flirt" ? 0.08 : 0.03) * strength);
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.05 * strength);
+    const mutuality = clampIntimacy(state.comfort * 0.55 + state.interest * 0.45);
+    state.comfort = clampIntimacy(state.comfort + (signal.kind === "affection" ? 0.055 : 0.025) * strength);
+    state.interest = clampIntimacy(state.interest + (signal.kind === "flirt" ? 0.085 : 0.055) * strength);
+    state.arousal = clampIntimacy(state.arousal + (signal.kind === "flirt" ? 0.11 : 0.035) * strength * (0.65 + mutuality * 0.35));
+    state.initiativeDrive = clampIntimacy(state.initiativeDrive + (signal.kind === "flirt" ? 0.075 : 0.045) * strength * (0.55 + mutuality * 0.45));
     state.lastInteractionAt = input.now;
     action = "warmth";
     return finish();
@@ -481,9 +484,11 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
             : "close";
     state.phase = nextIntimacyPhase(state.phase, ceiling);
     state.interactionStatus = "open";
+    const mutuality = clampIntimacy(state.comfort * 0.58 + state.interest * 0.42);
+    state.comfort = clampIntimacy(state.comfort + (signal.kind === "consent" ? 0.035 : 0.05) * strength);
     state.interest = clampIntimacy(state.interest + 0.1 * strength);
-    state.arousal = clampIntimacy(state.arousal + (signal.kind === "consent" ? 0.16 : 0.07) * strength);
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.07 * strength);
+    state.arousal = clampIntimacy(state.arousal + (signal.kind === "consent" ? 0.18 : 0.075) * strength * (0.68 + mutuality * 0.32));
+    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.085 * strength * (0.55 + mutuality * 0.45));
     state.lastInteractionAt = input.now;
     if (state.phase === "intimate" || state.phase === "high_intimacy")
       state.activeScene = neutralScene(state.phase, input.now);
