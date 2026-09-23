@@ -977,8 +977,8 @@ export function decide(
       tone: relationship.closeness > 0.5 ? "personal_direct" : "direct",
       rationale:
         content.locked
-          ? "A local Character Core content decision exists; answer it without letting the language model invent a different stance."
-          : "A direct answer fits the request; Gemini may supply ordinary factual language but not new persistent character traits.",
+          ? "A local Character Core content decision exists; the dialogue renderer must preserve that stance."
+          : "A direct answer fits the request; language rendering must not invent new persistent character traits.",
       confidence: content.locked ? 0.86 : 0.76,
       shouldAskFollowUp:
         interpretation.uncertainty > 0.68 && curiosity > 0.6 && openness > 0.45,

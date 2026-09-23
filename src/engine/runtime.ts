@@ -20,11 +20,6 @@ import {
 } from "../cognition/local-cognition";
 import { inferStateEffects } from "../cognition/state-effects";
 import { getCompanionRepository } from "../storage/repository-factory";
-import {
-  generateCharacterReply,
-  generateInitiativeMessage,
-} from "../ai/gemini-client";
-import { localFallbackReply } from "../dialogue/local-response";
 import { guardCharacterReply } from "../dialogue/response-guard";
 import { retrieveMemoryContext } from "../memory/memory-context";
 import { recoverRecentMemory } from "../memory/memory-consolidation";
@@ -37,17 +32,29 @@ import {
 } from "../world/world-engine";
 import type { WorldState, WorldSimulationResult } from "../world/world-types";
 import { worldClock } from "../world/time-engine";
-import {
-  refreshInitiatives,
-  renderLocalInitiative,
-} from "../initiative/initiative-engine";
+import { refreshInitiatives } from "../initiative/initiative-engine";
 import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 
 import { currentRomance, planRomance, type RomanceState } from "../relationship/romance";
 
 import { selectAppearance, type AppearanceState } from "../avatar/appearance";
-import { findCharacterAsset } from "../avatar/asset-catalog";
+
+import {
+  analyzeLocalNLU,
+  applyLocalNLUToPerception,
+  buildDialogueContext,
+  buildDialogueFrame,
+  initiativeSemanticBridge,
+  logLocalDialogueTrace,
+  localDialogueRenderer,
+  planAutonomousDialogue,
+  planLocalDialogue,
+  resolveContextualNLU,
+  type DialogueAct,
+  type LocalNLUResult,
+  type RenderDebug,
+} from "../local-dialogue/index";
 
 export interface RuntimeState {
   appearance?: AppearanceState;
@@ -65,6 +72,8 @@ export interface ConversationLine {
   timestamp: number;
   proactive?: boolean;
   silent?: boolean;
+  templateId?: string;
+  dialogueActs?: DialogueAct[];
 }
 export interface RuntimeTrace {
   usedGeminiPerception: boolean;
@@ -73,6 +82,8 @@ export interface RuntimeTrace {
   responseGuardReason?: string;
   decision: ReturnType<typeof decide>;
   responsePlan: ReturnType<typeof planResponse>;
+  nlu?: LocalNLUResult;
+  localRenderer?: RenderDebug;
   memoryContext: { memories: string[]; facts: string[]; openThreads: string[] };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
   maintenance?: Awaited<ReturnType<typeof maintainRuntime>>;
@@ -157,9 +168,16 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         e.source === "system"
       )
         return [];
-      const payload = e.payload as { text?: string; silent?: boolean };
+      const payload = e.payload as {
+        text?: string;
+        silent?: boolean;
+        localDialogue?: { templateId?: string; dialogueActs?: string[] };
+      };
       const text = String(payload?.text ?? "").trim();
       const silent = e.source === "character" && payload?.silent === true;
+      const dialogueActs = Array.isArray(payload.localDialogue?.dialogueActs)
+        ? payload.localDialogue.dialogueActs.filter((act) => typeof act === "string") as DialogueAct[]
+        : undefined;
       return text || silent
         ? [
             {
@@ -169,6 +187,8 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
               timestamp: e.timestamp,
               proactive: e.type === "character_action",
               silent,
+              templateId: typeof payload.localDialogue?.templateId === "string" ? payload.localDialogue.templateId : undefined,
+              dialogueActs,
             },
           ]
         : [];
@@ -302,12 +322,22 @@ export async function handleUserMessage(
   if (existing) {
     await repository.dismissPendingTurn(input.id);
     const boot = await bootstrapRuntime(uid, signal);
-    const payload = existing.payload as { text?: string; silent?: boolean };
+    const payload = existing.payload as {
+      text?: string;
+      silent?: boolean;
+      localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
+    };
     return {
       reply: String(payload.text ?? ""),
       silent: payload.silent === true,
       replyId,
       replyTimestamp: existing.timestamp,
+      renderMeta: payload.localDialogue
+        ? {
+            templateId: payload.localDialogue.templateId,
+            dialogueActs: payload.localDialogue.dialogueActs,
+          }
+        : undefined,
       state: boot.state,
       trace: null as RuntimeTrace | null,
     };
@@ -319,7 +349,7 @@ export async function handleUserMessage(
         ...snapshot,
         revision: snapshot.revision ?? 0,
         romance: snapshot.romance,
-    appearance: snapshot.appearance,
+        appearance: snapshot.appearance,
         world: latestWorld ?? current.world,
       }
     : current;
@@ -352,9 +382,23 @@ export async function handleUserMessage(
   memoryContext.facts = memoryContext.facts.filter(
     (f) => !f.sourceEventIds.includes(input.id),
   );
-  const perception = localPerception(
-    input.text,
-    history.slice(-6).map((line) => ({ role: line.role, text: line.text })),
+  const historyForDialogue = history.slice(-24).map((line) => ({
+    id: line.id,
+    role: line.role,
+    text: line.text,
+    timestamp: line.timestamp,
+    templateId: line.templateId,
+    dialogueActs: line.dialogueActs,
+  }));
+  const initialNlu = analyzeLocalNLU(input.text);
+  const initialFrame = buildDialogueFrame(historyForDialogue, initialNlu);
+  const nlu = resolveContextualNLU(initialNlu, initialFrame);
+  const perception = applyLocalNLUToPerception(
+    localPerception(
+      input.text,
+      history.slice(-6).map((line) => ({ role: line.role, text: line.text })),
+    ),
+    nlu,
   );
   const interpretation = interpret(
     perception,
@@ -408,45 +452,27 @@ export async function handleUserMessage(
   const silent = decision.action === "stay_silent";
   options.onPhase?.(silent ? "Она решила промолчать…" : "Она отвечает…");
   const generationStarted = performance.now();
-  const generated = silent
-    ? ""
-    : romance.localText ?? await generateCharacterReply(
-        {
-          userText: input.text,
-          romance: romance.state,
-          appearance: findCharacterAsset(appearance.assetId),
-          character: defaultCharacter,
-          emotion,
-          relationship,
-          perception,
-          interpretation,
-          thought,
-          decision,
-          responsePlan,
-          memoryContext,
-          world: before.world,
-          history: history.filter(
-            (l) =>
-              l.id !== input.id &&
-              l.id !== replyId &&
-              !/(естественный языковой слой|состояние, память и решение уже)/iu.test(
-                l.text,
-              ),
-          ),
-        },
-        // Never expose raw provider chunks before the final response guard.
-        // The validated reply is published immediately below, before commitTurn.
-        { signal },
-      );
+  const dialogueContext = buildDialogueContext({
+    userText: input.text,
+    turnId: input.id,
+    now,
+    character: defaultCharacter,
+    emotion,
+    relationship,
+    world: before.world,
+    romance: romance.state,
+    memoryContext,
+    history: historyForDialogue,
+    nlu,
+    perception,
+    decision,
+    responsePlan,
+  });
+  const localPlan = planLocalDialogue(dialogueContext, romance.localText);
+  const rendered = await localDialogueRenderer.render(localPlan, dialogueContext);
+  logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
   checkSignal(signal);
-  const guarded =
-    generated === null
-      ? {
-          text: localFallbackReply(input.text, decision, responsePlan),
-          usedFallback: true,
-          reason: "gemini-unavailable",
-        }
-      : guardCharacterReply(generated, input.text, decision, responsePlan);
+  const guarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
   const reply = guarded.text;
   const generationMs = Math.round(performance.now() - generationStarted);
   // Locked/local answers can be shown after validation, before the network commit.
@@ -475,6 +501,12 @@ export async function handleUserMessage(
       romanceAction: romance.action,
       romancePhase: romance.state.phase,
       appearanceAssetId: appearance.assetId,
+      localDialogue: {
+        templateId: rendered.templateId,
+        dialogueActs: rendered.dialogueActs,
+        openingPhrase: rendered.openingPhrase,
+        fallbackLevel: rendered.fallbackLevel,
+      },
     },
     importance: 0.35,
   });
@@ -504,12 +536,22 @@ export async function handleUserMessage(
       throw error;
     const saved = await repository.getEvent(replyId);
     const boot = await bootstrapRuntime(uid, signal);
-    const savedPayload = saved!.payload as { text?: string; silent?: boolean };
+    const savedPayload = saved!.payload as {
+      text?: string;
+      silent?: boolean;
+      localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
+    };
     return {
       reply: String(savedPayload.text ?? ""),
       silent: savedPayload.silent === true,
       replyId,
       replyTimestamp: saved!.timestamp,
+      renderMeta: savedPayload.localDialogue
+        ? {
+            templateId: savedPayload.localDialogue.templateId,
+            dialogueActs: savedPayload.localDialogue.dialogueActs,
+          }
+        : undefined,
       state: boot.state,
       trace: null,
     };
@@ -528,7 +570,9 @@ export async function handleUserMessage(
     timings: { preflightMs, contextMs, generationMs, saveMs: Math.round(performance.now() - saveStarted),
       totalMs: Math.round(performance.now() - started), firstTextMs },
     usedGeminiPerception: false,
-    usedGeminiReply: generated !== null && !silent && romance.localText === undefined,
+    usedGeminiReply: false,
+    nlu,
+    localRenderer: rendered.debug,
     responseGuardFallback: guarded.usedFallback,
     responseGuardReason: guarded.reason,
     decision,
@@ -544,6 +588,7 @@ export async function handleUserMessage(
     silent,
     replyId,
     replyTimestamp,
+    renderMeta: { templateId: rendered.templateId, dialogueActs: rendered.dialogueActs },
     state: { emotion, relationship, world, romance: romance.state, appearance, revision: base.revision + 1 },
     trace,
   };
@@ -552,15 +597,6 @@ export interface MaintenanceOptions {
   allowInitiative?: boolean;
   initiativeSignal?: AbortSignal;
   canSurfaceInitiative?: () => boolean;
-}
-
-function initiativeAbort(error: unknown, signal?: AbortSignal) {
-  return Boolean(
-    signal?.aborted &&
-      (error === signal.reason ||
-        (error instanceof DOMException && error.name === "AbortError") ||
-        (error instanceof Error && /abort|cancel|superseded/i.test(error.message))),
-  );
 }
 
 export async function maintainRuntime(
@@ -615,26 +651,55 @@ export async function maintainRuntime(
       const existing = await repository.getEvent(id);
       if (!existing && initiativeWindowOpen()) {
         let text: string | null = null;
-        try {
-          text =
-            (await generateInitiativeMessage(
-              {
-                character: defaultCharacter,
-                emotion: advanced.state.emotion,
-                relationship: advanced.state.relationship,
-                world: advanced.state.world,
-                initiative,
-                romance: advanced.state.romance,
-              },
-              { signal: initiativeSignal },
-            )) ?? renderLocalInitiative(initiative);
-        } catch (error) {
-          if (!initiativeAbort(error, initiativeSignal)) throw error;
+        let proactiveRender: Awaited<ReturnType<typeof localDialogueRenderer.render>> | null = null;
+        if (!initiativeSignal.aborted) {
+          const [proactiveMemory, proactivePage] = await Promise.all([
+            retrieveMemoryContext(initiative.topic, repository, maintenanceNow),
+            repository.listConversationEvents({ limit: 40 }),
+          ]);
+          checkSignal(signal);
+          if (!initiativeSignal.aborted) {
+            const proactiveHistory = conversationFrom(proactivePage.events);
+            const bridge = initiativeSemanticBridge(
+              initiative,
+              advanced.state.emotion,
+              advanced.state.relationship,
+            );
+            const proactiveNlu = analyzeLocalNLU(initiative.topic);
+            const proactivePerception = applyLocalNLUToPerception(
+              localPerception(initiative.topic),
+              proactiveNlu,
+            );
+            const proactiveContext = buildDialogueContext({
+              turnId: id,
+              now: maintenanceNow,
+              character: defaultCharacter,
+              emotion: advanced.state.emotion,
+              relationship: advanced.state.relationship,
+              world: advanced.state.world,
+              romance: advanced.state.romance,
+              memoryContext: proactiveMemory,
+              history: proactiveHistory.slice(-24),
+              nlu: proactiveNlu,
+              perception: proactivePerception,
+              decision: bridge.decision,
+              responsePlan: bridge.responsePlan,
+              initiative,
+            });
+            const proactivePlan = planAutonomousDialogue(proactiveContext);
+            proactiveRender = await localDialogueRenderer.render(proactivePlan, proactiveContext);
+            logLocalDialogueTrace({
+              userText: undefined,
+              nlu: proactiveNlu,
+              plan: proactivePlan,
+              rendered: proactiveRender,
+            });
+            text = proactiveRender.text;
+          }
         }
 
-        // A real user turn may have started while Gemini was generating the
-        // proactive text. Re-check immediately before publishing so initiative
-        // work yields to conversation without cancelling memory consolidation.
+        // A real user turn may have started while local initiative text was being prepared.
+        // Re-check immediately before publishing so initiative work yields to conversation.
         if (text && initiativeWindowOpen()) {
           const publishNow = runtimeNow(advanced.state);
           const publishState = advance(advanced.state, publishNow).state;
@@ -649,7 +714,16 @@ export async function maintainRuntime(
               type: "character_action",
               source: "character",
               timestamp: publishNow,
-              payload: { text, initiativeId: initiative.id },
+              payload: {
+                text,
+                initiativeId: initiative.id,
+                localDialogue: proactiveRender ? {
+                  templateId: proactiveRender.templateId,
+                  dialogueActs: proactiveRender.dialogueActs,
+                  openingPhrase: proactiveRender.openingPhrase,
+                  fallbackLevel: proactiveRender.fallbackLevel,
+                } : undefined,
+              },
               importance: 0.4,
             });
             await repository.appendEvent(event);
@@ -661,6 +735,8 @@ export async function maintainRuntime(
               text,
               timestamp: event.timestamp,
               proactive: true,
+              templateId: proactiveRender?.templateId,
+              dialogueActs: proactiveRender?.dialogueActs,
             };
           }
         }
