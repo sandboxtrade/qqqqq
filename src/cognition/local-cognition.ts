@@ -737,21 +737,21 @@ export function decide(
 
     if (!shouldWake) {
       const sleepyText = CHARACTER_STATE_QUESTION_RE.test(normalized)
-        ? "Мм… я ещё сплю немного. Напиши мне позже, и я нормально отвечу."
+        ? "Мм… я ещё сплю немного. Давай я нормально отвечу, когда проснусь."
         : GREETING_RE.test(normalized)
-          ? "Мм… привет. Я ещё сонная немного."
-          : "Мм… я сейчас ещё сплю. Напиши мне позже, хорошо?";
+          ? "Мм… привет. Я ещё сонная совсем."
+          : "Мм… я ещё сплю. Я увидела сообщение, просто сейчас совсем сонная.";
       return {
         action: "acknowledge",
         tone: "sleepy_soft",
         rationale:
-          "Her world state says she is asleep. Instead of complete silence, she gives a brief sleepy acknowledgement so the user does not read it as a bug.",
-        confidence: 0.92,
+          "She is asleep, but gives a short sleepy acknowledgement instead of complete silence so sleep cannot look like a broken chat.",
+        confidence: 0.95,
         shouldAskFollowUp: false,
         shouldReferenceMemory: false,
         content: defaultContent(
           "support",
-          "Коротко и сонно отреагировать, не разворачивая полноценный разговор.",
+          "Короткая сонная реакция без полноценного разговора.",
           { locked: true, fallbackText: sleepyText },
         ),
       };
