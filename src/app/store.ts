@@ -512,6 +512,8 @@ async function sendTurn(message: ChatMessage) {
                 role: "character" as const,
                 text: result.reply,
                 timestamp: result.replyTimestamp,
+                templateId: result.renderMeta?.templateId,
+                dialogueActs: result.renderMeta?.dialogueActs,
                 delivery: "saved" as const,
               },
             ]),
@@ -538,8 +540,8 @@ async function sendTurn(message: ChatMessage) {
     if (active === controller) active = null;
     if (activeTurnId === message.id) activeTurnId = null;
     if (version === epoch) {
-      // The user event may already be persisted even when model generation
-      // failed, so memory work must be scheduled after every attempted turn.
+      // The user event may already be persisted even when a later storage step fails,
+      // so memory work must be scheduled after every attempted turn.
       scheduleMaintenance();
       flushLiveRevision?.();
     }
