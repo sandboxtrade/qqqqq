@@ -768,6 +768,165 @@ await test("an unresolved remembered thread can reappear naturally in a quiet co
   assert.match(found.rendered.templateId, /\|beat:memory_callback$/u);
 });
 
+await test("Yuzuki can add a grounded second thought instead of sounding mechanically certain", async () => {
+  const history = [
+    { role: "user", text: "Я думаю уйти с работы", timestamp: NOW - 4000 },
+    { role: "character", text: "Понимаю, почему эта мысль появилась.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Но не уверен что это правильное решение", timestamp: NOW - 2000 },
+    { role: "character", text: "Тут правда есть что взвесить.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  let found = null;
+  for (let index = 0; index < 60 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Не знаю, может и стоит уйти",
+      turnId: `afterthought_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ curiosity: 0.58, affection: 0.4, happiness: 0.42, anxiety: 0.18 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "afterthought") found = result;
+  }
+  assert.ok(found, "expected a deterministic afterthought across seeds");
+  assert.match(found.rendered.text, /хотя|подожди|сомнен|увереннее|открытым вопросом/iu);
+});
+
+await test("a longer thread can be pulled deeper instead of resetting every turn", async () => {
+  const history = [
+    { role: "user", text: "На работе снова странная ситуация", timestamp: NOW - 6000 },
+    { role: "character", text: "На работе опять что-то произошло?", timestamp: NOW - 5000, templateId: "old.one" },
+    { role: "user", text: "Да, работа уже начинает выматывать", timestamp: NOW - 4000 },
+    { role: "character", text: "Похоже, дело уже не в одном дне на работе.", timestamp: NOW - 3000, templateId: "old.two" },
+    { role: "user", text: "Наверное", timestamp: NOW - 2000 },
+    { role: "character", text: "Угу.", timestamp: NOW - 1000, templateId: "old.three" },
+  ];
+  let found = null;
+  for (let index = 0; index < 60 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Работа опять в голове",
+      turnId: `conversation_pull_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ curiosity: 0.88, affection: 0.45, happiness: 0.42, anxiety: 0.08 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "conversation_pull") found = result;
+  }
+  assert.ok(found, "expected a deterministic conversation pull across seeds");
+  assert.equal(found.plan.spontaneousBeat?.asksQuestion, true);
+  assert.match(found.rendered.text, /почему|самое|глубже|личн|труднее|важн/iu);
+});
+
+await test("Yuzuki can notice a real change in message cadence without inventing a cause", async () => {
+  const history = [
+    { role: "user", text: "Я сегодня долго думал про то что вообще хочу делать дальше", timestamp: NOW - 6000 },
+    { role: "character", text: "Похоже, тема тебя правда занимает.", timestamp: NOW - 5000, templateId: "old.one" },
+    { role: "user", text: "И ещё пытался понять почему я постоянно откладываю решение", timestamp: NOW - 4000 },
+    { role: "character", text: "Да, тут уже не один вопрос.", timestamp: NOW - 3000, templateId: "old.two" },
+    { role: "user", text: "Пока не разобрался", timestamp: NOW - 2000 },
+    { role: "character", text: "Поняла.", timestamp: NOW - 1000, templateId: "old.three" },
+  ];
+  let found = null;
+  for (let index = 0; index < 80 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Хз",
+      turnId: `cadence_notice_${index}`,
+      history,
+      relationshipState: relationship("familiar"),
+      emotionState: emotion({ curiosity: 0.42, affection: 0.32, happiness: 0.42, anxiety: 0.08 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "cadence_notice") found = result;
+  }
+  assert.ok(found, "expected a deterministic cadence notice across seeds");
+  assert.match(found.rendered.text, /короч|сократ|не буду додумывать|не лезу с трактовками/iu);
+});
+
+await test("close playful conversation can contain light pushback instead of pure compliance", async () => {
+  const history = [
+    { role: "user", text: "Ты опять споришь", timestamp: NOW - 4000 },
+    { role: "character", text: "Иногда.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Но тебе идёт", timestamp: NOW - 2000 },
+    { role: "character", text: "Это сейчас комплимент?", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  let found = null;
+  for (let index = 0; index < 60 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Ты милая",
+      turnId: `playful_pushback_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ curiosity: 0.4, affection: 0.48, happiness: 0.7, energy: 0.72, irritation: 0.04 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "playful_pushback") found = result;
+  }
+  assert.ok(found, "expected deterministic playful pushback across seeds");
+  assert.match(found.rendered.text, /не отпущу|удобный ответ|прицепиться|вопросы/iu);
+});
+
+
+await test("deep earned attachment can become an explicit love answer", async () => {
+  const result = await renderTurn({
+    text: "Ты меня любишь?",
+    turnId: "earned_love",
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.9, romanticInterest: 0.76, happiness: 0.72, irritation: 0.02 }),
+  });
+  assert.match(result.rendered.text, /люблю|любов/iu);
+  assert.match(result.rendered.templateId, /relationship-love\.deep/iu);
+});
+
+await test("a hurtful message can visibly hurt Yuzuki instead of producing a generic boundary", async () => {
+  const result = await renderTurn({
+    text: "Ты мне вообще не нравишься",
+    turnId: "hurt_close",
+    relationshipState: relationship("close"),
+    emotionState: emotion({ affection: 0.72, sadness: 0.08, irritation: 0.12 }),
+  });
+  assert.match(result.rendered.text, /задел|обид|неприятн|не чуж/iu);
+});
+
+await test("playful state can produce a situational joke instead of only acknowledging", async () => {
+  const history = [
+    { role: "user", text: "Работа опять выжала все силы", timestamp: NOW - 4000 },
+    { role: "character", text: "Да уж, день у тебя тяжёлый.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "И всё равно думаю про неё дома", timestamp: NOW - 2000 },
+    { role: "character", text: "Похоже, она не отпускает даже после смены.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  let found = null;
+  for (let index = 0; index < 100 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Я опять на работе",
+      turnId: `situational_joke_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ happiness: 0.82, energy: 0.76, affection: 0.58, irritation: 0.03, sadness: 0.03 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "situational_joke") found = result;
+  }
+  assert.ok(found, "expected a deterministic situational joke across seeds");
+  assert.match(found.rendered.text, /работ|личное пространство|третьего участника|сценар|сюжет/iu);
+});
+
+await test("adult close flirting sounds reciprocal rather than clinical", async () => {
+  const active = {
+    ...createInitialIntimacyState(NOW),
+    adultModeEnabled: true,
+    phase: "intimate",
+    interactionStatus: "open",
+    comfort: 0.84,
+    interest: 0.88,
+    arousal: 0.72,
+    initiativeDrive: 0.58,
+  };
+  const result = await renderTurn({
+    text: "Ты сейчас со мной флиртуешь?",
+    turnId: "intimacy_lively_flirt",
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.9, romanticInterest: 0.9, happiness: 0.7, anxiety: 0.08 }),
+    intimacyState: active,
+  });
+  assert.match(result.rendered.text, /действ|флирт|дразн|нейтраль|нравится|отвечать/iu);
+  assert.doesNotMatch(result.rendered.text, /согласие|протокол|режим|состояние/iu);
+});
+
 await test("anti-repetition varies twenty identical tiredness turns", async () => {
   let history = [];
   const replies = [];

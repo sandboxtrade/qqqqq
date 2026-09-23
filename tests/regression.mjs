@@ -121,7 +121,7 @@ const { consolidateEvents, recoverMemory } = await import(
 );
 const { rankFacts, rankMemories } = await import("../src/memory/retrieval.ts");
 const { retrieveMemoryContext } = await import("../src/memory/retrieval.ts");
-const { refreshInitiatives } = await import("../src/initiative/initiative.ts");
+const { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } = await import("../src/initiative/initiative.ts");
 const { createInitialWorldState, simulateWorld, markUserInteraction } = await import(
   "../src/world/world.ts"
 );
@@ -1289,6 +1289,26 @@ await test("relationship starts as familiar friendship without preloaded romance
   assert.ok((explicitFlirtEffects.emotion.romanticInterest ?? 0) > (complimentEffects.emotion.romanticInterest ?? 0));
 });
 
+
+await test("direct hurt raises sadness and relationship tension, while apology repairs gradually", () => {
+  const insultPerception = localPerception("Ты тупая");
+  const insultInterpretation = interpret(insultPerception, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
+  const insultDecision = decide(defaultCharacter, insultPerception, insultInterpretation, initialEmotionalState, initialRelationshipState, createInitialWorldState(now));
+  const hurt = inferStateEffects(insultPerception, insultDecision, "insult_character");
+  assert.ok((hurt.emotion.sadness ?? 0) > 0);
+  assert.ok((hurt.emotion.irritation ?? 0) > 0);
+  assert.ok((hurt.relationship.unresolvedTension ?? 0) > 0);
+  assert.ok((hurt.relationship.security ?? 0) < 0);
+
+  const apologyPerception = localPerception("Извини");
+  const apologyInterpretation = interpret(apologyPerception, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
+  const apologyDecision = decide(defaultCharacter, apologyPerception, apologyInterpretation, initialEmotionalState, initialRelationshipState, createInitialWorldState(now));
+  const repair = inferStateEffects(apologyPerception, apologyDecision, "apology");
+  assert.ok((repair.relationship.unresolvedTension ?? 0) < 0);
+  assert.ok((repair.relationship.security ?? 0) > 0);
+  assert.ok(Math.abs(repair.relationship.unresolvedTension ?? 0) < (hurt.relationship.unresolvedTension ?? 0));
+});
+
 await test("relationship attachment can grow and security can recover", () => {
   const warm = cognitionFor("Я люблю тебя");
   const warmEffects = inferStateEffects(warm.perception, warm.decision);
@@ -1532,6 +1552,71 @@ await test("user activity can suppress a ready initiative without aborting maint
   assert.equal(await r.getEvent("proactive_initiative_suppressed"), null);
   repository = previousRepository;
 });
+
+await test("legacy internal autonomy text is never shown to the user", () => {
+  assert.equal(
+    sanitizeProactiveDialogueText("Bring up a small thought or question of her own instead of waiting to be prompted."),
+    "У меня внезапно появилась одна мысль, и я решила не ждать повода, чтобы написать тебе.",
+  );
+  assert.equal(
+    sanitizeProactiveDialogueText("Небольшой внезапный вброс из моего дня: She made satisfying progress on a personal project and felt quietly pleased with herself."),
+    "У меня сегодня неожиданно хорошо пошло одно моё дело, и я до сих пор тихо этому радуюсь.",
+  );
+});
+
+await test("autonomy waits for the user after one proactive message", async () => {
+  const previousRepository = repository;
+  const r = new InMemoryCompanionRepository();
+  repository = r;
+  const wallNow = Date.now();
+  const zones = [
+    "UTC", "Pacific/Honolulu", "America/Los_Angeles", "America/New_York",
+    "Europe/London", "Europe/Moscow", "Asia/Dubai", "Asia/Kolkata",
+    "Asia/Tokyo", "Australia/Sydney",
+  ];
+  const zone = zones.find((candidate) => resolveRoutine(wallNow, candidate).isAwake) ?? "UTC";
+  const world = { ...createInitialWorldState(wallNow, zone), lastUserInteractionAt: wallNow - 12 * 3_600_000 };
+  const state = {
+    revision: 0,
+    romance: initialRomance(wallNow),
+    emotion: { ...initialEmotionalState, curiosity: 0.8, updatedAt: wallNow },
+    relationship: { ...initialRelationshipState, closeness: 0.5, updatedAt: wallNow },
+    world,
+  };
+  await r.saveInitiative({
+    id: "initiative_first_proactive",
+    kind: "share_thought",
+    topic: "У меня есть одна мысль.",
+    reason: "internal reason",
+    priority: 1,
+    createdAt: wallNow - 1000,
+    notBefore: wallNow - 1000,
+    expiresAt: wallNow + 12 * 3_600_000,
+    status: "pending",
+    dedupeKey: "proactive:first",
+    sourceIds: [],
+  });
+  const first = await maintainRuntime("A", new AbortController().signal, state, true);
+  assert.ok(first.message?.proactive);
+  await r.saveInitiative({
+    id: "initiative_second_proactive",
+    kind: "share_thought",
+    topic: "А вот ещё одна мысль.",
+    reason: "internal reason",
+    priority: 1,
+    createdAt: wallNow,
+    notBefore: wallNow,
+    expiresAt: wallNow + 12 * 3_600_000,
+    status: "pending",
+    dedupeKey: "proactive:second",
+    sourceIds: [],
+  });
+  const second = await maintainRuntime("A", new AbortController().signal, state, true);
+  assert.equal(second.message, null);
+  assert.equal(await r.getEvent("proactive_initiative_second_proactive"), null);
+  repository = previousRepository;
+});
+
 await test("store separates memory maintenance from initiative cancellation and retries online", () => {
   const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
   const sendStart = storeSource.indexOf("async function sendTurn");
@@ -1904,6 +1989,35 @@ const intimacyTurnInput = (signal, previous = {
   },
   now,
 });
+
+await test("intimacy mutuality increases comfort and attraction without skipping phases", () => {
+  const previous = {
+    ...intimacyTurnInput({ kind: "flirt", strength: 1, explicit: false }).previous,
+    phase: "romantic",
+    interactionStatus: "open",
+    comfort: 0.72,
+    interest: 0.7,
+    arousal: 0.34,
+    initiativeDrive: 0.24,
+  };
+  const flirted = planIntimacyTurn(intimacyTurnInput({ kind: "flirt", strength: 1, explicit: false, intimacyContext: true }, previous));
+  assert.equal(flirted.state.phase, "close");
+  assert.ok(flirted.state.comfort > previous.comfort);
+  assert.ok(flirted.state.interest > previous.interest);
+  assert.ok(flirted.state.arousal > previous.arousal);
+  assert.ok(flirted.state.initiativeDrive > previous.initiativeDrive);
+
+  const cared = planIntimacyTurn(intimacyTurnInput({ kind: "aftercare", strength: 1, explicit: true, intimacyContext: true }, {
+    ...flirted.state,
+    phase: "high_intimacy",
+    interactionStatus: "open",
+    arousal: 0.9,
+  }));
+  assert.equal(cared.state.phase, "aftercare");
+  assert.ok(cared.state.comfort > flirted.state.comfort);
+  assert.ok(cared.state.arousal < 0.4);
+});
+
 await test("intimacy engine requires a current-turn cue and never escalates from old consent alone", () => {
   const previous = {
     ...createInitialIntimacyState(now),
@@ -2163,10 +2277,16 @@ const visualAssets = [baseAsset,
 ];
 const visualRuntime = () => { const a = romanticInput(""); return { revision: 0, emotion: a.emotion, relationship: a.relationship, world: a.world,
   romance: { ...initialRomance(now), phase: "playful" }, appearance: { version: 1, assetId: baseAsset.id, selectedAt: now - 20_000, outfitChangedAt: now - 20_000 } }; };
+await test("built-in visual pack always has a visible neutral fallback", () => {
+  const neutral = characterAssets.find((asset) => asset.visualEmotion?.emotion === "neutral");
+  assert.ok(neutral);
+  assert.notEqual(neutral.id, "placeholder.neutral");
+  assert.match(neutral.src, /neutral\.1\.1\.png/u);
+});
 await test("appearance chooses available expression without a user command", () => {
   const r = visualRuntime();
   assert.equal(selectAppearance(r, "playful", now, visualAssets).assetId, "smile");
-  assert.equal(selectAppearance(r, "playful", now).assetId, baseAsset.id);
+  assert.notEqual(selectAppearance(r, "playful", now).assetId, "placeholder.neutral");
 });
 await test("appearance holds recent images and changes outfit only after cooldown", () => {
   const r = visualRuntime();
@@ -2188,7 +2308,7 @@ await test("appearance location and pause override stale romantic imagery", () =
 });
 await test("appearance deleted ids recover and private fade preserves current image", () => {
   const r = visualRuntime(); r.appearance.assetId = "deleted";
-  assert.equal(selectAppearance(r, "neutral", now).assetId, baseAsset.id);
+  assert.notEqual(selectAppearance(r, "neutral", now).assetId, "placeholder.neutral");
   r.appearance.assetId = "smile"; r.romance.phase = "private";
   assert.equal(selectAppearance(r, "neutral", now, visualAssets).assetId, "smile");
 });
