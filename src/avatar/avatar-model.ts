@@ -297,9 +297,9 @@ function buildEmotionAssets(): CharacterAsset[] {
     const { emotion, intensity, variant } = parsed;
     const presetKey = `${emotion}.${intensity}.${variant}`;
     const preset = emotionScenePresets[presetKey] ?? {
-      sceneFit: "contain" as const,
-      sceneScale: 1.08,
-      scenePosition: [50, 60] as [number, number],
+      sceneFit: "cover" as const,
+      sceneScale: 1,
+      scenePosition: [50, 50] as [number, number],
       pose: `variant-${variant}`,
       description: `Yuzuki: ${emotion}, intensity ${intensity}, variant ${variant}`,
     };
@@ -312,8 +312,8 @@ function buildEmotionAssets(): CharacterAsset[] {
       expression: emotion,
       contexts: ["everyday", "playful", "romantic", "resting"] as VisualContext[],
       locations: [],
-      transitionGroup: "visual-emotions",
-      focalPoint: [50, 18] as [number, number],
+      transitionGroup: "scene-photo",
+      focalPoint: [50, 50] as [number, number],
       motion: "still" as const,
       visualEmotion: { emotion, intensity, variant },
       sceneFit: preset.sceneFit,
@@ -332,21 +332,37 @@ const placeholderAsset: CharacterAsset = {
   expression: "neutral",
   contexts: ["everyday"],
   locations: [],
-  transitionGroup: "visual-emotions",
+  transitionGroup: "scene-photo",
   focalPoint: [50, 50],
   motion: "still",
-  sceneFit: "contain",
+  sceneFit: "cover",
   sceneScale: 1,
-  scenePosition: [50, 66],
+  scenePosition: [50, 50],
+};
+
+const defaultSceneAsset: CharacterAsset = {
+  id: "scene.default.live",
+  src: "assets/character/live-room-default.png",
+  description: "Yuzuki sitting on the bed in her room",
+  pose: "bedroom-sitting",
+  outfit: "default-live-scene",
+  expression: "neutral",
+  contexts: ["everyday", "playful", "romantic", "resting"],
+  locations: [],
+  transitionGroup: "scene-photo",
+  focalPoint: [50, 50],
+  motion: "still",
+  visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 },
+  sceneFit: "cover",
+  sceneScale: 1,
+  scenePosition: [50, 50],
 };
 
 const builtEmotionAssets = buildEmotionAssets();
-const renderFallbackAsset =
-  builtEmotionAssets.find((asset) => asset.visualEmotion?.emotion === "neutral") ??
-  builtEmotionAssets[0] ??
-  placeholderAsset;
+const visibleSceneAssets = [defaultSceneAsset];
+const renderFallbackAsset = defaultSceneAsset;
 
-export const characterAssets: readonly CharacterAsset[] = [placeholderAsset, ...builtEmotionAssets];
+export const characterAssets: readonly CharacterAsset[] = [...visibleSceneAssets, placeholderAsset];
 export const fallbackAssetId = renderFallbackAsset.id;
 export const renderFallbackAssetId = renderFallbackAsset.id;
 
@@ -388,9 +404,7 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
 validateAssetCatalog(characterAssets);
 
 export function findCharacterAsset(id?: string) {
-  const resolved = id ? characterAssets.find((asset) => asset.id === id) : null;
-  if (resolved && resolved.id !== placeholderAsset.id) return resolved;
-  return characterAssets.find((asset) => asset.id === renderFallbackAssetId) ?? placeholderAsset;
+  return characterAssets.find(a => a.id === id) ?? characterAssets.find(a => a.id === fallbackAssetId)!;
 }
 
 // ---- appearance.ts ----
