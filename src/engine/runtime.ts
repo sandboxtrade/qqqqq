@@ -32,7 +32,7 @@ import {
 } from "../world/world";
 import type { WorldState, WorldSimulationResult } from "../world/world";
 import { worldClock } from "../world/world";
-import { refreshInitiatives } from "../initiative/initiative";
+import { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } from "../initiative/initiative";
 import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 
@@ -188,7 +188,10 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         localDialogue?: { templateId?: string; dialogueActs?: string[] };
         appearanceAssetId?: string;
       };
-      const text = String(payload?.text ?? "").trim();
+      const rawText = String(payload?.text ?? "").trim();
+      const text = e.type === "character_action"
+        ? sanitizeProactiveDialogueText(rawText)
+        : rawText;
       const silent = e.source === "character" && payload?.silent === true;
       const dialogueActs = Array.isArray(payload.localDialogue?.dialogueActs)
         ? payload.localDialogue.dialogueActs.filter((act) => typeof act === "string") as DialogueAct[]
@@ -534,6 +537,29 @@ export async function handleUserMessage(
     world: before.world, decision, plan: responsePlan });
   decision = romance.decision;
   responsePlan = romance.plan;
+  if (before.world.availability === "sleeping" && decision.action === "stay_silent") {
+    const sleepyReply = "Мм… я ещё сплю. Я увидела сообщение, просто сейчас совсем сонная.";
+    decision = {
+      ...decision,
+      action: "acknowledge",
+      tone: "sleepy_soft",
+      shouldAskFollowUp: false,
+      content: {
+        ...decision.content,
+        mode: "support",
+        summary: "Короткая сонная реакция вместо полного молчания.",
+        locked: true,
+        fallbackText: sleepyReply,
+      },
+    };
+    responsePlan = {
+      ...responsePlan,
+      intent: "acknowledge",
+      tone: "sleepy_soft",
+      length: "very_short",
+      questionMode: "none",
+    };
+  }
   const intimacy = planIntimacyTurn({
     character: defaultCharacter,
     previous: before.intimacy,
@@ -726,6 +752,15 @@ export async function handleUserMessage(
     trace,
   };
 }
+const PROACTIVE_MESSAGE_COOLDOWN_MS = 4 * 60 * 60_000;
+const PROACTIVE_BLOCK_RECHECK_MS = 60 * 60_000;
+
+function latestProactiveEvent(events: CharacterEvent[]) {
+  return [...events]
+    .reverse()
+    .find((event) => event.type === "character_action" && event.source === "character");
+}
+
 export interface MaintenanceOptions {
   allowInitiative?: boolean;
   initiativeSignal?: AbortSignal;
@@ -767,9 +802,20 @@ export async function maintainRuntime(
   ]);
   const memoryBacklog = pending.length > 0 || recovery?.backfillComplete === false;
   const memoryHealth = memoryBacklog ? null : await getMemoryHealth(repository);
+  const proactiveConversation = allowInitiative
+    ? (await repository.listConversationEvents({ limit: 24 })).events
+    : [];
+  const lastProactive = latestProactiveEvent(proactiveConversation);
+  const unansweredProactive = Boolean(
+    lastProactive && lastProactive.timestamp > advanced.state.world.lastUserInteractionAt,
+  );
+  const proactiveCooldownOpen = !lastProactive ||
+    maintenanceNow - lastProactive.timestamp >= PROACTIVE_MESSAGE_COOLDOWN_MS;
   let message: ConversationLine | null = null;
   const initiativeWindowOpen = () =>
     allowInitiative &&
+    !unansweredProactive &&
+    proactiveCooldownOpen &&
     canSurfaceInitiative() &&
     !initiativeSignal.aborted &&
     advanced.state.world.isAwake &&
@@ -829,7 +875,8 @@ export async function maintainRuntime(
               plan: proactivePlan,
               rendered: proactiveRender,
             });
-            text = proactiveRender.text;
+            text = sanitizeProactiveDialogueText(proactiveRender.text);
+            if (!text) text = renderLocalInitiative(initiative);
           }
         }
 
@@ -879,6 +926,20 @@ export async function maintainRuntime(
         await repository.saveInitiative({ ...initiative, status: "surfaced" });
         initiative.status = "surfaced";
       }
+    }
+  }
+  if (allowInitiative && (unansweredProactive || !proactiveCooldownOpen)) {
+    const cooldownUntil = lastProactive
+      ? lastProactive.timestamp + PROACTIVE_MESSAGE_COOLDOWN_MS
+      : maintenanceNow;
+    const deferredUntil = unansweredProactive
+      ? Math.max(maintenanceNow + PROACTIVE_BLOCK_RECHECK_MS, cooldownUntil)
+      : Math.max(maintenanceNow + 60_000, cooldownUntil);
+    for (const item of initiatives) {
+      if (item.status !== "pending" || item.notBefore >= deferredUntil) continue;
+      const deferred = { ...item, notBefore: deferredUntil };
+      await repository.saveInitiative(deferred);
+      item.notBefore = deferredUntil;
     }
   }
   return { consolidation, memoryHealth, memoryBacklog, initiatives, message };
