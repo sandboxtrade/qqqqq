@@ -305,7 +305,7 @@ body { overscroll-behavior: none; }
 /* Asset transitions only start after successful decode. No per-image eye masks. */
 .asset-scene { position:absolute; inset:0; background:#171116; overflow:hidden; }
 .asset-layer { position:absolute; inset:0; display:block; z-index:1; }
-.character-asset-image { display:block; width:100%; height:100%; object-fit:cover; object-position:center center; transform-origin: center center; will-change: transform, opacity; pointer-events:none; user-select:none; }
+.character-asset-image { display:block; width:100%; height:100%; object-fit:cover; object-position:center center; transform-origin:center center; will-change:transform, opacity; pointer-events:none; user-select:none; }
 .asset-transition.dissolve .asset-current { animation:asset-in 700ms ease-in-out both; }
 .asset-transition.dissolve .asset-previous { animation:asset-out 700ms ease-in-out both; }
 .asset-transition.dip .asset-current { animation:asset-dip-in 700ms ease-in-out both; }
