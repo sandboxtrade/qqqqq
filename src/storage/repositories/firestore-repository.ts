@@ -10,6 +10,7 @@ import {
   setDoc,
   startAfter,
   runTransaction,
+  writeBatch,
   where,
   type CollectionReference,
   type DocumentData,
@@ -545,6 +546,86 @@ export class FirestoreCompanionRepository implements CompanionRepository {
 
   async loadWorldState(): Promise<WorldState | null> {
     return (await this.loadRuntimeState()).world;
+  }
+
+  async resetConversationAndMemory(
+    snapshot: CompanionSnapshot,
+    world: WorldState,
+  ): Promise<RuntimePersistenceState> {
+    const resetCollections = [
+      "events",
+      "memoryPending",
+      "memoryProcessed",
+      "memoryMeta",
+      "turnPending",
+      "memories",
+      "knowledge",
+      "knowledgeHeads",
+      "openThreads",
+      "initiatives",
+      "intimacy",
+    ] as const;
+
+    // Capture the current generation first. Anything written after the reset
+    // revision is published is new data and must not be removed by this reset.
+    const snapshots = await Promise.all(
+      resetCollections.map(async (name) => ({
+        name,
+        docs: (await getDocs(this.subcollection(name))).docs.map((item) => item.id),
+      })),
+    );
+    this.ownerId();
+
+    const stateRef = this.childDoc("state", "current");
+    const worldRef = this.childDoc("world", "current");
+    let resetRevision = 0;
+    await runTransaction(this.db(), async (tx) => {
+      const [stateSnap, worldSnap] = await Promise.all([
+        tx.get(stateRef),
+        tx.get(worldRef),
+      ]);
+      this.ownerId();
+      const persisted = stateSnap.exists()
+        ? decodeCompanionSnapshot(stateSnap.data())
+        : null;
+      const persistedRevision = persisted?.revision ?? 0;
+      if (worldSnap.exists()) {
+        const decodedWorld = decodeWorldState(worldSnap.data());
+        if (
+          decodedWorld.revision !== undefined &&
+          decodedWorld.revision !== persistedRevision
+        )
+          throw new Error(
+            "Состояние мира и персонажа рассинхронизировано. [state-world-conflict]",
+          );
+      }
+      resetRevision = persistedRevision + 1;
+      tx.set(
+        stateRef,
+        sanitizeForFirestore(
+          encodeCompanionSnapshot({ ...snapshot, revision: resetRevision }),
+        ),
+      );
+      tx.set(
+        worldRef,
+        sanitizeForFirestore(encodeWorldState(world, resetRevision)),
+      );
+    });
+
+    const targets = snapshots.flatMap(({ name, docs }) =>
+      docs.map((id) => this.childDoc(name, id)),
+    );
+    for (let index = 0; index < targets.length; index += 400) {
+      this.ownerId();
+      const batch = writeBatch(this.db());
+      for (const ref of targets.slice(index, index + 400)) batch.delete(ref);
+      await batch.commit();
+    }
+
+    return {
+      snapshot: { ...snapshot, revision: resetRevision },
+      world,
+    };
   }
 
   async loadIntimacyState(): Promise<IntimacyState | null> {

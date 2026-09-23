@@ -301,6 +301,28 @@ export class InMemoryCompanionRepository implements CompanionRepository {
     return (await this.loadRuntimeState()).world;
   }
 
+  async resetConversationAndMemory(
+    snapshot: CompanionSnapshot,
+    world: WorldState,
+  ): Promise<RuntimePersistenceState> {
+    const nextRevision = (this.snapshot?.revision ?? 0) + 1;
+    this.events = [];
+    this.memories = [];
+    this.consolidatedEventVersions.clear();
+    this.pendingMemoryEventIds.clear();
+    this.pendingTurnIds.clear();
+    this.memoryRecoveryState = null;
+    this.facts = [];
+    this.threads = [];
+    this.initiatives = [];
+    this.intimacyState = null;
+    this.intimacyPreferences = null;
+    this.snapshot = structuredClone({ ...snapshot, revision: nextRevision });
+    this.world = structuredClone(world);
+    this.worldRevision = nextRevision;
+    return this.loadRuntimeState();
+  }
+
   async loadIntimacyState() {
     return this.intimacyState ? structuredClone(this.intimacyState) : null;
   }

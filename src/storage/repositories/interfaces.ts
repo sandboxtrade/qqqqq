@@ -88,6 +88,10 @@ export interface CompanionRepository {
   loadRuntimeState(): Promise<RuntimePersistenceState>;
   loadSnapshot(): Promise<CompanionSnapshot | null>;
   loadWorldState(): Promise<WorldState | null>;
+  resetConversationAndMemory(
+    snapshot: CompanionSnapshot,
+    world: WorldState,
+  ): Promise<RuntimePersistenceState>;
 
   loadIntimacyState(): Promise<IntimacyState | null>;
   commitIntimacyState(
