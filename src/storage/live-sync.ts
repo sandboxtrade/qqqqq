@@ -9,6 +9,7 @@ import {
   query,
   startAfter,
   where,
+  type QueryConstraint,
   type Unsubscribe,
 } from "firebase/firestore";
 import type { CharacterEvent } from "../events/event-types";
@@ -96,7 +97,7 @@ export function subscribeCharacterLiveSync(
           catchUpRequested = false;
           while (!stopped) {
             ensureOwner();
-            const constraints = [
+            const constraints: QueryConstraint[] = [
               where("type", "in", ["message", "character_action"]),
               orderBy("timestamp", "asc"),
               orderBy(documentId(), "asc"),
