@@ -736,18 +736,23 @@ export function decide(
       relationship.closeness >= 0.72;
 
     if (!shouldWake) {
+      const sleepyText = CHARACTER_STATE_QUESTION_RE.test(normalized)
+        ? "Мм… я ещё сплю немного. Напиши мне позже, и я нормально отвечу."
+        : GREETING_RE.test(normalized)
+          ? "Мм… привет. Я ещё сонная немного."
+          : "Мм… я сейчас ещё сплю. Напиши мне позже, хорошо?";
       return {
-        action: "stay_silent",
-        tone: "sleeping",
+        action: "acknowledge",
+        tone: "sleepy_soft",
         rationale:
-          "Her world state says she is asleep, and the message is not urgent or emotionally important enough to wake her immediately.",
-        confidence: 0.9,
+          "Her world state says she is asleep. Instead of complete silence, she gives a brief sleepy acknowledgement so the user does not read it as a bug.",
+        confidence: 0.92,
         shouldAskFollowUp: false,
         shouldReferenceMemory: false,
         content: defaultContent(
-          "silence",
-          "Она сейчас спит и не просыпается ради обычного сообщения. Не генерировать текстовый ответ.",
-          { locked: true, fallbackText: "" },
+          "support",
+          "Коротко и сонно отреагировать, не разворачивая полноценный разговор.",
+          { locked: true, fallbackText: sleepyText },
         ),
       };
     }
