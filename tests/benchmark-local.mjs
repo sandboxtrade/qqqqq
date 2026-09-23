@@ -98,23 +98,23 @@ const { extractSemanticCandidates } = await import(
 const { consolidateEvents, recoverMemory } = await import(
   "../src/memory/memory-consolidation.ts"
 );
-const { rankFacts, rankMemories } = await import("../src/memory/memory-retrieval.ts");
-const { retrieveMemoryContext } = await import("../src/memory/memory-context.ts");
-const { refreshInitiatives } = await import("../src/initiative/initiative-engine.ts");
+const { rankFacts, rankMemories } = await import("../src/memory/retrieval.ts");
+const { retrieveMemoryContext } = await import("../src/memory/retrieval.ts");
+const { refreshInitiatives } = await import("../src/initiative/initiative.ts");
 const { createInitialWorldState, simulateWorld, markUserInteraction } = await import(
-  "../src/world/world-engine.ts"
+  "../src/world/world.ts"
 );
 const {
   resolveRoutine,
   resolveTimeOfDay,
   StableWorldClock,
   calendarDateKey,
-} = await import("../src/world/time-engine.ts");
+} = await import("../src/world/world.ts");
 const { initialEmotionalState, deriveMood, decayEmotions } = await import(
-  "../src/emotions/emotion-engine.ts"
+  "../src/emotions/emotions.ts"
 );
 const { initialRelationshipState } = await import(
-  "../src/relationship/relationship-engine.ts"
+  "../src/relationship/relationship.ts"
 );
 const { sanitizeForFirestore } = await import(
   "../src/storage/firestore-data.ts"
@@ -137,15 +137,15 @@ const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState } = await imp
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
-const { defaultCharacter } = await import("../src/character/default-character.ts");
+const { defaultCharacter } = await import("../src/character/character.ts");
 const {
   createInitialIntimacyState,
   createInitialIntimacyPreferences,
   evaluateIntimacyHardGate,
   isNeutralIntimacySceneId,
-} = await import("../src/intimacy/intimacy-state.ts");
+} = await import("../src/intimacy/intimacy.ts");
 const { defaultIntimacyCoreProfile } = await import(
-  "../src/intimacy/intimacy-core.ts"
+  "../src/intimacy/intimacy.ts"
 );
 const {
   localPerception,
@@ -154,12 +154,12 @@ const {
   decide,
   planResponse,
 } = await import("../src/cognition/local-cognition.ts");
-const { guardCharacterReply } = await import("../src/dialogue/response-guard.ts");
+const { guardCharacterReply } = await import("../src/dialogue/dialogue.ts");
 const { deriveAvatarCue, resolveAvatarVisualState } = await import(
-  "../src/avatar/visual-state.ts"
+  "../src/avatar/avatar-model.ts"
 );
 const { mergeChatMessages, replyForFailedMessage } = await import(
-  "../src/app/message-sync.ts"
+  "../src/app/app-utils.ts"
 );
 let count = 0;
 async function test(name, fn) {

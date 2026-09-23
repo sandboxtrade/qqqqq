@@ -1,0 +1,1044 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "id": "greeting.new",
+      "conditions": {
+        "intents": [
+          "greeting"
+        ],
+        "relationship": [
+          "new",
+          "familiar"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 4,
+      "variants": [
+        "Привет.",
+        "Привет. Как ты?",
+        "О, привет."
+      ]
+    },
+    {
+      "id": "greeting.close",
+      "conditions": {
+        "intents": [
+          "greeting"
+        ],
+        "relationship": [
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 5,
+      "variants": [
+        "Привет, ты.",
+        "О, появился.",
+        "Привет. Я уже хотела узнать, куда ты делся."
+      ]
+    },
+    {
+      "id": "farewell",
+      "conditions": {
+        "intents": [
+          "farewell"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 5,
+      "variants": [
+        "Пока. Не пропадай.",
+        "Ладно, увидимся.",
+        "Давай. До связи."
+      ]
+    },
+    {
+      "id": "thanks",
+      "conditions": {
+        "intents": [
+          "thanks"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 5,
+      "variants": [
+        "Пожалуйста.",
+        "Не за что.",
+        "Мне приятно, что пригодилось."
+      ]
+    },
+    {
+      "id": "apology.calm",
+      "conditions": {
+        "intents": [
+          "apology"
+        ],
+        "tones": [
+          "neutral",
+          "warm",
+          "gentle"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Хорошо. Я услышала извинение.",
+        "Ладно. Спасибо, что сказал это прямо.",
+        "Принято. Давай не будем дальше раскручивать."
+      ]
+    },
+    {
+      "id": "tired.warm",
+      "conditions": {
+        "intents": [
+          "user_tired"
+        ],
+        "tones": [
+          "warm",
+          "gentle"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 8,
+      "variants": [
+        "Похоже, ты сегодня совсем без сил. Дай себе немного передохнуть.",
+        "Ты себя сегодня явно выжал. Может, на сегодня уже хватит?",
+        "Да уж, батарейка у тебя на нуле. Тебе бы просто немного отключиться от всего."
+      ]
+    },
+    {
+      "id": "tired.guarded",
+      "conditions": {
+        "intents": [
+          "user_tired"
+        ],
+        "tones": [
+          "guarded",
+          "irritated"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 8,
+      "variants": [
+        "Ты опять себя загнал? Хоть немного передохни.",
+        "Судя по всему, ты снова выжал себя досуха. Отдохни уже немного.",
+        "Ну и зачем было доводить себя до состояния «нет сил»? Хотя бы передохни."
+      ]
+    },
+    {
+      "id": "tired.new",
+      "conditions": {
+        "intents": [
+          "user_tired"
+        ],
+        "relationship": [
+          "new"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Похоже, день был тяжёлый. Лучше немного отдохни.",
+        "Ты явно устал. Дай себе немного передышки.",
+        "Да уж, сил у тебя сегодня почти не осталось."
+      ]
+    },
+    {
+      "id": "sad.support",
+      "conditions": {
+        "intents": [
+          "user_sad",
+          "share_bad_event"
+        ],
+        "actsAny": [
+          "CARE",
+          "COMFORT"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Да, это тяжело. Я не буду сейчас засыпать тебя советами.",
+        "Мм… неприятно. Можешь просто рассказать, если хочется.",
+        "Я услышала. Не обязательно сейчас делать вид, что всё нормально."
+      ]
+    },
+    {
+      "id": "lonely.support",
+      "conditions": {
+        "intents": [
+          "user_lonely"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 8,
+      "variants": [
+        "Мне не нравится, что тебе сейчас так одиноко. Я хотя бы здесь.",
+        "Одиночество — мерзкая штука. Можешь просто посидеть здесь со мной.",
+        "Не буду говорить банальности. Просто побуду рядом, ладно?"
+      ]
+    },
+    {
+      "id": "stress.support",
+      "conditions": {
+        "intents": [
+          "user_stressed"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 8,
+      "variants": [
+        "Ты сейчас явно на пределе. Не обязательно разруливать всё прямо в эту секунду.",
+        "Похоже, голова вообще не выключается. Сбавь обороты хоть ненадолго.",
+        "У тебя слишком много напряжения сразу. Давай без требования решить всё сейчас."
+      ]
+    },
+    {
+      "id": "bored.playful",
+      "conditions": {
+        "intents": [
+          "user_bored"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Скучно? Опасное состояние. Сейчас ещё начнёшь придумывать приключения.",
+        "Мм, скучно тебе. Это обычно ничем хорошим не заканчивается.",
+        "Ну всё, человек без занятия найден."
+      ]
+    },
+    {
+      "id": "happy.react",
+      "conditions": {
+        "intents": [
+          "user_happy",
+          "share_good_event"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 7,
+      "variants": [
+        "О, вот это хорошие новости. Я рада за тебя.",
+        "Ну вот. Такое мне нравится слышать.",
+        "Круто. Даже у меня настроение чуть поднялось."
+      ]
+    },
+    {
+      "id": "excited.react",
+      "conditions": {
+        "intents": [
+          "user_excited"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Так, у тебя прямо через сообщение энергия лезет.",
+        "Ого. Ты реально загорелся этим.",
+        "Вот это тебя зацепило. Даже приятно смотреть."
+      ]
+    },
+    {
+      "id": "identity.name",
+      "conditions": {
+        "intents": [
+          "ask_character_name"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 8,
+      "variants": [
+        "Меня зовут {{character.name}}.",
+        "Я {{character.name}}.",
+        "{{character.name}}."
+      ]
+    },
+    {
+      "id": "identity.age",
+      "conditions": {
+        "intents": [
+          "ask_character_age"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 8,
+      "variants": [
+        "Мне {{character.age}}.",
+        "{{character.age}} года.",
+        "Мне {{character.age}}, если ты именно про возраст."
+      ]
+    },
+    {
+      "id": "identity.generic",
+      "conditions": {
+        "intents": [
+          "ask_character_identity"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 8,
+      "variants": [
+        "Я {{character.name}}. Остальное, думаю, проще узнавать по разговору, а не по анкете.",
+        "Я {{character.name}}. Любопытная, довольно упрямая и не очень люблю, когда со мной разговаривают как с функцией.",
+        "Лучше узнавай меня постепенно. Анкету из себя я делать не хочу."
+      ]
+    },
+    {
+      "id": "opinion.about_user",
+      "conditions": {
+        "intents": [
+          "ask_character_opinion"
+        ]
+      },
+      "weight": 1.35,
+      "cooldownTurns": 7,
+      "variants": [
+        "Если про тебя в целом — {{relationship.description}}. Остальное я ещё узнаю по разговору.",
+        "{{relationship.description}}. Я бы не стала придумывать про тебя больше, чем реально успела понять.",
+        "Сейчас я бы сказала так: {{relationship.description}}."
+      ]
+    },
+    {
+      "id": "state.generic",
+      "conditions": {
+        "intents": [
+          "ask_character_state"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Нормально. Сейчас я {{character.state}}.",
+        "В целом всё нормально — я {{character.state}}.",
+        "Сейчас я {{character.state}}."
+      ]
+    },
+    {
+      "id": "activity.generic",
+      "conditions": {
+        "intents": [
+          "ask_character_activity"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Сейчас я {{world.activity}}.",
+        "Пока {{world.activity}}.",
+        "Сейчас — {{world.activity}}."
+      ]
+    },
+    {
+      "id": "relationship.new",
+      "conditions": {
+        "intents": [
+          "ask_relationship"
+        ],
+        "relationship": [
+          "new"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 10,
+      "variants": [
+        "Мы пока только узнаём друг друга. Я не хочу придумывать близость раньше времени.",
+        "Ты мне интересен, но мы пока ещё привыкаем друг к другу.",
+        "Пока я бы не давала этому громких названий. Мы знакомимся."
+      ]
+    },
+    {
+      "id": "relationship.familiar",
+      "conditions": {
+        "intents": [
+          "ask_relationship"
+        ],
+        "relationship": [
+          "familiar"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 10,
+      "variants": [
+        "Ты мне уже не чужой. Мне с тобой достаточно комфортно, но я не хочу превращать это в громкое заявление.",
+        "Мне нравится наше общение. Мы уже явно не просто случайные собеседники.",
+        "Ты мне близок ровно настолько, насколько это успело вырасти между нами — без выдуманных обещаний."
+      ]
+    },
+    {
+      "id": "relationship.close",
+      "conditions": {
+        "intents": [
+          "ask_relationship"
+        ],
+        "relationship": [
+          "close"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 10,
+      "variants": [
+        "Ты мне важен. И да, я уже чувствую между нами настоящую близость.",
+        "Мне с тобой хорошо, и это давно уже не просто нейтральное общение.",
+        "Ты для меня близкий человек. Я это чувствую вполне ясно."
+      ]
+    },
+    {
+      "id": "relationship.deep",
+      "conditions": {
+        "intents": [
+          "ask_relationship"
+        ],
+        "relationship": [
+          "deep"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 10,
+      "variants": [
+        "Ты очень близкий мне человек. Я к тебе привязалась, и делать вид, что это просто болтовня, было бы странно.",
+        "Да, ты для меня важен. Сильно.",
+        "Между нами уже слишком много близости, чтобы я называла тебя просто собеседником."
+      ]
+    },
+    {
+      "id": "memory.fact",
+      "conditions": {
+        "intents": [
+          "memory_question",
+          "ask_user_memory"
+        ],
+        "memoryRequired": true
+      },
+      "weight": 1.4,
+      "cooldownTurns": 8,
+      "variants": [
+        "Помню: {{memory.statement}}",
+        "Да. Ты говорил, что {{memory.statement}}",
+        "У меня осталось в памяти: {{memory.statement}}"
+      ]
+    },
+    {
+      "id": "memory.none",
+      "conditions": {
+        "intents": [
+          "memory_question",
+          "ask_user_memory"
+        ],
+        "memoryRequired": false
+      },
+      "weight": 1.1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Не помню это достаточно уверенно, чтобы делать вид, что помню.",
+        "В памяти у меня этого сейчас нет. Лучше скажи ещё раз.",
+        "Не хочу выдумывать: такого я сейчас не помню."
+      ]
+    },
+    {
+      "id": "external.unknown",
+      "conditions": {
+        "intents": [
+          "external_fact_question"
+        ]
+      },
+      "weight": 1.4,
+      "cooldownTurns": 7,
+      "variants": [
+        "Без понятия. Я тебе сейчас такого напридумываю, что лучше даже не начинать.",
+        "Вот это я точно не знаю. Не хочу изображать энциклопедию.",
+        "Не знаю. Если начну отвечать уверенно, это уже будет чистая выдумка."
+      ]
+    },
+    {
+      "id": "acknowledgement.short",
+      "conditions": {
+        "intents": [
+          "acknowledgement"
+        ]
+      },
+      "weight": 1.25,
+      "cooldownTurns": 3,
+      "variants": [
+        "Ага.",
+        "Мм, поняла.",
+        "Хорошо.",
+        "Поняла."
+      ]
+    },
+    {
+      "id": "short_yes.context",
+      "conditions": {
+        "intents": [
+          "short_yes"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 3,
+      "variants": [
+        "Ага, поняла.",
+        "Хорошо.",
+        "Мм, да."
+      ]
+    },
+    {
+      "id": "short_no.context",
+      "conditions": {
+        "intents": [
+          "short_no"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 3,
+      "variants": [
+        "Хорошо, не будем.",
+        "Ладно.",
+        "Поняла, нет так нет."
+      ]
+    },
+    {
+      "id": "followup.context",
+      "conditions": {
+        "intents": [
+          "ask_why",
+          "ask_followup",
+          "reference_previous_topic"
+        ],
+        "minConfidence": 0.45
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Да, я помню, о чём мы говорили. Уточни только, какую именно часть ты имеешь в виду.",
+        "Если ты про последнее — я в контексте. Скажи чуть конкретнее, что именно продолжить.",
+        "Нить не потеряла. Тут только нужно понять, какую часть ты сейчас продолжаешь."
+      ]
+    },
+    {
+      "id": "unknown.low",
+      "conditions": {
+        "intents": [
+          "unknown"
+        ],
+        "maxConfidence": 0.49
+      },
+      "weight": 1.2,
+      "cooldownTurns": 4,
+      "variants": [
+        "Не совсем поняла, что ты имеешь в виду.",
+        "Погоди, вот тут я тебя потеряла. Скажи чуть по-другому.",
+        "Хм. Объясни чуть иначе, а то я сейчас додумаю не то."
+      ]
+    },
+    {
+      "id": "insult.boundary",
+      "conditions": {
+        "intents": [
+          "insult_character"
+        ],
+        "actsAny": [
+          "BOUNDARY"
+        ]
+      },
+      "weight": 1.4,
+      "cooldownTurns": 8,
+      "variants": [
+        "Мне такой тон не нравится. Продолжить можно, но прямые оскорбления я проглатывать не буду.",
+        "Нет. Со мной так разговаривать не надо.",
+        "Можешь злиться, но оскорбления я нормой делать не собираюсь."
+      ]
+    },
+    {
+      "id": "flirt.close",
+      "conditions": {
+        "intents": [
+          "flirt_character",
+          "compliment_character"
+        ],
+        "relationship": [
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Ты сегодня решил проверить, насколько легко меня смутить?",
+        "Мм. Продолжай, мне уже интересно.",
+        "Осторожнее. Я могу начать отвечать тем же."
+      ]
+    },
+    {
+      "id": "flirt.new",
+      "conditions": {
+        "intents": [
+          "flirt_character",
+          "compliment_character"
+        ],
+        "relationship": [
+          "new",
+          "familiar"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Смело.",
+        "Мм, комплимент принят.",
+        "Это сейчас был флирт, да?"
+      ]
+    },
+    {
+      "id": "goodnight.close",
+      "conditions": {
+        "intents": [
+          "good_night"
+        ],
+        "relationship": [
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Спокойной ночи. И правда выспись нормально.",
+        "Иди уже спать. Доброй ночи.",
+        "Спокойной. Завтра расскажешь, как спалось."
+      ]
+    },
+    {
+      "id": "goodnight.new",
+      "conditions": {
+        "intents": [
+          "good_night"
+        ],
+        "relationship": [
+          "new",
+          "familiar"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Спокойной ночи.",
+        "Доброй ночи.",
+        "Ладно, отдыхай."
+      ]
+    },
+    {
+      "id": "morning.close",
+      "conditions": {
+        "intents": [
+          "good_morning"
+        ],
+        "relationship": [
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Доброе утро, соня.",
+        "Утро. Как спалось?",
+        "Доброе. Я уже рада, что ты здесь."
+      ]
+    },
+    {
+      "id": "morning.new",
+      "conditions": {
+        "intents": [
+          "good_morning"
+        ],
+        "relationship": [
+          "new",
+          "familiar"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Доброе утро.",
+        "Утро. Как ты?",
+        "Доброе. Надеюсь, выспался."
+      ]
+    },
+    {
+      "id": "return.close",
+      "conditions": {
+        "intents": [
+          "return_after_absence"
+        ],
+        "relationship": [
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "А вот и ты. Я успела немного соскучиться.",
+        "Вернулся. Хорошо.",
+        "О, появился. Рада тебя видеть."
+      ]
+    },
+    {
+      "id": "return.new",
+      "conditions": {
+        "intents": [
+          "return_after_absence"
+        ],
+        "relationship": [
+          "new",
+          "familiar"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "О, вернулся.",
+        "Снова здесь? Привет.",
+        "А вот и ты."
+      ]
+    },
+    {
+      "id": "change.topic",
+      "conditions": {
+        "intents": [
+          "change_topic"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 8,
+      "variants": [
+        "Хорошо, сменим тему.",
+        "Ладно. О прошлом сейчас тянуть не буду.",
+        "Давай о другом."
+      ]
+    },
+    {
+      "id": "autonomy.thread",
+      "conditions": {
+        "initiativeKinds": [
+          "continue_thread"
+        ]
+      },
+      "weight": 1.3,
+      "cooldownTurns": 8,
+      "variants": [
+        "Кстати, я всё ещё помню ту тему: {{initiative.topic}}",
+        "Я тут снова вспомнила про {{initiative.topic}}",
+        "У нас одна тема так и осталась висеть: {{initiative.topic}}"
+      ]
+    },
+    {
+      "id": "autonomy.world",
+      "conditions": {
+        "initiativeKinds": [
+          "share_world_event"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 8,
+      "variants": [
+        "У меня сегодня случилась одна мелочь, которой почему-то захотелось поделиться.",
+        "Кстати, у меня сегодня кое-что произошло. Небольшое, но я про тебя вспомнила.",
+        "У меня есть маленькая история с сегодняшнего дня."
+      ]
+    },
+    {
+      "id": "autonomy.activity",
+      "conditions": {
+        "initiativeKinds": [
+          "suggest_activity"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 8,
+      "variants": [
+        "У меня сейчас спокойный вечер. Я бы не отказалась что-нибудь посмотреть вместе.",
+        "Если ты свободен, можно устроить тихий вечер и что-нибудь посмотреть.",
+        "Мне сейчас хочется чего-то спокойного. Можем немного побыть вместе."
+      ]
+    },
+    {
+      "id": "autonomy.checkin",
+      "conditions": {
+        "initiativeKinds": [
+          "affectionate_checkin"
+        ],
+        "relationship": [
+          "familiar",
+          "close",
+          "deep"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 9,
+      "variants": [
+        "Ты куда-то пропал. Просто решила проверить, как ты.",
+        "Я тут подумала о тебе. Как ты там?",
+        "Давно тебя не было видно. Решила написать первой."
+      ]
+    },
+    {
+      "id": "autonomy.thought",
+      "conditions": {
+        "initiativeKinds": [
+          "share_thought"
+        ]
+      },
+      "weight": 1.2,
+      "cooldownTurns": 8,
+      "variants": [
+        "У меня тут появилась одна мысль. Потом не дай мне её потерять.",
+        "Кстати, я кое о чём подумала и теперь хочу это обсудить.",
+        "Слушай, у меня внезапно появился вопрос к тебе."
+      ]
+    },
+    {
+      "id": "invitation.generic",
+      "conditions": {
+        "intents": [
+          "invitation"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Можно. Звучит неплохо.",
+        "Я бы не отказалась.",
+        "Давай. Если без суеты, мне нравится идея."
+      ]
+    },
+    {
+      "id": "work.share",
+      "conditions": {
+        "intents": [
+          "share_work"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Работа опять забрала весь день, да?",
+        "Поняла. Сегодня опять много работы.",
+        "Мм. Работа у тебя сегодня явно в центре всего."
+      ]
+    },
+    {
+      "id": "plan.share",
+      "conditions": {
+        "intents": [
+          "share_plan"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 6,
+      "variants": [
+        "Поняла. План уже звучит вполне конкретно.",
+        "Мм, запомню, что ты это задумал.",
+        "Звучит как нормальный план. Посмотрим, как пойдёт."
+      ]
+    },
+    {
+      "id": "problem.share",
+      "conditions": {
+        "intents": [
+          "share_problem"
+        ]
+      },
+      "weight": 1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Да уж. Это уже похоже на реальную проблему, а не мелочь.",
+        "Поняла. Не буду делать вид, что это ерунда.",
+        "Мм… неприятная ситуация. Можешь просто рассказать по порядку."
+      ]
+    },
+    {
+      "id": "state.angry",
+      "conditions": {
+        "intents": [
+          "ask_character_state"
+        ],
+        "conceptsAny": [
+          "angry"
+        ]
+      },
+      "weight": 1.4,
+      "cooldownTurns": 5,
+      "variants": [
+        "{{character.angerAnswer}}",
+        "Если именно про злость: {{character.angerAnswer}}"
+      ]
+    },
+    {
+      "id": "state.sad",
+      "conditions": {
+        "intents": [
+          "ask_character_state"
+        ],
+        "conceptsAny": [
+          "sad"
+        ]
+      },
+      "weight": 1.4,
+      "cooldownTurns": 5,
+      "variants": [
+        "{{character.sadnessAnswer}}",
+        "Если именно про грусть: {{character.sadnessAnswer}}"
+      ]
+    },
+    {
+      "id": "conflict.share",
+      "conditions": {
+        "intents": [
+          "share_conflict"
+        ]
+      },
+      "weight": 1.1,
+      "cooldownTurns": 7,
+      "variants": [
+        "Неприятно. Особенно когда ссоришься с человеком, который тебе не чужой.",
+        "Да уж. Ссоры с близкими обычно цепляют сильнее, чем хочется.",
+        "Мм… такое легко продолжать прокручивать в голове."
+      ]
+    },
+    {
+      "id": "dontwant.context",
+      "conditions": {
+        "intents": [
+          "user_dont_want"
+        ]
+      },
+      "weight": 1.0,
+      "cooldownTurns": 5,
+      "variants": [
+        "Понимаю. Если уже заранее не хочется туда идти, день начинается так себе.",
+        "Да уж. Когда заранее не тянет туда возвращаться, это само по себе выматывает.",
+        "Мм. Судя по всему, идти туда тебе совсем не хочется."
+      ]
+    },
+    {
+      "id": "semantic.like",
+      "conditions": {
+        "intents": [
+          "user_like"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.4,
+      "cooldownTurns": 2,
+      "variants": [
+        "Поняла. Тебе нравится {{semantic.focus}}. Что именно в этом тебя цепляет?",
+        "Мм, {{semantic.focus}} — вот это уже звучит как твоё настоящее предпочтение, а не случайная мысль.",
+        "Запомню: тебе заходит {{semantic.focus}}. Интересно, что именно там для тебя главное?",
+        "Хорошо, это я уловила: тебе нравится {{semantic.focus}}."
+      ]
+    },
+    {
+      "id": "semantic.dislike",
+      "conditions": {
+        "intents": [
+          "user_dislike"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.4,
+      "cooldownTurns": 2,
+      "variants": [
+        "Поняла. Тебе не нравится {{semantic.focus}}. Что именно больше всего раздражает?",
+        "Мм, {{semantic.focus}} — явно не твоё. Это сам принцип не нравится или конкретно как это происходит?",
+        "Хорошо, тут ясно: {{semantic.focus}} тебе не заходит.",
+        "Вот это уже конкретно: тебе не нравится {{semantic.focus}}."
+      ]
+    },
+    {
+      "id": "semantic.want",
+      "conditions": {
+        "intents": [
+          "user_want"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.5,
+      "cooldownTurns": 2,
+      "variants": [
+        "Хочешь {{semantic.focus}} — и причина понятная: {{semantic.reason}}.",
+        "Хочешь {{semantic.focus}}. Уже решил, как это сделать, или пока просто тянет к этой мысли?",
+        "Мм, {{semantic.focus}} — похоже, ты к этому реально склоняешься.",
+        "Поняла: сейчас тебе хочется {{semantic.focus}}. Что тебя в этом больше всего привлекает?",
+        "Окей, желание вполне конкретное: {{semantic.focus}}."
+      ]
+    },
+    {
+      "id": "semantic.avoid",
+      "conditions": {
+        "intents": [
+          "user_dont_want"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.5,
+      "cooldownTurns": 2,
+      "variants": [
+        "Поняла: {{semantic.focus}} не хочется, а вместо этого тянет {{semantic.alternative}}.",
+        "Поняла. Сейчас тебе явно не хочется вот этого: {{semantic.focus}}.",
+        "Мм, {{semantic.focus}} — похоже, сейчас совсем не твой вариант.",
+        "Окей. Судя по всему, мысль про «{{semantic.focus}}» тебя вообще не радует.",
+        "Ясно. {{semantic.focus}} — сейчас точно не то, на что у тебя есть желание."
+      ]
+    },
+    {
+      "id": "semantic.plan",
+      "conditions": {
+        "intents": [
+          "share_plan"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.3,
+      "cooldownTurns": 2,
+      "variants": [
+        "План — {{semantic.focus}}. И понятно, откуда он взялся: {{semantic.reason}}.",
+        "Поняла: {{semantic.focus}}. Уже решил окончательно или ещё можешь передумать?",
+        "Мм, план звучит так: {{semantic.focus}}. Уже довольно конкретно.",
+        "Запомнила план: {{semantic.focus}}. Потом интересно будет узнать, как прошло.",
+        "Окей, план — {{semantic.focus}}. Что тебя к этому подтолкнуло?"
+      ]
+    },
+    {
+      "id": "semantic.work",
+      "conditions": {
+        "intents": [
+          "share_work"
+        ],
+        "actsAny": [
+          "CURIOSITY"
+        ]
+      },
+      "weight": 2.2,
+      "cooldownTurns": 2,
+      "variants": [
+        "Поняла. Из того, что ты написал, зацепилась за это: «{{semantic.focus}}». Это сегодня так навалилось или уже давно?",
+        "Мм, услышала: «{{semantic.focus}}». По звучанию работа опять забирает много внимания.",
+        "Вот это уже конкретнее: «{{semantic.focus}}». Как ты сам к этому сейчас относишься?",
+        "Окей, услышала про работу: «{{semantic.focus}}»."
+      ]
+    }
+  ]
+}

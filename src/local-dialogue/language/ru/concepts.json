@@ -1,0 +1,630 @@
+{
+  "schemaVersion": 1,
+  "concepts": {
+    "greeting": {
+      "tokens": [
+        "привет",
+        "здравствуй",
+        "хай"
+      ],
+      "phrases": [
+        "добрый день"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    "farewell": {
+      "tokens": [
+        "пока",
+        "увидимся"
+      ],
+      "phrases": [
+        "до встречи"
+      ],
+      "topic": "social"
+    },
+    "morning": {
+      "tokens": [
+        "утро",
+        "утром"
+      ],
+      "phrases": [
+        "доброе утро"
+      ],
+      "topic": "routine"
+    },
+    "night": {
+      "tokens": [
+        "ночь",
+        "ночью"
+      ],
+      "phrases": [
+        "спокойной ночи"
+      ],
+      "topic": "routine"
+    },
+    "sleep": {
+      "tokens": [
+        "спать",
+        "сон",
+        "засыпаю",
+        "выспался",
+        "выспалась"
+      ],
+      "phrases": [
+        "хочу спать",
+        "не выспался",
+        "не выспалась"
+      ],
+      "topic": "wellbeing"
+    },
+    "tired": {
+      "tokens": [
+        "устал",
+        "устала",
+        "усталость",
+        "вымотан",
+        "вымотана",
+        "вымотался",
+        "вымоталась"
+      ],
+      "phrases": [
+        "нет сил",
+        "без сил"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "sad": {
+      "tokens": [
+        "грустишь",
+        "грустная",
+        "грустно",
+        "грущу",
+        "плакать",
+        "тоска"
+      ],
+      "phrases": [
+        "мне грустно"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "angry": {
+      "tokens": [
+        "бесит",
+        "злая",
+        "злишься",
+        "злость",
+        "злюсь",
+        "раздражен",
+        "раздражена"
+      ],
+      "phrases": [
+        "я в бешенстве"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "very_negative"
+    },
+    "bored": {
+      "tokens": [
+        "скучно",
+        "скука"
+      ],
+      "phrases": [
+        "нечего делать"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "happy": {
+      "tokens": [
+        "счастлив",
+        "счастлива",
+        "рад",
+        "рада"
+      ],
+      "phrases": [
+        "мне хорошо"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "positive"
+    },
+    "excited": {
+      "tokens": [
+        "восторг",
+        "восторге"
+      ],
+      "phrases": [
+        "не могу дождаться"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "very_positive"
+    },
+    "lonely": {
+      "tokens": [
+        "одиноко",
+        "одиночество"
+      ],
+      "phrases": [
+        "мне одиноко"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "stressed": {
+      "tokens": [
+        "стресс",
+        "переживаю",
+        "нервничаю",
+        "тревожно"
+      ],
+      "phrases": [
+        "нервы на пределе"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "anxious": {
+      "tokens": [
+        "тревожно",
+        "боюсь",
+        "переживаю"
+      ],
+      "phrases": [
+        "мне страшно"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    "work": {
+      "tokens": [
+        "работа",
+        "работал",
+        "работала",
+        "смена",
+        "офис",
+        "работаю"
+      ],
+      "phrases": [
+        "на работе"
+      ],
+      "topic": "work"
+    },
+    "plan": {
+      "tokens": [
+        "планирую",
+        "собираюсь",
+        "план"
+      ],
+      "phrases": [
+        "завтра хочу"
+      ],
+      "topic": "plans"
+    },
+    "problem": {
+      "tokens": [
+        "проблема",
+        "сложно",
+        "неприятность"
+      ],
+      "phrases": [
+        "не знаю что делать"
+      ],
+      "topic": "problems",
+      "sentiment": "negative"
+    },
+    "good_event": {
+      "tokens": [
+        "получилось",
+        "выиграл",
+        "выиграла",
+        "повысили"
+      ],
+      "phrases": [
+        "было круто"
+      ],
+      "topic": "events",
+      "sentiment": "positive"
+    },
+    "bad_event": {
+      "tokens": [
+        "ужасный",
+        "жесть",
+        "сломалось"
+      ],
+      "phrases": [
+        "все пошло не так"
+      ],
+      "topic": "events",
+      "sentiment": "negative"
+    },
+    "affection": {
+      "tokens": [
+        "люблю",
+        "нравишься"
+      ],
+      "phrases": [
+        "мне с тобой хорошо"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    "compliment": {
+      "tokens": [
+        "красивая",
+        "милая",
+        "классная",
+        "умная"
+      ],
+      "phrases": [
+        "ты прекрасная"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    "insult": {
+      "tokens": [
+        "дура",
+        "тупая",
+        "идиотка"
+      ],
+      "phrases": [
+        "ненавижу тебя"
+      ],
+      "topic": "relationship",
+      "sentiment": "very_negative"
+    },
+    "boundary": {
+      "tokens": [
+        "отстань",
+        "хватит"
+      ],
+      "phrases": [
+        "не дави",
+        "оставь меня"
+      ],
+      "topic": "relationship"
+    },
+    "apology": {
+      "tokens": [
+        "извини",
+        "прости",
+        "сорри"
+      ],
+      "phrases": [
+        "я виноват",
+        "я виновата"
+      ],
+      "topic": "relationship"
+    },
+    "gratitude": {
+      "tokens": [
+        "спасибо",
+        "благодарю"
+      ],
+      "phrases": [
+        "спасибо тебе"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    "identity": {
+      "tokens": [
+        "имя",
+        "возраст"
+      ],
+      "phrases": [
+        "кто ты",
+        "о себе"
+      ],
+      "topic": "character"
+    },
+    "name": {
+      "tokens": [
+        "имя",
+        "зовут"
+      ],
+      "phrases": [
+        "как тебя зовут"
+      ],
+      "topic": "character"
+    },
+    "age": {
+      "tokens": [
+        "возраст",
+        "лет"
+      ],
+      "phrases": [
+        "сколько тебе лет"
+      ],
+      "topic": "character"
+    },
+    "character_state": {
+      "tokens": [
+        "злишься",
+        "грустишь"
+      ],
+      "phrases": [
+        "как дела",
+        "как ты"
+      ],
+      "topic": "character"
+    },
+    "activity": {
+      "tokens": [
+        "делаешь",
+        "занимаешься"
+      ],
+      "phrases": [
+        "чем занимаешься"
+      ],
+      "topic": "character"
+    },
+    "relationship": {
+      "tokens": [
+        "любишь"
+      ],
+      "phrases": [
+        "кто я для тебя",
+        "что ты чувствуешь ко мне"
+      ],
+      "topic": "relationship"
+    },
+    "preference": {
+      "tokens": [
+        "любишь",
+        "нравится",
+        "предпочитаешь"
+      ],
+      "phrases": [
+        "что бы ты выбрала"
+      ],
+      "topic": "character"
+    },
+    "opinion": {
+      "tokens": [
+        "мнение",
+        "думаешь",
+        "считаешь"
+      ],
+      "phrases": [
+        "как ты считаешь"
+      ],
+      "topic": "conversation"
+    },
+    "memory": {
+      "tokens": [
+        "помнишь"
+      ],
+      "phrases": [
+        "что я тебе говорил",
+        "где я работаю"
+      ],
+      "topic": "memory"
+    },
+    "followup": {
+      "tokens": [
+        "почему",
+        "дальше"
+      ],
+      "phrases": [
+        "и что дальше",
+        "а какие"
+      ],
+      "topic": "conversation"
+    },
+    "affirmation": {
+      "tokens": [
+        "да",
+        "ага",
+        "угу"
+      ],
+      "phrases": [],
+      "topic": "conversation",
+      "sentiment": "positive"
+    },
+    "negation": {
+      "tokens": [
+        "нет",
+        "неа"
+      ],
+      "phrases": [
+        "не хочу"
+      ],
+      "topic": "conversation",
+      "sentiment": "negative"
+    },
+    "agreement": {
+      "tokens": [
+        "согласен",
+        "согласна"
+      ],
+      "phrases": [
+        "я тоже так думаю"
+      ],
+      "topic": "conversation",
+      "sentiment": "positive"
+    },
+    "disagreement": {
+      "tokens": [
+        "несогласен",
+        "несогласна"
+      ],
+      "phrases": [
+        "я так не думаю"
+      ],
+      "topic": "conversation",
+      "sentiment": "negative"
+    },
+    "playful": {
+      "tokens": [
+        "ахах",
+        "хаха",
+        "лол",
+        "шучу"
+      ],
+      "phrases": [],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    "uncertainty": {
+      "tokens": [
+        "неуверен",
+        "неуверена"
+      ],
+      "phrases": [
+        "не знаю",
+        "может быть"
+      ],
+      "topic": "conversation"
+    },
+    "external_fact": {
+      "tokens": [
+        "столица",
+        "погода",
+        "курс"
+      ],
+      "phrases": [
+        "что такое",
+        "кто такой",
+        "объясни мне"
+      ],
+      "topic": "external"
+    },
+    "request": {
+      "tokens": [
+        "сделай",
+        "помоги",
+        "напиши",
+        "посоветуй"
+      ],
+      "phrases": [],
+      "topic": "conversation"
+    },
+    "invitation": {
+      "tokens": [
+        "пойдем",
+        "погуляем"
+      ],
+      "phrases": [
+        "давай вместе",
+        "хочешь со мной"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    "return": {
+      "tokens": [
+        "вернулся",
+        "вернулась"
+      ],
+      "phrases": [
+        "я снова здесь"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    "rejection": {
+      "tokens": [],
+      "phrases": [
+        "ты мне не нравишься",
+        "я тебя не люблю"
+      ],
+      "topic": "relationship",
+      "sentiment": "negative"
+    },
+    "support": {
+      "tokens": [
+        "поддержка",
+        "поддержи"
+      ],
+      "phrases": [
+        "побудь со мной"
+      ],
+      "topic": "wellbeing"
+    },
+    "topic_change": {
+      "tokens": [],
+      "phrases": [
+        "сменим тему",
+        "давай о другом"
+      ],
+      "topic": "conversation"
+    },
+    "flirt": {
+      "tokens": [
+        "флирт",
+        "пофлиртуем"
+      ],
+      "phrases": [
+        "хочу пофлиртовать"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    "user_preference": {
+      "tokens": [
+        "нравится",
+        "люблю"
+      ],
+      "phrases": [
+        "мне нравится",
+        "я люблю",
+        "мне не нравится",
+        "я не люблю"
+      ],
+      "topic": "preferences"
+    },
+    "desire": {
+      "tokens": [
+        "хочу"
+      ],
+      "phrases": [
+        "я хочу",
+        "я не хочу"
+      ],
+      "topic": "plans"
+    },
+    "conflict": {
+      "tokens": [
+        "поссорился",
+        "поссорилась",
+        "поругался",
+        "поругалась"
+      ],
+      "phrases": [
+        "мы поссорились",
+        "мы поругались"
+      ],
+      "topic": "relationship",
+      "sentiment": "negative"
+    },
+    "tease": {
+      "tokens": [
+        "дразню",
+        "подкалываю"
+      ],
+      "phrases": [
+        "шучу над тобой"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    "conversation_ack": {
+      "tokens": [
+        "понял",
+        "поняла",
+        "понятно",
+        "ясно",
+        "окей",
+        "ладно"
+      ],
+      "phrases": [
+        "ну понятно",
+        "хорошо понял"
+      ],
+      "topic": "conversation"
+    }
+  }
+}

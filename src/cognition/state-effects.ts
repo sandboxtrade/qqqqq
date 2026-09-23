@@ -1,0 +1,62 @@
+import type { EmotionDelta } from "../emotions/emotions";
+import type { RelationshipDelta } from "../relationship/relationship";
+import type { CharacterDecision, Perception } from "./cognition-types";
+import { isPersonalInsultDirectedAtCharacter } from "./local-cognition";
+
+export interface CognitionStateEffects {
+  emotion: EmotionDelta;
+  relationship: RelationshipDelta;
+}
+
+export function inferStateEffects(
+  perception: Perception,
+  decision: CharacterDecision,
+): CognitionStateEffects {
+  const emotion: EmotionDelta = { curiosity: 0.005 };
+  const relationship: RelationshipDelta = {};
+
+  if (perception.probableIntent === "affection" || perception.tone === "warm") {
+    emotion.happiness = 0.035;
+    emotion.affection = 0.02;
+    emotion.irritation = -0.015;
+    relationship.closeness = 0.006;
+    relationship.trust = 0.003;
+    relationship.attachment = 0.004;
+    relationship.security = 0.002;
+    relationship.unresolvedTension = -0.003;
+  }
+
+  if (perception.probableIntent === "apology") {
+    emotion.irritation = (emotion.irritation ?? 0) - 0.025;
+    relationship.unresolvedTension = -0.025;
+    relationship.security = (relationship.security ?? 0) + 0.01;
+    relationship.trust = (relationship.trust ?? 0) + 0.002;
+  }
+
+  if (
+    perception.tone === "irritated" &&
+    isPersonalInsultDirectedAtCharacter(perception.literalMeaning)
+  ) {
+    emotion.irritation = (emotion.irritation ?? 0) + 0.12;
+    emotion.happiness = -0.05;
+    relationship.security = -0.012;
+    relationship.unresolvedTension = 0.035;
+  }
+
+  if (perception.probableIntent === "boundary") {
+    relationship.respect =
+      decision.action === "acknowledge" || decision.action === "stay_silent"
+        ? 0.003
+        : -0.01;
+  }
+
+  // Disagreement itself is not a relationship penalty. How it is handled matters more than whether it occurred.
+  if (
+    perception.probableIntent === "disagreement" &&
+    perception.tone !== "irritated"
+  ) {
+    emotion.curiosity = (emotion.curiosity ?? 0) + 0.01;
+  }
+
+  return { emotion, relationship };
+}

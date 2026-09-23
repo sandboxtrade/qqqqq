@@ -33,10 +33,10 @@ const {
 } = await import("../src/local-dialogue/index.ts");
 const { russianLanguagePack } = await import("../src/local-dialogue/language-pack.ts");
 const { localPerception, interpret, decide, planResponse } = await import("../src/cognition/local-cognition.ts");
-const { defaultCharacter } = await import("../src/character/default-character.ts");
-const { initialEmotionalState, deriveMood } = await import("../src/emotions/emotion-engine.ts");
-const { initialRelationshipState } = await import("../src/relationship/relationship-engine.ts");
-const { createInitialWorldState } = await import("../src/world/world-engine.ts");
+const { defaultCharacter } = await import("../src/character/character.ts");
+const { initialEmotionalState, deriveMood } = await import("../src/emotions/emotions.ts");
+const { initialRelationshipState } = await import("../src/relationship/relationship.ts");
+const { createInitialWorldState } = await import("../src/world/world.ts");
 
 let count = 0;
 async function test(name, fn) {
@@ -93,7 +93,7 @@ async function renderTurn({
 } = {}) {
   const initialNlu = analyzeLocalNLU(text);
   const frame = buildDialogueFrame(history, initialNlu);
-  const nlu = resolveContextualNLU(initialNlu, frame);
+  const nlu = resolveContextualNLU(initialNlu, frame, text);
   const perception = applyLocalNLUToPerception(
     localPerception(text, history.slice(-6).map(({ role, text: lineText }) => ({ role, text: lineText }))),
     nlu,
@@ -165,6 +165,98 @@ await test("required NLU examples and confidence contract", () => {
     assert.equal(result.intent, intent, text);
     assert.ok(result.confidence >= 0 && result.confidence <= 1, text);
     assert.ok(result.intensity >= 0 && result.intensity <= 1, text);
+  }
+});
+
+await test("colloquial Russian, abbreviations and light typos stay understandable", () => {
+  const cases = [
+    ["Ты как?", "ask_character_state"],
+    ["Ну как настроение?", "ask_character_state"],
+    ["че делаешь", "ask_character_activity"],
+    ["чем занята", "ask_character_activity"],
+    ["не спишь?", "ask_character_activity"],
+    ["привееет", "greeting"],
+    ["спс", "thanks"],
+    ["пон", "acknowledgement"],
+    ["ясно", "acknowledgement"],
+    ["нееет", "short_no"],
+    ["дааа", "short_yes"],
+    ["хз", "uncertain"],
+    ["мб", "uncertain"],
+    ["я заебался", "user_tired"],
+    ["сил нет", "user_tired"],
+    ["меня бомбит", "user_angry"],
+    ["мне хреново", "user_sad"],
+    ["не выспался", "user_sleepy"],
+    ["что думаешь обо мне?", "ask_character_opinion"],
+    ["настроние как?", "ask_character_state"],
+    ["чем занимаешся?", "ask_character_activity"],
+    ["как тебя завут?", "ask_character_name"],
+  ];
+  for (const [text, expected] of cases) {
+    const result = analyzeLocalNLU(text);
+    assert.equal(result.intent, expected, text);
+    assert.ok(result.confidence >= 0.6, `${text}: confidence ${result.confidence}`);
+  }
+});
+
+await test("messy everyday Russian and one-two character typos are understood", () => {
+  const cases = [
+    ["как тебя завут", "ask_character_name"],
+    ["чем занимаешся", "ask_character_activity"],
+    ["чо делаеш", "ask_character_activity"],
+    ["настроние как", "ask_character_state"],
+    ["у тя как дела", "ask_character_state"],
+    ["мне грусно", "user_sad"],
+    ["я усталл", "user_tired"],
+    ["я чет устал", "user_tired"],
+    ["че по настроению", "ask_character_state"],
+    ["побудь со мной", "ask_for_support"],
+    ["без понятия", "uncertain"],
+    ["ну понятно", "acknowledgement"],
+    ["ладн", "acknowledgement"],
+  ];
+  for (const [text, expected] of cases) {
+    const result = analyzeLocalNLU(text);
+    assert.equal(result.intent, expected, text);
+    assert.ok(result.confidence >= 0.55, `${text}: confidence ${result.confidence}`);
+  }
+});
+
+await test("screenshot regressions no longer turn clear short messages into clarification", async () => {
+  const stateQuestions = ["Ты как?", "Ну как настроение?", "настроние как?"];
+  for (const text of stateQuestions) {
+    const result = await renderTurn({ text, turnId: `screen_${text}` });
+    assert.equal(result.nlu.intent, "ask_character_state", text);
+    assert.notEqual(result.decision.action, "ask", text);
+    assert.doesNotMatch(result.rendered.text, /что именно|не совсем поняла|потеряла/iu, text);
+  }
+
+  const history = [
+    { role: "user", text: "Ну как настроение?", timestamp: NOW - 2000 },
+    { role: "character", text: "Нормально. Сейчас я спокойная.", timestamp: NOW - 1000 },
+  ];
+  const acknowledged = await renderTurn({ text: "Понял", turnId: "screen_ack", history });
+  assert.equal(acknowledged.nlu.intent, "acknowledgement");
+  assert.notEqual(acknowledged.decision.action, "ask");
+  assert.doesNotMatch(acknowledged.rendered.text, /про что именно|не совсем поняла|уточн/iu);
+
+  const name = await renderTurn({ text: "Как тебя завут?", turnId: "screen_name" });
+  assert.equal(name.nlu.intent, "ask_character_name");
+  assert.match(name.rendered.text, /Yuzuki/iu);
+  assert.doesNotMatch(name.rendered.text, /каждый раз|переспрашивать/iu);
+});
+
+await test("deictic short continuations retain the previous topic instead of becoming unknown", () => {
+  const history = [
+    { role: "user", text: "Завтра опять на работу.", timestamp: NOW - 2000 },
+    { role: "character", text: "Поняла. Завтра рабочий день.", timestamp: NOW - 1000 },
+  ];
+  for (const text of ["Там вообще жесть", "Это меня и бесит", "Туда не тянет"]) {
+    const initial = analyzeLocalNLU(text);
+    const resolved = resolveContextualNLU(initial, buildDialogueFrame(history, initial), text);
+    assert.notEqual(resolved.intent, "unknown", text);
+    assert.ok(resolved.confidence >= 0.68, text);
   }
 });
 
@@ -259,6 +351,24 @@ await test("specific self-state question is grounded in current emotion", async 
   assert.notEqual(calm.rendered.text, angry.rendered.text);
 });
 
+await test("context: reciprocal short questions inherit the previous meaning", () => {
+  const cases = [
+    ["Я устал", "А ты?", "ask_character_state"],
+    ["Мне нравится кино", "А тебе?", "ask_character_preference"],
+    ["Я на работе", "А ты?", "ask_character_activity"],
+  ];
+  for (const [previous, current, expected] of cases) {
+    const history = [
+      { id: "u1", role: "user", text: previous, timestamp: NOW - 2000 },
+      { id: "c1", role: "character", text: "Поняла.", timestamp: NOW - 1000 },
+    ];
+    const initial = analyzeLocalNLU(current);
+    const resolved = resolveContextualNLU(initial, buildDialogueFrame(history, initial), current);
+    assert.equal(resolved.intent, expected, `${previous} -> ${current}`);
+    assert.ok(resolved.confidence >= 0.8);
+  }
+});
+
 await test("context: follow-up about film preference stays on the previous topic", async () => {
   const history = [
     { role: "user", text: "Ты любишь фильмы?", timestamp: NOW - 2000 },
@@ -285,11 +395,105 @@ await test("context: 'не хочу туда' retains prior work topic with reso
     { role: "character", text: "Поняла. Завтра рабочий день.", timestamp: NOW - 1000 },
   ];
   const initial = analyzeLocalNLU("Не хочу туда");
-  const resolved = resolveContextualNLU(initial, buildDialogueFrame(history, initial));
+  const resolved = resolveContextualNLU(initial, buildDialogueFrame(history, initial), "Не хочу туда");
   assert.equal(resolved.intent, "user_dont_want");
   assert.ok(resolved.confidence >= 0.7);
   const result = await renderTurn({ text: "Не хочу туда", turnId: "ctx_work", history });
   assert.match(result.rendered.text, /туда|возвращаться|день|выматывает/iu);
+});
+
+await test("semantic comprehension keeps intent across natural multi-clause Russian", () => {
+  const listen = analyzeLocalNLU("Не хочу советов, просто послушай");
+  assert.equal(listen.intent, "ask_for_support");
+  assert.equal(listen.semantic.wantsListening, true);
+
+  const dilemma = analyzeLocalNLU("Я с другом поругался, теперь думаю писать ему или нет");
+  assert.equal(dilemma.intent, "ask_for_opinion");
+  assert.equal(dilemma.semantic.wantsAdvice, true);
+
+  const correction = analyzeLocalNLU("Нет, я не про работу, а про вчерашний разговор");
+  assert.equal(correction.intent, "reference_previous_topic");
+  assert.match(correction.semantic.correctionTo ?? "", /вчерашн.*разговор/iu);
+
+  const reason = analyzeLocalNLU("Я хочу ей написать потому что не люблю когда всё остаётся подвешенным");
+  assert.equal(reason.intent, "user_want");
+  assert.match(reason.semantic.focus ?? "", /ей написать/iu);
+  assert.match(reason.semantic.reason ?? "", /не люблю.*подвеш/iu);
+
+  const mood = analyzeLocalNLU("Вроде всё нормально, но настроение почему-то паршивое");
+  assert.equal(mood.intent, "user_sad");
+});
+
+await test("semantic replies use the actual situation instead of a generic fallback", async () => {
+  const conflict = await renderTurn({
+    text: "Я с другом поругался, теперь думаю писать ему или нет",
+    turnId: "semantic_conflict_contact",
+  });
+  assert.equal(conflict.rendered.templateId, "semantic.authoritative");
+  assert.match(conflict.rendered.text, /напис|сообщен|разговор/iu);
+
+  const motive = await renderTurn({
+    text: "Я не понимаю почему он так сделал",
+    turnId: "semantic_unknown_motive",
+  });
+  assert.equal(motive.rendered.templateId, "semantic.authoritative");
+  assert.match(motive.rendered.text, /не могу знать|знает только он|не придумыва/iu);
+
+  const belief = await renderTurn({
+    text: "Я думаю он специально меня игнорит",
+    turnId: "semantic_belief",
+  });
+  assert.equal(belief.rendered.templateId, "semantic.authoritative");
+  assert.match(belief.rendered.text, /предполага|не.*факт|мотив|намерен/iu);
+});
+
+await test("short follow-ups reuse the previous user situation", async () => {
+  const workHistory = [
+    { role: "user", text: "Я пропустил дедлайн и теперь начальник злится", timestamp: NOW - 2000 },
+    { role: "character", text: "Неприятная ситуация.", timestamp: NOW - 1000 },
+  ];
+  const whatNow = await renderTurn({ text: "Ну и что теперь делать?", turnId: "semantic_what_now", history: workHistory });
+  assert.equal(whatNow.nlu.intent, "ask_for_opinion");
+  assert.match(whatNow.rendered.text, /дедлайн|начальник|срок|план/iu);
+
+  const ideaHistory = [
+    { role: "user", text: "Хочу сделать маленькое приложение без рекламы", timestamp: NOW - 2000 },
+    { role: "character", text: "Расскажи подробнее.", timestamp: NOW - 1000 },
+  ];
+  const idea = await renderTurn({ text: "Как тебе вообще моя идея?", turnId: "semantic_my_idea", history: ideaHistory });
+  assert.match(idea.rendered.text, /приложен|идея|практик|работать/iu);
+  assert.doesNotMatch(idea.rendered.text, /ж[её]стко закрепл[её]нной позиции/iu);
+
+  const genericHistory = [
+    { role: "user", text: "Я думаю переехать в другой город, но страшновато", timestamp: NOW - 2000 },
+    { role: "character", text: "Понимаю, тут есть и интерес, и страх.", timestamp: NOW - 1000 },
+  ];
+  const generic = await renderTurn({ text: "Что думаешь?", turnId: "semantic_generic_opinion", history: genericHistory });
+  assert.match(generic.rendered.text, /переех|город|последств|решен/iu);
+});
+
+await test("character keeps an independent conversational stance", async () => {
+  const disagreement = await renderTurn({
+    text: "Мне нравится когда ты со мной не согласна",
+    turnId: "semantic_independence_like",
+    relationshipState: relationship("close"),
+  });
+  assert.match(disagreement.rendered.text, /не.*соглас|позици|спор|поддакив|на всё говорит|на все говорит|думаю иначе/iu);
+
+  const why = await renderTurn({
+    text: "Почему ты со мной споришь?",
+    turnId: "semantic_independence_why",
+    history: [{ role: "character", text: "Я тут с тобой не соглашусь.", timestamp: NOW - 1000 }],
+  });
+  assert.match(why.rendered.text, /не.*соглаш|позици|зеркал|честн/iu);
+
+  const interest = await renderTurn({
+    text: "Тебе правда интересно что я рассказываю?",
+    turnId: "semantic_interest",
+    relationshipState: relationship("close"),
+  });
+  assert.equal(interest.nlu.intent, "ask_relationship");
+  assert.match(interest.rendered.text, /интерес|важ|не безразлич/iu);
 });
 
 await test("anti-repetition varies twenty identical tiredness turns", async () => {

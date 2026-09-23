@@ -106,23 +106,23 @@ const { extractSemanticCandidates } = await import(
 const { consolidateEvents, recoverMemory } = await import(
   "../src/memory/memory-consolidation.ts"
 );
-const { rankFacts, rankMemories } = await import("../src/memory/memory-retrieval.ts");
-const { retrieveMemoryContext } = await import("../src/memory/memory-context.ts");
-const { refreshInitiatives } = await import("../src/initiative/initiative-engine.ts");
+const { rankFacts, rankMemories } = await import("../src/memory/retrieval.ts");
+const { retrieveMemoryContext } = await import("../src/memory/retrieval.ts");
+const { refreshInitiatives } = await import("../src/initiative/initiative.ts");
 const { createInitialWorldState, simulateWorld, markUserInteraction } = await import(
-  "../src/world/world-engine.ts"
+  "../src/world/world.ts"
 );
 const {
   resolveRoutine,
   resolveTimeOfDay,
   StableWorldClock,
   calendarDateKey,
-} = await import("../src/world/time-engine.ts");
+} = await import("../src/world/world.ts");
 const { initialEmotionalState, deriveMood, decayEmotions } = await import(
-  "../src/emotions/emotion-engine.ts"
+  "../src/emotions/emotions.ts"
 );
 const { initialRelationshipState, applyRelationshipDelta } = await import(
-  "../src/relationship/relationship-engine.ts"
+  "../src/relationship/relationship.ts"
 );
 const { inferStateEffects } = await import("../src/cognition/state-effects.ts");
 const { sanitizeForFirestore } = await import(
@@ -146,15 +146,15 @@ const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRunt
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
-const { defaultCharacter } = await import("../src/character/default-character.ts");
+const { defaultCharacter } = await import("../src/character/character.ts");
 const {
   createInitialIntimacyState,
   createInitialIntimacyPreferences,
   evaluateIntimacyHardGate,
   isNeutralIntimacySceneId,
-} = await import("../src/intimacy/intimacy-state.ts");
+} = await import("../src/intimacy/intimacy.ts");
 const { defaultIntimacyCoreProfile } = await import(
-  "../src/intimacy/intimacy-core.ts"
+  "../src/intimacy/intimacy.ts"
 );
 const {
   localPerception,
@@ -163,18 +163,18 @@ const {
   decide,
   planResponse,
 } = await import("../src/cognition/local-cognition.ts");
-const { guardCharacterReply } = await import("../src/dialogue/response-guard.ts");
+const { guardCharacterReply } = await import("../src/dialogue/dialogue.ts");
 const { deriveAvatarCue, resolveAvatarVisualState } = await import(
-  "../src/avatar/visual-state.ts"
+  "../src/avatar/avatar-model.ts"
 );
 const { mergeChatMessages, replyForFailedMessage, replyTargets } = await import(
-  "../src/app/message-sync.ts"
+  "../src/app/app-utils.ts"
 );
 const { maintenanceRetryDelay, nextInitiativeCheckAt } = await import(
-  "../src/app/maintenance-policy.ts"
+  "../src/app/app-utils.ts"
 );
 const { initialRomance, planRomance, decodeRomance, currentRomance, canInitiateRomance } = await import(
-  "../src/relationship/romance.ts"
+  "../src/relationship/relationship.ts"
 );
 let count = 0;
 async function test(name, fn) {
@@ -1905,8 +1905,8 @@ await test("Firestore snapshot codec preserves romance in the committed turn", a
   assert.equal(await r.getEvent("romance_conflict_reply"), null);
 });
 
-const { selectAppearance, transitionKind, decodeAppearance } = await import("../src/avatar/appearance.ts");
-const { characterAssets, validateAssetCatalog } = await import("../src/avatar/asset-catalog.ts");
+const { selectAppearance, transitionKind, decodeAppearance } = await import("../src/avatar/avatar-model.ts");
+const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
 const visualAssets = [baseAsset,
   { ...baseAsset, id: "smile", src: "assets/character/smile.webp", expression: "playful", motion: "still", contexts: ["playful", "romantic"] },
@@ -1978,7 +1978,7 @@ await test("interrupted fact replacement retains latest evidence and finishes on
   assert.equal(active.length, 1); assert.equal(active[0].evidenceCount, 1);
 });
 await test("age weakens a memory without hiding it from relevance retrieval", async () => {
-  const { decayMemory } = await import("../src/memory/memory-decay.ts");
+  const { decayMemory } = await import("../src/memory/model.ts");
   const r = new InMemoryCompanionRepository();
   await consolidateEvents([ev("old-low", "На полке стоит телескоп.", now - 200 * 86400000)], r);
   const original = await r.getMemory("memory_old-low");
@@ -2173,7 +2173,7 @@ await test("chat draft lives in the app store instead of ChatScreen local state"
   useAppStore.setState({ phase: "другая вкладка" });
   assert.equal(useAppStore.getState().chatDraft, "незаконченный текст");
   const chatSource = readFileSync(
-    new URL("../src/ui/screens/ChatScreen.tsx", import.meta.url),
+    new URL("../src/ui/ChatScreen.tsx", import.meta.url),
     "utf8",
   );
   assert.match(chatSource, /draft: string/);
@@ -2184,7 +2184,7 @@ await test("chat draft lives in the app store instead of ChatScreen local state"
 
 await test("chat only auto-scrolls while the reader is near the bottom", () => {
   const source = readFileSync(
-    new URL("../src/ui/screens/ChatScreen.tsx", import.meta.url),
+    new URL("../src/ui/ChatScreen.tsx", import.meta.url),
     "utf8",
   );
   assert.match(source, /nearBottomRef/);
