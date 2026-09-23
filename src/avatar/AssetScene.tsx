@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import defaultStageBackgroundSrc from "../assets/character/backgrounds/main-bedroom.png";
 import { LivePhoto } from "./LivePhoto";
-import { findCharacterAsset, renderFallbackAssetId, type CharacterAsset } from "./avatar-model";
+import { findCharacterAsset, type CharacterAsset } from "./avatar-model";
 import { transitionKind } from "./avatar-model";
 import type { AvatarVisualState } from "./avatar-model";
 
 const url = (asset: CharacterAsset) =>
-  /^(?:https?:|file:|data:|blob:|\/|\.\/)/u.test(asset.src)
+  /^(?:https?:|data:|blob:|\/|\.\/)/u.test(asset.src)
     ? asset.src
     : `${import.meta.env.BASE_URL}${asset.src}`;
 function preload(asset: CharacterAsset, signal: AbortSignal): Promise<void> {
@@ -30,10 +31,17 @@ function ImageLayer({ asset, visualState, animate }: { asset: CharacterAsset; vi
   const position = asset.scenePosition ?? asset.focalPoint;
   const fit = asset.sceneFit ?? "contain";
   const scale = asset.sceneScale ?? 1;
-  if (animate && asset.motion === "reference_live_photo")
-    return <LivePhoto src={url(asset)} visualState={visualState} />;
-  return <img className="character-asset-image" src={url(asset)} alt={asset.description}
-    style={{ objectFit: fit, objectPosition: `${position[0]}% ${position[1]}%`, transform: `translateZ(0) scale(${scale})` }} />;
+  const sharedStyle = {
+    objectFit: fit,
+    objectPosition: `${position[0]}% ${position[1]}%`,
+    transform: `translateZ(0) scale(${scale})`,
+  } as const;
+  return <>
+    <img className="character-asset-backdrop" src={url(asset)} alt="" aria-hidden="true" style={sharedStyle} />
+    {animate && asset.motion === "reference_live_photo"
+      ? <LivePhoto src={url(asset)} visualState={visualState} />
+      : <img className="character-asset-image" src={url(asset)} alt={asset.description} style={sharedStyle} />}
+  </>;
 }
 export function AssetScene({ assetId, visualState }: { assetId?: string; visualState: AvatarVisualState }) {
   const requested = findCharacterAsset(assetId);
@@ -74,23 +82,15 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
         if (ticket === generation.current) setScene(s => ({ ...s, previous: null }));
       }, 750);
     }).catch(() => {
-      if (controller.signal.aborted || ticket !== generation.current) return;
-      const fallback = findCharacterAsset(renderFallbackAssetId);
-      if (requested.id !== fallback.id) {
-        displayed.current = fallback;
-        verified.current = fallback.id;
-        setFailed(false);
-        setRenderRevision((value) => value + 1);
-        setScene({ current: fallback, previous: null, kind: "dissolve" });
-        return;
+      if (!controller.signal.aborted && ticket === generation.current) {
+        setFailed(true); setScene(s => ({ ...s, previous: null }));
       }
-      setFailed(true);
-      setScene(s => ({ ...s, previous: null }));
     });
     return () => { controller.abort(); clearTimeout(timer); };
   }, [requested.id, retry]);
   return <>
     <div className={`asset-scene ${scene.previous ? `asset-transition ${scene.kind}` : ""}`} data-asset-id={scene.current.id}>
+      <img className="asset-scene-background" src={defaultStageBackgroundSrc} alt="" aria-hidden="true" />
       <div key={`current-${scene.current.id}-${renderRevision}`} className="asset-layer asset-current">
         <ImageLayer asset={scene.current} visualState={visualState} animate={!scene.previous} />
       </div>
