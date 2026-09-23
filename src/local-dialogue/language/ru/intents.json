@@ -1,0 +1,1519 @@
+{
+  "schemaVersion": 1,
+  "intents": [
+    {
+      "id": "good_morning",
+      "priority": 98,
+      "patterns": {
+        "phrases": [
+          "доброе утро",
+          "с добрым утром",
+          "утречка доброго"
+        ],
+        "tokens": [
+          "утро"
+        ],
+        "regex": [
+          "^доброе\\s+утро[!. ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "morning"
+      ],
+      "topic": "routine",
+      "sentiment": "positive"
+    },
+    {
+      "id": "good_night",
+      "priority": 98,
+      "patterns": {
+        "phrases": [
+          "спокойной ночи",
+          "доброй ночи",
+          "я спать",
+          "пойду спать",
+          "иду спать"
+        ],
+        "tokens": [
+          "спать",
+          "ночь"
+        ],
+        "regex": [
+          "^(?:я )?(?:пойду|иду)?\\s*спать[!. ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "night",
+        "sleep"
+      ],
+      "topic": "routine",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "greeting",
+      "priority": 92,
+      "patterns": {
+        "phrases": [
+          "привет",
+          "приветик",
+          "здравствуй",
+          "здорово",
+          "хай",
+          "hello",
+          "hi"
+        ],
+        "tokens": [
+          "привет",
+          "здравствуй",
+          "хай"
+        ],
+        "regex": [
+          "^(?:привет+|приветик|здравствуй|здорово|хай|hello|hi)[!., ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "greeting"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    {
+      "id": "farewell",
+      "priority": 92,
+      "patterns": {
+        "phrases": [
+          "пока",
+          "до встречи",
+          "до завтра",
+          "увидимся",
+          "мне пора"
+        ],
+        "tokens": [
+          "пока",
+          "увидимся"
+        ],
+        "regex": [
+          "^(?:пока|до встречи|увидимся)[!., ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "farewell"
+      ],
+      "topic": "social",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "thanks",
+      "priority": 92,
+      "patterns": {
+        "phrases": [
+          "спасибо",
+          "спасибо тебе",
+          "благодарю",
+          "thanks"
+        ],
+        "tokens": [
+          "спасибо",
+          "благодарю"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "gratitude"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    {
+      "id": "apology",
+      "priority": 94,
+      "patterns": {
+        "phrases": [
+          "извини",
+          "прости",
+          "сорри",
+          "я виноват",
+          "я виновата"
+        ],
+        "tokens": [
+          "извини",
+          "прости",
+          "сорри"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "apology"
+      ],
+      "topic": "relationship",
+      "sentiment": "negative"
+    },
+    {
+      "id": "change_topic",
+      "priority": 99,
+      "patterns": {
+        "phrases": [
+          "давай сменим тему",
+          "сменим тему",
+          "давай о другом",
+          "не хочу об этом говорить"
+        ],
+        "tokens": [
+          "сменим"
+        ],
+        "regex": [
+          "давай\\s+(?:лучше\\s+)?о\\s+другом"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "boundary",
+        "topic_change"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "boundary_request",
+      "priority": 100,
+      "patterns": {
+        "phrases": [
+          "отстань",
+          "оставь меня",
+          "не пиши мне",
+          "не спрашивай",
+          "не дави",
+          "хватит спрашивать",
+          "без флирта",
+          "не флиртуй"
+        ],
+        "tokens": [
+          "отстань",
+          "хватит"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "boundary"
+      ],
+      "topic": "relationship",
+      "sentiment": "negative"
+    },
+    {
+      "id": "insult_character",
+      "priority": 100,
+      "patterns": {
+        "phrases": [
+          "ты тупая",
+          "ты дура",
+          "ты идиотка",
+          "ненавижу тебя",
+          "ты бесишь",
+          "заткнись"
+        ],
+        "tokens": [
+          "дура",
+          "тупая",
+          "идиотка"
+        ],
+        "regex": [
+          "ты\\s+(?:полная\\s+)?(?:дура|тупая|идиотка)"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "insult",
+        "angry"
+      ],
+      "topic": "relationship",
+      "sentiment": "very_negative"
+    },
+    {
+      "id": "compliment_character",
+      "priority": 91,
+      "patterns": {
+        "phrases": [
+          "ты красивая",
+          "ты милая",
+          "ты классная",
+          "ты умная",
+          "ты прекрасная",
+          "мне нравится как ты выглядишь"
+        ],
+        "tokens": [
+          "красивая",
+          "милая",
+          "классная",
+          "прекрасная"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "ты не красивая",
+        "ты не милая"
+      ],
+      "concepts": [
+        "compliment",
+        "affection"
+      ],
+      "topic": "relationship",
+      "sentiment": "very_positive"
+    },
+    {
+      "id": "affection_declaration",
+      "priority": 96,
+      "patterns": {
+        "phrases": [
+          "я тебя люблю",
+          "люблю тебя",
+          "ты мне нравишься",
+          "мне с тобой хорошо"
+        ],
+        "tokens": [
+          "люблю",
+          "нравишься"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "я тебя не люблю",
+        "ты мне не нравишься"
+      ],
+      "concepts": [
+        "affection"
+      ],
+      "topic": "relationship",
+      "sentiment": "very_positive"
+    },
+    {
+      "id": "flirt_character",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "давай пофлиртуем",
+          "хочу пофлиртовать",
+          "заигрываю с тобой",
+          "ты сегодня особенно красивая"
+        ],
+        "tokens": [
+          "флирт",
+          "пофлиртуем"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "не флиртуй",
+        "не хочу флиртовать"
+      ],
+      "concepts": [
+        "flirt",
+        "affection"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    {
+      "id": "tease_character",
+      "priority": 77,
+      "patterns": {
+        "phrases": [
+          "я тебя дразню",
+          "шучу над тобой",
+          "подкалываю тебя"
+        ],
+        "tokens": [
+          "дразню",
+          "подкалываю"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "tease",
+        "playful"
+      ],
+      "topic": "relationship",
+      "sentiment": "positive"
+    },
+    {
+      "id": "ask_character_name",
+      "priority": 99,
+      "patterns": {
+        "phrases": [
+          "как тебя зовут",
+          "твое имя",
+          "как твое имя",
+          "как тебя зовут-то"
+        ],
+        "tokens": [
+          "имя"
+        ],
+        "regex": [
+          "как\\s+тебя\\s+зовут"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "identity",
+        "name"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_age",
+      "priority": 99,
+      "patterns": {
+        "phrases": [
+          "сколько тебе лет",
+          "какой у тебя возраст",
+          "тебе сколько лет"
+        ],
+        "tokens": [
+          "возраст"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "identity",
+        "age"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_identity",
+      "priority": 89,
+      "patterns": {
+        "phrases": [
+          "кто ты",
+          "расскажи о себе",
+          "какая ты",
+          "что ты за человек"
+        ],
+        "tokens": [
+          "себе"
+        ],
+        "regex": [
+          "^кто\\s+ты[?.! ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "identity"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_state",
+      "priority": 94,
+      "patterns": {
+        "phrases": [
+          "как ты",
+          "как дела",
+          "как себя чувствуешь",
+          "ты злишься",
+          "ты грустишь",
+          "ты устала",
+          "что с тобой"
+        ],
+        "tokens": [
+          "злишься",
+          "грустишь"
+        ],
+        "regex": [
+          "как\\s+(?:у тебя )?дела"
+        ]
+      },
+      "negativePatterns": [
+        "как ты думаешь",
+        "как ты считаешь"
+      ],
+      "concepts": [
+        "character_state"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_activity",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "что делаешь",
+          "чем занимаешься",
+          "ты где",
+          "где ты сейчас"
+        ],
+        "tokens": [
+          "делаешь",
+          "занимаешься"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "character_state",
+        "activity"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_relationship",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "ты меня любишь",
+          "я тебе нравлюсь",
+          "что ты чувствуешь ко мне",
+          "кто я для тебя",
+          "что ты думаешь обо мне"
+        ],
+        "tokens": [],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "relationship",
+        "affection"
+      ],
+      "topic": "relationship",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_preference",
+      "priority": 94,
+      "patterns": {
+        "phrases": [
+          "что ты любишь",
+          "что тебе нравится",
+          "какие фильмы ты любишь",
+          "что бы ты выбрала",
+          "куда бы ты пошла",
+          "какой подарок тебе нравится",
+          "ты любишь"
+        ],
+        "tokens": [
+          "предпочитаешь"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "preference"
+      ],
+      "topic": "character",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_character_opinion",
+      "priority": 91,
+      "patterns": {
+        "phrases": [
+          "что ты думаешь",
+          "как ты считаешь",
+          "твое мнение",
+          "а ты как думаешь"
+        ],
+        "tokens": [
+          "думаешь",
+          "считаешь",
+          "мнение"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "opinion"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_for_opinion",
+      "priority": 88,
+      "patterns": {
+        "phrases": [
+          "как думаешь",
+          "что скажешь",
+          "как тебе",
+          "что скажешь об этом"
+        ],
+        "tokens": [
+          "думаешь",
+          "скажешь"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "opinion"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_for_support",
+      "priority": 95,
+      "patterns": {
+        "phrases": [
+          "поддержи меня",
+          "мне нужна поддержка",
+          "побудь со мной",
+          "мне сейчас плохо помоги"
+        ],
+        "tokens": [
+          "поддержи",
+          "поддержка"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "support"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_tired",
+      "priority": 98,
+      "patterns": {
+        "phrases": [
+          "я устал",
+          "я устала",
+          "нет сил",
+          "я вымотался",
+          "я вымоталась",
+          "совсем без сил",
+          "еле живой",
+          "еле живая"
+        ],
+        "tokens": [
+          "устал",
+          "устала",
+          "вымотался",
+          "вымоталась",
+          "усталость"
+        ],
+        "regex": [
+          "\\bнет\\s+сил\\b"
+        ]
+      },
+      "negativePatterns": [
+        "я не устал",
+        "я не устала",
+        "не устал",
+        "не устала"
+      ],
+      "concepts": [
+        "tired"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_sad",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "мне грустно",
+          "я грущу",
+          "мне тоскливо",
+          "настроение в ноль",
+          "хочется плакать"
+        ],
+        "tokens": [
+          "грустно",
+          "грущу",
+          "тоскливо",
+          "плакать"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "мне не грустно",
+        "я не грущу"
+      ],
+      "concepts": [
+        "sad"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_angry",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "я злюсь",
+          "я в бешенстве",
+          "меня бесит",
+          "я раздражен",
+          "я раздражена"
+        ],
+        "tokens": [
+          "злюсь",
+          "бесит",
+          "раздражен",
+          "раздражена"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "я не злюсь",
+        "меня не бесит"
+      ],
+      "concepts": [
+        "angry"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "very_negative"
+    },
+    {
+      "id": "user_bored",
+      "priority": 93,
+      "patterns": {
+        "phrases": [
+          "мне скучно",
+          "скучно",
+          "нечего делать"
+        ],
+        "tokens": [
+          "скучно"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "мне не скучно"
+      ],
+      "concepts": [
+        "bored"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_excited",
+      "priority": 94,
+      "patterns": {
+        "phrases": [
+          "я в восторге",
+          "не могу дождаться",
+          "я так рад",
+          "я так рада",
+          "меня прет"
+        ],
+        "tokens": [
+          "восторге"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "я не рад",
+        "я не рада"
+      ],
+      "concepts": [
+        "excited"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "very_positive"
+    },
+    {
+      "id": "user_happy",
+      "priority": 93,
+      "patterns": {
+        "phrases": [
+          "я счастлив",
+          "я счастлива",
+          "мне хорошо",
+          "я рад",
+          "я рада",
+          "отличное настроение"
+        ],
+        "tokens": [
+          "счастлив",
+          "счастлива",
+          "рад",
+          "рада"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "я не рад",
+        "я не рада",
+        "мне не хорошо"
+      ],
+      "concepts": [
+        "happy"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "positive"
+    },
+    {
+      "id": "user_lonely",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "мне одиноко",
+          "я один",
+          "я одна",
+          "никого рядом нет"
+        ],
+        "tokens": [
+          "одиноко"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "мне не одиноко"
+      ],
+      "concepts": [
+        "lonely"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_stressed",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "я в стрессе",
+          "нервы на пределе",
+          "я переживаю",
+          "мне тревожно",
+          "я нервничаю"
+        ],
+        "tokens": [
+          "стресс",
+          "переживаю",
+          "тревожно",
+          "нервничаю"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "я не переживаю",
+        "мне не тревожно"
+      ],
+      "concepts": [
+        "stressed",
+        "anxious"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_sleepy",
+      "priority": 92,
+      "patterns": {
+        "phrases": [
+          "хочу спать",
+          "меня рубит",
+          "засыпаю",
+          "не выспался",
+          "не выспалась"
+        ],
+        "tokens": [
+          "засыпаю",
+          "выспался",
+          "выспалась"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "не хочу спать"
+      ],
+      "concepts": [
+        "sleep",
+        "tired"
+      ],
+      "topic": "wellbeing",
+      "sentiment": "negative"
+    },
+    {
+      "id": "share_good_event",
+      "priority": 87,
+      "patterns": {
+        "phrases": [
+          "сегодня было круто",
+          "у меня получилось",
+          "я сделал это",
+          "я сделала это",
+          "меня повысили",
+          "я выиграл",
+          "я выиграла"
+        ],
+        "tokens": [
+          "получилось",
+          "повысили",
+          "выиграл",
+          "выиграла"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "good_event"
+      ],
+      "topic": "events",
+      "sentiment": "positive"
+    },
+    {
+      "id": "share_bad_event",
+      "priority": 88,
+      "patterns": {
+        "phrases": [
+          "сегодня был ужасный день",
+          "все пошло не так",
+          "случилась жесть",
+          "день был ужасный",
+          "все сломалось"
+        ],
+        "tokens": [
+          "ужасный",
+          "жесть",
+          "сломалось"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "bad_event"
+      ],
+      "topic": "events",
+      "sentiment": "negative"
+    },
+    {
+      "id": "share_work",
+      "priority": 78,
+      "patterns": {
+        "phrases": [
+          "я на работе",
+          "сегодня работал",
+          "сегодня работала",
+          "на работе",
+          "после смены",
+          "завтра на работу"
+        ],
+        "tokens": [
+          "работа",
+          "работал",
+          "работала",
+          "смена",
+          "офис"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "work"
+      ],
+      "topic": "work",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "share_plan",
+      "priority": 80,
+      "patterns": {
+        "phrases": [
+          "я собираюсь",
+          "завтра хочу",
+          "планирую",
+          "думаю сделать",
+          "на выходных хочу"
+        ],
+        "tokens": [
+          "планирую",
+          "собираюсь"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "не планирую"
+      ],
+      "concepts": [
+        "plan"
+      ],
+      "topic": "plans",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "share_conflict",
+      "priority": 91,
+      "topic": "relationship",
+      "patterns": {
+        "phrases": [
+          "поссорился с",
+          "поссорилась с",
+          "поругался с",
+          "поругалась с",
+          "мы поссорились",
+          "мы поругались"
+        ],
+        "tokens": [
+          "поссорился",
+          "поссорилась",
+          "поругался",
+          "поругалась"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "conflict"
+      ],
+      "sentiment": "negative"
+    },
+    {
+      "id": "share_problem",
+      "priority": 89,
+      "patterns": {
+        "phrases": [
+          "у меня проблема",
+          "не знаю что делать",
+          "все сложно",
+          "у меня неприятность",
+          "я попал",
+          "я попала"
+        ],
+        "tokens": [
+          "проблема",
+          "сложно",
+          "неприятность"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "problem"
+      ],
+      "topic": "problems",
+      "sentiment": "negative"
+    },
+    {
+      "id": "invitation",
+      "priority": 88,
+      "patterns": {
+        "phrases": [
+          "пойдем вместе",
+          "давай посмотрим",
+          "давай погуляем",
+          "побудем вместе",
+          "хочешь со мной"
+        ],
+        "tokens": [
+          "пойдем",
+          "погуляем",
+          "вместе"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "invitation"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    {
+      "id": "return_after_absence",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "я вернулся",
+          "я вернулась",
+          "я снова здесь",
+          "я опять тут",
+          "вернулся"
+        ],
+        "tokens": [
+          "вернулся",
+          "вернулась"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "return"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    {
+      "id": "memory_question",
+      "priority": 98,
+      "patterns": {
+        "phrases": [
+          "ты помнишь",
+          "помнишь что я",
+          "что я тебе говорил",
+          "что я тебе говорила",
+          "помнишь где я работаю",
+          "помнишь как меня зовут"
+        ],
+        "tokens": [
+          "помнишь"
+        ],
+        "regex": [
+          "что\\s+я\\s+тебе(?:\\s+\\p{L}+){0,3}\\s+говорил",
+          "что\\s+я\\s+тебе(?:\\s+\\p{L}+){0,3}\\s+говорила",
+          "что\\s+я\\s+тебе\\s+говорил"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "memory"
+      ],
+      "topic": "memory",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_user_memory",
+      "priority": 97,
+      "patterns": {
+        "phrases": [
+          "где я работаю",
+          "как меня зовут",
+          "сколько мне лет",
+          "где я живу",
+          "что я люблю"
+        ],
+        "tokens": [
+          "работаю",
+          "живу"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "memory"
+      ],
+      "topic": "memory",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_why",
+      "priority": 95,
+      "patterns": {
+        "phrases": [
+          "а почему",
+          "почему",
+          "и почему",
+          "почему так"
+        ],
+        "tokens": [
+          "почему"
+        ],
+        "regex": [
+          "^(?:а\\s+)?почему[?.! ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "followup"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "ask_followup",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "и что дальше",
+          "а дальше",
+          "а какие",
+          "а что потом",
+          "и что",
+          "а как",
+          "а ты"
+        ],
+        "tokens": [
+          "дальше"
+        ],
+        "regex": [
+          "^(?:и|а)\\s+(?:что|как|какие|куда|когда)"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "followup"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "reference_previous_topic",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "про это",
+          "об этом",
+          "с этим",
+          "из-за этого",
+          "поэтому?"
+        ],
+        "tokens": [],
+        "regex": [
+          "^(?:а\\s+)?(?:про|об)\\s+(?:это|этом)[?.! ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "followup"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "short_yes",
+      "priority": 96,
+      "patterns": {
+        "phrases": [
+          "да",
+          "ага",
+          "угу",
+          "конечно",
+          "точно"
+        ],
+        "tokens": [
+          "да",
+          "ага",
+          "угу"
+        ],
+        "regex": [
+          "^(?:да|ага|угу|конечно|точно)[!. ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "affirmation"
+      ],
+      "topic": "conversation",
+      "sentiment": "positive"
+    },
+    {
+      "id": "short_no",
+      "priority": 96,
+      "patterns": {
+        "phrases": [
+          "нет",
+          "неа"
+        ],
+        "tokens": [
+          "нет",
+          "неа"
+        ],
+        "regex": [
+          "^(?:нет|неа|не хочу|не сейчас)[!. ]*$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "negation"
+      ],
+      "topic": "conversation",
+      "sentiment": "negative"
+    },
+    {
+      "id": "agreement",
+      "priority": 82,
+      "patterns": {
+        "phrases": [
+          "согласен",
+          "согласна",
+          "я тоже так думаю",
+          "именно",
+          "точно так"
+        ],
+        "tokens": [
+          "согласен",
+          "согласна"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [
+        "не согласен",
+        "не согласна"
+      ],
+      "concepts": [
+        "agreement"
+      ],
+      "topic": "conversation",
+      "sentiment": "positive"
+    },
+    {
+      "id": "disagreement",
+      "priority": 90,
+      "patterns": {
+        "phrases": [
+          "не согласен",
+          "не согласна",
+          "я так не думаю",
+          "нет это не так",
+          "по-моему наоборот"
+        ],
+        "tokens": [
+          "несогласен",
+          "несогласна"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "disagreement"
+      ],
+      "topic": "conversation",
+      "sentiment": "negative"
+    },
+    {
+      "id": "joke",
+      "priority": 75,
+      "patterns": {
+        "phrases": [
+          "ахах",
+          "хаха",
+          "лол",
+          "шучу",
+          "это шутка"
+        ],
+        "tokens": [
+          "ахах",
+          "хаха",
+          "лол",
+          "шучу"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "playful"
+      ],
+      "topic": "social",
+      "sentiment": "positive"
+    },
+    {
+      "id": "uncertain",
+      "priority": 76,
+      "patterns": {
+        "phrases": [
+          "не знаю",
+          "не уверен",
+          "не уверена",
+          "может быть",
+          "хз"
+        ],
+        "tokens": [
+          "неуверен",
+          "неуверена"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "uncertainty"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "external_fact_question",
+      "priority": 66,
+      "patterns": {
+        "phrases": [
+          "что такое",
+          "кто такой",
+          "кто такая",
+          "какая столица",
+          "какой курс",
+          "какая погода",
+          "объясни мне",
+          "расскажи про"
+        ],
+        "tokens": [
+          "столица",
+          "погода",
+          "курс"
+        ],
+        "regex": [
+          "^(?:что|кто)\\s+(?:такое|такой|такая)"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "external_fact"
+      ],
+      "topic": "external",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "request_action",
+      "priority": 64,
+      "patterns": {
+        "phrases": [
+          "сделай",
+          "помоги сделать",
+          "напиши мне",
+          "посоветуй"
+        ],
+        "tokens": [
+          "сделай",
+          "помоги",
+          "напиши",
+          "посоветуй"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "request"
+      ],
+      "topic": "conversation",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "dislike_character",
+      "priority": 88,
+      "patterns": {
+        "phrases": [
+          "ты мне не нравишься",
+          "я тебя не люблю",
+          "не люблю тебя"
+        ],
+        "tokens": [
+          "ненравишься"
+        ],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "rejection"
+      ],
+      "topic": "relationship",
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_like",
+      "priority": 88,
+      "topic": "preferences",
+      "patterns": {
+        "phrases": [
+          "мне нравится",
+          "я люблю"
+        ],
+        "tokens": [],
+        "regex": [
+          "^(?:мне нравится|я люблю)\\s+.+"
+        ]
+      },
+      "negativePatterns": [
+        "мне не нравится",
+        "я не люблю"
+      ],
+      "concepts": [
+        "user_preference"
+      ],
+      "sentiment": "positive"
+    },
+    {
+      "id": "user_dislike",
+      "priority": 90,
+      "topic": "preferences",
+      "patterns": {
+        "phrases": [
+          "мне не нравится",
+          "я не люблю"
+        ],
+        "tokens": [],
+        "regex": [
+          "^(?:мне не нравится|я не люблю)\\s+.+"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "user_preference"
+      ],
+      "sentiment": "negative"
+    },
+    {
+      "id": "user_want",
+      "priority": 82,
+      "topic": "plans",
+      "patterns": {
+        "phrases": [
+          "я хочу",
+          "хочу сегодня",
+          "хочу завтра"
+        ],
+        "tokens": [],
+        "regex": [
+          "^я хочу\\s+.+"
+        ]
+      },
+      "negativePatterns": [
+        "я не хочу"
+      ],
+      "concepts": [
+        "desire"
+      ],
+      "sentiment": "neutral"
+    },
+    {
+      "id": "user_dont_want",
+      "priority": 90,
+      "topic": "plans",
+      "patterns": {
+        "phrases": [
+          "я не хочу",
+          "не хочу"
+        ],
+        "tokens": [],
+        "regex": [
+          "^(?:я\\s+)?не\\s+хочу(?:\\s+.+)?$"
+        ]
+      },
+      "negativePatterns": [],
+      "concepts": [
+        "desire",
+        "negation"
+      ],
+      "sentiment": "negative"
+    },
+    {
+      "id": "statement",
+      "priority": 20,
+      "patterns": {
+        "phrases": [],
+        "tokens": [],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [],
+      "sentiment": "neutral"
+    },
+    {
+      "id": "unknown",
+      "priority": 0,
+      "patterns": {
+        "phrases": [],
+        "tokens": [],
+        "regex": []
+      },
+      "negativePatterns": [],
+      "concepts": [],
+      "sentiment": "neutral"
+    }
+  ]
+}

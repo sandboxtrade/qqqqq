@@ -44,15 +44,13 @@ export function SettingsScreen({
           <strong>{appCheckLabels[appCheckState]}</strong>
         </div>
         <div className="setting-row">
-          <span>Gemini</span>
+          <span>Dialogue Engine</span>
           <strong>
             {trace
-              ? trace.usedGeminiReply
-                ? "ответил"
-                : trace.responseGuardFallback ? "резервный ответ" : "локальное решение"
-              : firebaseEnabled
-                ? "готов к проверке"
-                : "локальный режим"}
+              ? trace.responseGuardFallback
+                ? "local + guard fallback"
+                : "local"
+              : "local"}
           </strong>
         </div>
         <div className="setting-row">
