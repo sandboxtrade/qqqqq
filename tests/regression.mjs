@@ -1060,7 +1060,7 @@ await test("Firestore event id collision is rejected even outside commit", async
   );
   assert.equal((await r.getEvent("collision")).payload.text, "Оригинал");
 });
-await test("Firestore rejects a detected state/world revision mismatch", async () => {
+await test("Firestore repairs a detected state/world revision mismatch on load", async () => {
   const r = new FirestoreCompanionRepository("corrupt_v1", "A");
   const state = {
     emotion: initialEmotionalState,
@@ -1076,7 +1076,11 @@ await test("Firestore rejects a detected state/world revision mismatch", async (
     0,
   );
   db.get("users/A/characters/corrupt_v1/world/current").revision = 7;
-  await assert.rejects(r.loadRuntimeState(), /state-world-conflict/);
+  const repaired = await r.loadRuntimeState();
+  assert.equal(repaired.snapshot.revision, 7);
+  assert.equal(repaired.world.revision, undefined);
+  assert.equal(db.get("users/A/characters/corrupt_v1/state/current").revision, 7);
+  assert.equal(db.get("users/A/characters/corrupt_v1/world/current").revision, 7);
 });
 await test("runtime state/world revisions stay paired", async () => {
   const r = new InMemoryCompanionRepository();
@@ -1773,6 +1777,12 @@ await test("new sends are not globally blocked by unrelated failed messages", ()
   const source = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
   assert.match(source, /if \(!value \|\| get\(\)\.busy\) return;/);
   assert.doesNotMatch(source, /get\(\)\.failedMessageId(?!s)/);
+});
+await test("conversation reset stays available while a send is stuck", () => {
+  const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(storeSource, /state\.busy \|\| state\.resettingData/);
+  assert.match(appSource, /resetDisabled=\{!ready \|\| resettingData\}/);
 });
 await test("store allows a new send after a storage-failed turn and keeps failure per message", async () => {
   const previousRepository = repository;
