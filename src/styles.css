@@ -304,8 +304,11 @@ body { overscroll-behavior: none; }
 
 /* Asset transitions only start after successful decode. No per-image eye masks. */
 .asset-scene { position:absolute; inset:0; background:#171116; overflow:hidden; }
-.asset-layer { position:absolute; inset:0; display:block; z-index:1; }
-.character-asset-image { display:block; width:100%; height:100%; object-fit:cover; object-position:center center; transform-origin:center center; will-change:transform, opacity; pointer-events:none; user-select:none; }
+.asset-scene-background { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center center; filter:saturate(1.02) brightness(.94); }
+.asset-layer { position:absolute; inset:0; display:flex; align-items:flex-end; justify-content:center; padding:0 8px; }
+.character-asset-backdrop { position:absolute; inset:-8%; width:116%; height:116%; object-fit:cover; object-position:center center; filter: blur(18px) saturate(1.02) brightness(.92); opacity:.72; transform-origin:center center; pointer-events:none; user-select:none; }
+.character-asset-image { position:relative; z-index:1; display:block; width:100%; height:100%; object-fit:contain; object-position:center bottom; transform-origin: center bottom; will-change: transform, opacity; pointer-events:none; user-select:none; }
+.live-photo-surface { position:relative; z-index:1; width:100%; height:100%; }
 .asset-transition.dissolve .asset-current { animation:asset-in 700ms ease-in-out both; }
 .asset-transition.dissolve .asset-previous { animation:asset-out 700ms ease-in-out both; }
 .asset-transition.dip .asset-current { animation:asset-dip-in 700ms ease-in-out both; }
@@ -317,7 +320,6 @@ body { overscroll-behavior: none; }
 @keyframes asset-dip-out { 0% {opacity:1;} 45%,100% {opacity:0;} }
 @media (prefers-reduced-motion:reduce) { .asset-transition .asset-layer { animation:none !important; } .asset-previous { display:none; } }
 
-.live-photo-surface { position:relative; width:100%; height:100%; }
 .live-photo-surface > img, .live-photo-surface > canvas { position:absolute; inset:0; }
 
 .failed-message-actions {
