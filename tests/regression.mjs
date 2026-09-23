@@ -2325,6 +2325,12 @@ await test("internal arousal never falls back to the outward hornys image", () =
   assert.equal(resolveAvailableVisualEmotion("horny", emotionAssets, r), "neutral");
   assert.equal(resolveAvailableVisualEmotion("hornys", emotionAssets, r), "hornys");
 });
+
+await test("scene fallback resolves placeholder ids to the visible neutral asset when one exists", () => {
+  const placeholder = { ...baseAsset, id: "placeholder.neutral", src: "assets/character/placeholder-avatar.png", expression: "neutral", motion: "still" };
+  const neutral = { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } };
+  assert.equal(selectAppearance(visualRuntime(), { emotion: "sad", intensity: 4, confidence: .7, changeStrength: .7 }, now, { assets: [placeholder, neutral], fallbackId: neutral.id }).assetId, neutral.id);
+});
 await test("visual emotion hysteresis keeps a nearly unchanged image", () => {
   const r = visualRuntime();
   const emotionAssets = [
