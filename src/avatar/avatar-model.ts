@@ -340,8 +340,15 @@ const placeholderAsset: CharacterAsset = {
   scenePosition: [50, 66],
 };
 
-export const characterAssets: readonly CharacterAsset[] = [placeholderAsset, ...buildEmotionAssets()];
-export const fallbackAssetId = characterAssets.find((asset) => asset.visualEmotion?.emotion === "neutral")?.id ?? placeholderAsset.id;
+const builtEmotionAssets = buildEmotionAssets();
+const renderFallbackAsset =
+  builtEmotionAssets.find((asset) => asset.visualEmotion?.emotion === "neutral") ??
+  builtEmotionAssets[0] ??
+  placeholderAsset;
+
+export const characterAssets: readonly CharacterAsset[] = [placeholderAsset, ...builtEmotionAssets];
+export const fallbackAssetId = renderFallbackAsset.id;
+export const renderFallbackAssetId = renderFallbackAsset.id;
 
 const legacyExpressions = new Set<AvatarVisualCue>([
   "neutral", "warm", "soft_smile", "curious", "annoyed_soft", "guarded", "sad_soft", "playful",
@@ -381,7 +388,9 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
 validateAssetCatalog(characterAssets);
 
 export function findCharacterAsset(id?: string) {
-  return characterAssets.find(a => a.id === id) ?? characterAssets.find(a => a.id === fallbackAssetId)!;
+  const resolved = id ? characterAssets.find((asset) => asset.id === id) : null;
+  if (resolved && resolved.id !== placeholderAsset.id) return resolved;
+  return characterAssets.find((asset) => asset.id === renderFallbackAssetId) ?? placeholderAsset;
 }
 
 // ---- appearance.ts ----
