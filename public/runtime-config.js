@@ -15,5 +15,4 @@ window.__VC_CONFIG__ = {
     appId: '1:1068767940128:web:3dc2a06b8a867548c13645',
   },
   recaptchaEnterpriseSiteKey: '6Lfld8ctAAAAANmsEFNblBeT0DXawUsjlURBYWcW',
-  geminiModel: 'gemini-3.8-flash',
 };
