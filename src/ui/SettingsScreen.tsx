@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { AppCheckState } from "../storage/firebase";
 import type { AuthProfile } from "../storage/auth";
 import type { RuntimeTrace } from "../engine/runtime";
@@ -18,6 +19,9 @@ export function SettingsScreen({
   user,
   trace,
   onSignOut,
+  onClearConversationAndMemory,
+  clearingData,
+  resetDisabled,
   maintenanceError,
 }: {
   firebaseEnabled: boolean;
@@ -25,8 +29,12 @@ export function SettingsScreen({
   user: AuthProfile | null;
   trace: RuntimeTrace | null;
   onSignOut: () => void;
+  onClearConversationAndMemory: () => Promise<void>;
+  clearingData: boolean;
+  resetDisabled: boolean;
   maintenanceError: string | null;
 }) {
+  const [confirmReset, setConfirmReset] = useState(false);
   return (
     <section className="panel-screen settings-screen">
       <div className="section-heading">
@@ -67,8 +75,41 @@ export function SettingsScreen({
           <div className="setting-row"><span>Всего</span><strong>{(trace.timings.totalMs / 1000).toFixed(1)} с</strong></div>
         </div>
       )}
+      <div className="settings-danger-zone">
+        <div className="settings-danger-copy">
+          <strong>Очистить диалог и память</strong>
+          <span>
+            Удалит историю общения, память, факты, незакрытые темы и связанные состояния Yuzuki. Аккаунт и Firebase останутся подключены.
+          </span>
+        </div>
+        {!confirmReset ? (
+          <button
+            className="danger-button"
+            type="button"
+            disabled={resetDisabled}
+            onClick={() => setConfirmReset(true)}
+          >
+            Очистить диалог и память
+          </button>
+        ) : (
+          <div className="danger-confirmation" role="alert">
+            <span>Это действие необратимо. Yuzuki начнёт общение с чистой памятью.</span>
+            <div className="danger-confirmation-actions">
+              <button type="button" disabled={clearingData} onClick={() => setConfirmReset(false)}>Отмена</button>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={resetDisabled}
+                onClick={() => void onClearConversationAndMemory().finally(() => setConfirmReset(false))}
+              >
+                {clearingData ? "Очищаем…" : "Удалить всё"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
       {user && (
-        <button className="secondary-button" type="button" onClick={onSignOut}>
+        <button className="secondary-button" type="button" onClick={onSignOut} disabled={clearingData}>
           Выйти из Google
         </button>
       )}
