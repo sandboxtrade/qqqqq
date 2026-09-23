@@ -5,8 +5,10 @@ export interface RelationshipState {
   security: number;
   respect: number;
   unresolvedTension: number;
-  stage: 'new' | 'familiar' | 'close' | 'deep';
+  stage: "new" | "familiar" | "close" | "deep";
   updatedAt: number;
 }
 
-export type RelationshipDelta = Partial<Omit<RelationshipState, 'stage' | 'updatedAt'>>;
+export type RelationshipDelta = Partial<
+  Omit<RelationshipState, "stage" | "updatedAt">
+>;

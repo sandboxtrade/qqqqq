@@ -1,9 +1,24 @@
-import type { EmotionalState, EmotionDelta } from './emotion-types';
+import type { EmotionalState, EmotionDelta } from "./emotion-types";
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
-export const initialEmotionalState: EmotionalState = {
-  mood: 0.58,
+export function deriveMood(
+  state: Pick<
+    EmotionalState,
+    "happiness" | "affection" | "irritation" | "sadness" | "anxiety"
+  >,
+) {
+  return clamp(
+    (state.happiness +
+      state.affection * 0.4 -
+      state.irritation * 0.55 -
+      state.sadness * 0.5 -
+      state.anxiety * 0.25) /
+      1.4,
+  );
+}
+
+const initialBase = {
   energy: 0.68,
   happiness: 0.54,
   irritation: 0.08,
@@ -13,24 +28,40 @@ export const initialEmotionalState: EmotionalState = {
   boredom: 0.12,
   affection: 0.42,
   romanticInterest: 0.28,
+};
+
+export const initialEmotionalState: EmotionalState = {
+  ...initialBase,
+  mood: deriveMood(initialBase),
   updatedAt: Date.now(),
 };
 
-export function applyEmotionDelta(state: EmotionalState, delta: EmotionDelta, now = Date.now()): EmotionalState {
+export function applyEmotionDelta(
+  state: EmotionalState,
+  delta: EmotionDelta,
+  now = Date.now(),
+): EmotionalState {
   const next = { ...state };
   for (const [key, value] of Object.entries(delta)) {
-    if (typeof value !== 'number' || key === 'updatedAt') continue;
-    const typedKey = key as keyof Omit<EmotionalState, 'updatedAt'>;
+    if (typeof value !== "number" || key === "updatedAt" || key === "mood")
+      continue;
+    const typedKey = key as keyof Omit<EmotionalState, "updatedAt" | "mood">;
     next[typedKey] = clamp((next[typedKey] as number) + value) as never;
   }
-  next.mood = clamp((next.happiness + next.affection * 0.4 - next.irritation * 0.55 - next.sadness * 0.5 - next.anxiety * 0.25) / 1.4);
+  next.mood = deriveMood(next);
   next.updatedAt = now;
   return next;
 }
 
-export function decayEmotions(state: EmotionalState, now = Date.now()): EmotionalState {
+export function decayEmotions(
+  state: EmotionalState,
+  now = Date.now(),
+): EmotionalState {
   const hours = Math.max(0, (now - state.updatedAt) / 3_600_000);
-  if (hours === 0) return state;
+  if (hours === 0) {
+    const mood = deriveMood(state);
+    return mood === state.mood ? state : { ...state, mood };
+  }
 
   const toward = (value: number, baseline: number, rate: number) =>
     clamp(baseline + (value - baseline) * Math.exp(-rate * hours));
@@ -49,6 +80,6 @@ export function decayEmotions(state: EmotionalState, now = Date.now()): Emotiona
     romanticInterest: toward(state.romanticInterest, 0.28, 0.003),
     updatedAt: now,
   };
-  next.mood = clamp((next.happiness + next.affection * 0.4 - next.irritation * 0.55 - next.sadness * 0.5 - next.anxiety * 0.25) / 1.4);
+  next.mood = deriveMood(next);
   return next;
 }

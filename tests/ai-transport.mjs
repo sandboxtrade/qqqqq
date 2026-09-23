@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { registerHooks, stripTypeScriptTypes } from 'node:module';
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+let config, request, tokenChecks=0;
+let generate=async()=>({stream:(async function*(){yield {text:()=> 'Привет.'};})(),response:Promise.resolve({candidates:[{finishReason:'STOP'}],text:()=> 'Привет.'})});
+globalThis.__ai={ getAI:()=>({}), GoogleAIBackend:class {}, ThinkingLevel:{MINIMAL:'minimal'}, getGenerativeModel:(_app,c)=>{config=c;return {generateContentStream:(r,o)=>{request=r;return generate(r,o);}}} };
+globalThis.__verify=async()=>{tokenChecks++;};
+registerHooks({resolve(specifier,context,next){
+ if(specifier==='firebase/ai')return {url:'mock:ai',shortCircuit:true};
+ if(specifier.startsWith('.')&&context.parentURL?.startsWith('file:')){const u=new URL(specifier,context.parentURL);if(!u.pathname.match(/\.[a-z]+$/)&&existsSync(fileURLToPath(u)+'.ts'))return {url:u.href+'.ts',shortCircuit:true};}
+ return next(specifier,context);
+},load(url,context,next){let source;
+ if(url==='mock:ai')source='export const {getAI,GoogleAIBackend,ThinkingLevel,getGenerativeModel}=globalThis.__ai;';
+ else if(url.endsWith('/storage/firebase.ts'))source='export const isFirebaseConfigured=true;export const getFirebaseApp=()=>({});export const verifyAppCheck=()=>globalThis.__verify();';
+ else if(url.endsWith('/config/runtime-config.ts'))source='export const runtimeGeminiModel="gemini-3.8-flash";';
+ else if(url.endsWith('.ts'))source=stripTypeScriptTypes(readFileSync(fileURLToPath(url),'utf8'),{mode:'transform'});
+ else return next(url,context);
+ return {source,format:'module',shortCircuit:true};
+}});
+const {generateCharacterReply}=await import('../src/ai/gemini-client.ts');
+const r={character:{name:'Yuzuki',age:24},emotion:{},relationship:{},world:{recentEvents:[]},decision:{content:{locked:false}},responsePlan:{length:'short'},interpretation:{},memoryContext:{memories:[{summary:'важное воспоминание'}],facts:[{statement:'важный факт'}],openThreads:[]},history:[{role:'character',text:''},...Array.from({length:20},(_,i)=>({role:i%2?'character':'user',text:`реплика ${i}`}))],userText:'Привет'};
+const chunks=[];
+assert.equal(await generateCharacterReply(r,{onChunk:t=>chunks.push(t)}),'Привет.');
+assert.equal(tokenChecks,1);assert.deepEqual(chunks,['Привет.']);assert.equal(request.contents.length,21);
+assert.ok(config.systemInstruction.includes('важный факт'));assert.ok(config.systemInstruction.includes('важное воспоминание'));
+assert.equal(config.generationConfig.maxOutputTokens,384);
+chunks.length=0;await generateCharacterReply({...r,decision:{content:{locked:true}}},{onChunk:t=>chunks.push(t)});assert.equal(chunks.length,0);
+generate=async()=>({stream:(async function*(){yield {text:()=> 'Оборванный ответ'};})(),response:Promise.resolve({candidates:[{finishReason:'MAX_TOKENS'}],text:()=> 'Оборванный ответ'})});
+await assert.rejects(generateCharacterReply(r),/MAX_TOKENS/);
+generate=async()=>{throw Error('429 resource exhausted');};await assert.rejects(generateCharacterReply(r),/429/);
+generate=async()=>({stream:(async function*(){await new Promise(()=>{});})(),response:new Promise(()=>{})});
+const c=new AbortController();const pending=generateCharacterReply(r,{signal:c.signal});setTimeout(()=>c.abort(new Error('cancel-test')),15);await assert.rejects(pending,/cancel-test/);
+console.log('PASS AI transport: App Check, full history/memory, streaming, locked buffer, token budget, truncation, quota and cancellation');

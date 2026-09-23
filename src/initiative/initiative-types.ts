@@ -1,10 +1,10 @@
 export type InitiativeKind =
-  | 'continue_thread'
-  | 'share_world_event'
-  | 'ask_about_user'
-  | 'suggest_activity'
-  | 'share_thought'
-  | 'affectionate_checkin';
+  | "continue_thread"
+  | "share_world_event"
+  | "ask_about_user"
+  | "suggest_activity"
+  | "share_thought"
+  | "affectionate_checkin";
 
 export interface CharacterInitiative {
   id: string;
@@ -15,7 +15,7 @@ export interface CharacterInitiative {
   createdAt: number;
   notBefore: number;
   expiresAt: number;
-  status: 'pending' | 'surfaced' | 'dismissed' | 'expired';
+  status: "pending" | "surfaced" | "dismissed" | "expired";
   dedupeKey: string;
   sourceIds: string[];
 }

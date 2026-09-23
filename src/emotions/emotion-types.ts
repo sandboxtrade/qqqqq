@@ -12,4 +12,4 @@ export interface EmotionalState {
   updatedAt: number;
 }
 
-export type EmotionDelta = Partial<Omit<EmotionalState, 'updatedAt'>>;
+export type EmotionDelta = Partial<Omit<EmotionalState, "updatedAt">>;

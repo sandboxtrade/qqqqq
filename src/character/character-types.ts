@@ -1,9 +1,21 @@
 export type TraitMap = Record<string, number>;
 
+export interface CharacterPreferenceRule {
+  id: string;
+  topicKeywords: string[];
+  position: string;
+  reasons: string[];
+  fallbackText: string;
+  validationKeywords: string[];
+  corePreferenceRefs?: string[];
+  strength: number;
+}
+
 export interface CharacterCore {
   id: string;
   name: string;
-  age: number;
+  readonly age: number;
+  readonly adult: boolean;
   identityVersion: number;
   immutableTraits: TraitMap;
   slowTraits: TraitMap;
@@ -11,9 +23,10 @@ export interface CharacterCore {
   preferences: string[];
   dislikes: string[];
   boundaries: string[];
+  preferenceRules?: CharacterPreferenceRule[];
   communicationStyle: {
-    verbosity: 'short' | 'balanced' | 'long';
-    humor: 'dry' | 'playful' | 'soft' | 'direct';
+    verbosity: "short" | "balanced" | "long";
+    humor: "dry" | "playful" | "soft" | "direct";
     directness: number;
     warmth: number;
   };

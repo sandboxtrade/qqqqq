@@ -1,24 +1,57 @@
-import { getAI, getGenerativeModel, GoogleAIBackend, Schema } from 'firebase/ai';
-import type { Perception, PerceptionIntent, PerceptionTone } from '../cognition/cognition-types';
-import { getFirebaseApp, isFirebaseConfigured } from '../storage/firebase';
-import { runtimeGeminiModel } from '../config/runtime-config';
-
+import {
+  getAI,
+  getGenerativeModel,
+  GoogleAIBackend,
+  Schema,
+} from "firebase/ai";
+import type {
+  Perception,
+  PerceptionIntent,
+  PerceptionTone,
+} from "../cognition/cognition-types";
+import { getFirebaseApp, isFirebaseConfigured } from "../storage/firebase";
+import { runtimeGeminiModel } from "../config/runtime-config";
 
 const AI_TIMEOUT_MS = 15000;
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs = AI_TIMEOUT_MS): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs = AI_TIMEOUT_MS,
+): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error('AI request timed out.')), timeoutMs);
+      window.setTimeout(
+        () => reject(new Error("AI request timed out.")),
+        timeoutMs,
+      );
     }),
   ]);
 }
 
 const intents: PerceptionIntent[] = [
-  'question', 'statement', 'request', 'disclosure', 'affection', 'apology', 'disagreement', 'invitation', 'boundary', 'unknown',
+  "question",
+  "statement",
+  "request",
+  "disclosure",
+  "affection",
+  "apology",
+  "disagreement",
+  "invitation",
+  "boundary",
+  "unknown",
 ];
-const tones: PerceptionTone[] = ['neutral', 'warm', 'cold', 'playful', 'irritated', 'sad', 'anxious', 'vulnerable', 'unknown'];
+const tones: PerceptionTone[] = [
+  "neutral",
+  "warm",
+  "cold",
+  "playful",
+  "irritated",
+  "sad",
+  "anxious",
+  "vulnerable",
+  "unknown",
+];
 
 const schema = Schema.object({
   properties: {
@@ -35,10 +68,14 @@ const schema = Schema.object({
 });
 
 function score(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.5;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 0.5;
 }
 
-export async function analyzeUserMessage(userText: string): Promise<Perception | null> {
+export async function analyzeUserMessage(
+  userText: string,
+): Promise<Perception | null> {
   if (!isFirebaseConfigured) return null;
   const app = getFirebaseApp();
   if (!app) return null;
@@ -48,7 +85,7 @@ export async function analyzeUserMessage(userText: string): Promise<Perception |
     const model = getGenerativeModel(ai, {
       model: runtimeGeminiModel,
       generationConfig: {
-        responseMimeType: 'application/json',
+        responseMimeType: "application/json",
         responseSchema: schema,
       },
     });
@@ -66,23 +103,30 @@ ${userText}`.trim();
 
     const result = await withTimeout(model.generateContent(prompt));
     const raw = JSON.parse(result.response.text()) as Partial<Perception>;
-    if (!raw.probableIntent || !intents.includes(raw.probableIntent)) return null;
+    if (!raw.probableIntent || !intents.includes(raw.probableIntent))
+      return null;
     if (!raw.tone || !tones.includes(raw.tone)) return null;
 
     return {
       literalMeaning: userText.trim(),
       probableIntent: raw.probableIntent,
       tone: raw.tone,
-      topics: Array.isArray(raw.topics) ? raw.topics.filter((v): v is string => typeof v === 'string').slice(0, 8) : [],
+      topics: Array.isArray(raw.topics)
+        ? raw.topics
+            .filter((v): v is string => typeof v === "string")
+            .slice(0, 8)
+        : [],
       emotionalSignals: Array.isArray(raw.emotionalSignals)
-        ? raw.emotionalSignals.filter((v): v is string => typeof v === 'string').slice(0, 8)
+        ? raw.emotionalSignals
+            .filter((v): v is string => typeof v === "string")
+            .slice(0, 8)
         : [],
       agreementPressure: score(raw.agreementPressure),
       vulnerability: score(raw.vulnerability),
       urgency: score(raw.urgency),
       ambiguity: score(raw.ambiguity),
       confidence: score(raw.confidence),
-      source: 'gemini',
+      source: "gemini",
     };
   } catch {
     return null;

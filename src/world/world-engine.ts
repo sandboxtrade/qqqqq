@@ -1,18 +1,31 @@
-import type { EmotionalState, EmotionDelta } from '../emotions/emotion-types';
-import { applyEmotionDelta } from '../emotions/emotion-engine';
-import { clampElapsedMs, resolveRoutine, resolveTimeOfDay } from './time-engine';
-import { maybeCreateWorldEvent } from './daily-life';
-import type { WorldEventSnapshot, WorldSimulationResult, WorldState } from './world-types';
+import type { EmotionalState, EmotionDelta } from "../emotions/emotion-types";
+import { applyEmotionDelta } from "../emotions/emotion-engine";
+import {
+  clampElapsedMs,
+  resolveRoutine,
+  resolveSystemTimeZone,
+  resolveTimeOfDay,
+} from "./time-engine";
+import { maybeCreateWorldEvent } from "./daily-life";
+import type {
+  WorldEventSnapshot,
+  WorldSimulationResult,
+  WorldState,
+} from "./world-types";
 
 const HOUR = 3_600_000;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
-export function createInitialWorldState(now = Date.now()): WorldState {
-  const routine = resolveRoutine(now);
+export function createInitialWorldState(
+  now = Date.now(),
+  timeZone = resolveSystemTimeZone(),
+): WorldState {
+  const routine = resolveRoutine(now, timeZone);
   return {
+    timeZone,
     currentLocation: routine.location,
     currentActivity: routine.activity,
-    timeOfDay: resolveTimeOfDay(now),
+    timeOfDay: resolveTimeOfDay(now, timeZone),
     availability: routine.availability,
     isAwake: routine.isAwake,
     connectionDrive: 0.12,
@@ -25,7 +38,7 @@ export function createInitialWorldState(now = Date.now()): WorldState {
 
 function mergeDelta(target: EmotionDelta, incoming: EmotionDelta) {
   for (const [key, value] of Object.entries(incoming)) {
-    if (typeof value !== 'number') continue;
+    if (typeof value !== "number") continue;
     const typed = key as keyof EmotionDelta;
     target[typed] = ((target[typed] as number | undefined) ?? 0) + value;
   }
@@ -57,26 +70,47 @@ export function simulateWorld(
   const step = elapsed / samples;
   for (let index = 1; index <= samples; index += 1) {
     const at = simulationStart + step * index;
-    const event = maybeCreateWorldEvent(at);
-    if (!event || state.recentEvents.some((existing) => existing.id === event.id) || generatedEvents.some((existing) => existing.id === event.id)) continue;
+    const event = maybeCreateWorldEvent(at, state.timeZone);
+    if (
+      !event ||
+      state.recentEvents.some((existing) => existing.id === event.id) ||
+      generatedEvents.some((existing) => existing.id === event.id)
+    )
+      continue;
     generatedEvents.push(event);
     mergeDelta(emotionDelta, event.emotionalEffect);
   }
 
-  const currentRoutine = resolveRoutine(now);
-  const targetEnergyAdjustment = (currentRoutine.targetEnergy - emotion.energy) * Math.min(0.42, 0.1 + elapsedHours * 0.03);
+  const currentRoutine = resolveRoutine(now, state.timeZone);
+  const targetEnergyAdjustment =
+    (currentRoutine.targetEnergy - emotion.energy) *
+    (1 - Math.exp(-0.16 * elapsedHours));
   emotionDelta.energy = (emotionDelta.energy ?? 0) + targetEnergyAdjustment;
 
-  const hoursSinceUser = Math.max(0, (now - state.lastUserInteractionAt) / HOUR);
-  const desiredConnection = clamp(0.08 + Math.min(0.42, hoursSinceUser * 0.015));
-  const connectionDrive = clamp(state.connectionDrive + (desiredConnection - state.connectionDrive) * Math.min(1, elapsedHours / 6));
+  const hoursSinceUser = Math.max(
+    0,
+    (now - state.lastUserInteractionAt) / HOUR,
+  );
+  const desiredConnection = clamp(
+    0.08 + Math.min(0.42, hoursSinceUser * 0.015),
+  );
+  const connectionDrive = clamp(
+    state.connectionDrive +
+      (desiredConnection - state.connectionDrive) *
+        (1 - Math.exp(-elapsedHours / 6)),
+  );
 
   if (elapsedHours > 8 && generatedEvents.length === 0) {
     emotionDelta.curiosity = (emotionDelta.curiosity ?? 0) + 0.008;
   }
 
-  const recentEvents = uniqueEvents([...state.recentEvents, ...generatedEvents]).slice(-6);
-  const lastMeaningful = [...generatedEvents].reverse().find((event) => event.shareWorthiness >= 0.5);
+  const recentEvents = uniqueEvents([
+    ...state.recentEvents,
+    ...generatedEvents,
+  ]).slice(-6);
+  const lastMeaningful = [...generatedEvents]
+    .reverse()
+    .find((event) => event.shareWorthiness >= 0.5);
 
   return {
     emotionDelta,
@@ -85,27 +119,56 @@ export function simulateWorld(
       ...state,
       currentLocation: currentRoutine.location,
       currentActivity: currentRoutine.activity,
-      timeOfDay: resolveTimeOfDay(now),
+      timeOfDay: resolveTimeOfDay(now, state.timeZone),
       availability: currentRoutine.availability,
       isAwake: currentRoutine.isAwake,
       connectionDrive,
       lastSimulatedAt: now,
-      lastMeaningfulWorldEventAt: lastMeaningful?.at ?? state.lastMeaningfulWorldEventAt,
+      lastMeaningfulWorldEventAt:
+        lastMeaningful?.at ?? state.lastMeaningfulWorldEventAt,
       recentEvents,
       updatedAt: now,
     },
   };
 }
 
-export function applyWorldSimulationEmotion(emotion: EmotionalState, simulation: WorldSimulationResult, now = Date.now()) {
+export function applyWorldSimulationEmotion(
+  emotion: EmotionalState,
+  simulation: WorldSimulationResult,
+  now = Date.now(),
+) {
   return applyEmotionDelta(emotion, simulation.emotionDelta, now);
 }
 
-export function markUserInteraction(world: WorldState, now = Date.now()): WorldState {
+export function markUserInteraction(
+  world: WorldState,
+  now = Date.now(),
+  options: { engaged?: boolean } = {},
+): WorldState {
+  const engaged = options.engaged ?? true;
+
+  if (!engaged) {
+    return {
+      ...world,
+      connectionDrive: Math.max(0.04, world.connectionDrive * 0.8),
+      lastUserInteractionAt: now,
+      updatedAt: now,
+    };
+  }
+
+  if (world.availability === "occupied") {
+    return {
+      ...world,
+      connectionDrive: Math.max(0.04, world.connectionDrive * 0.5),
+      lastUserInteractionAt: now,
+      updatedAt: now,
+    };
+  }
+
   return {
     ...world,
-    currentActivity: 'chatting',
-    availability: 'free',
+    currentActivity: "chatting",
+    availability: "free",
     isAwake: true,
     connectionDrive: Math.max(0.04, world.connectionDrive * 0.35),
     lastUserInteractionAt: now,

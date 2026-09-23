@@ -1,5 +1,5 @@
-export type MemoryKind = 'working' | 'short_term' | 'episodic' | 'semantic';
-export type MemoryStatus = 'active' | 'outdated' | 'archived';
+export type MemoryKind = "working" | "short_term" | "episodic" | "semantic";
+export type MemoryStatus = "active" | "outdated" | "archived";
 
 export interface MemoryRecord {
   id: string;
@@ -22,8 +22,8 @@ export interface MemoryRecord {
   status: MemoryStatus;
 }
 
-export type KnowledgeSubject = 'user' | 'character' | 'relationship' | 'world';
-export type KnowledgeStatus = 'active' | 'outdated' | 'disputed';
+export type KnowledgeSubject = "user" | "character" | "relationship" | "world";
+export type KnowledgeStatus = "active" | "outdated" | "disputed";
 
 export interface KnowledgeFact {
   id: string;
@@ -45,7 +45,7 @@ export interface KnowledgeFact {
   supersededByFactId?: string;
 }
 
-export type OpenThreadStatus = 'open' | 'resolved' | 'dropped';
+export type OpenThreadStatus = "open" | "resolved" | "dropped";
 
 export interface OpenThread {
   id: string;
@@ -75,4 +75,5 @@ export interface MemoryConsolidationReport {
   threadsCreated: string[];
   threadsResolved: string[];
   memoriesArchived: string[];
+  memoriesOutdated: string[];
 }

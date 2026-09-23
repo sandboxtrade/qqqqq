@@ -1,2 +1,2 @@
 export const SCHEMA_VERSION = 4;
-export const ENGINE_VERSION = '0.5.0';
+export const ENGINE_VERSION = "0.8.0";
