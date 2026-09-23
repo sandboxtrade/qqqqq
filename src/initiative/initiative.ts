@@ -140,6 +140,11 @@ export async function refreshInitiatives(
   const intimacyPaused = intimacy?.adultModeEnabled === true &&
     (intimacy.phase === "paused" || ["paused", "stopped"].includes(intimacy.interactionStatus));
   for (const initiative of existing) {
+    if (initiative.status === "pending" && hasLegacyInternalInitiativeTopic(initiative)) {
+      await repository.saveInitiative({ ...initiative, status: "dismissed" });
+      initiative.status = "dismissed";
+      continue;
+    }
     if (initiative.status === "pending" && initiative.dedupeKey.startsWith("romance:") && (!romanceAvailable || intimacyPaused)) {
       await repository.saveInitiative({ ...initiative, status: "dismissed" });
       initiative.status = "dismissed";
@@ -325,12 +330,41 @@ export async function markInitiativeSurfaced(
   await repository.saveInitiative({ ...initiative, status: "surfaced" });
 }
 
+
+const legacyInternalInitiativePatterns: Array<[RegExp, string]> = [
+  [/She made satisfying progress on a personal project/iu, "У меня сегодня неожиданно хорошо пошло одно моё дело, и я до сих пор тихо этому радуюсь."],
+  [/She got absorbed in something she was reading/iu, "Я сегодня зацепилась за одну мысль из того, что читала, и она всё ещё крутится в голове."],
+  [/A small everyday inconvenience irritated her/iu, "Меня сегодня совершенно нелепо раздражала одна бытовая мелочь. Уже смешно вспоминать."],
+  [/She took a short walk to clear her head/iu, "Я немного прошлась и только потом заметила, насколько мне нужно было проветрить голову."],
+  [/She spent a little time at a café/iu, "Я сегодня ненадолго выбралась в кафе просто сменить картинку перед глазами. Почему-то реально помогло."],
+  [/She put on music and let herself switch off/iu, "Я включила музыку и на какое-то время просто выключилась из всего остального. Было нужно."],
+  [/Bring up a small thought or question of her own/iu, "У меня внезапно появилась одна мысль, и я решила не ждать повода, чтобы написать тебе."],
+  [/Check in without guilt-tripping/iu, "Просто захотелось самой спросить, как ты."],
+  [/Suggest a low-pressure shared evening activity/iu, "Если ты свободен, можно немного побыть вместе без какого-то большого плана."],
+  [/Her curiosity is high enough/iu, "У меня внезапно появилась одна мысль, которой захотелось с тобой поделиться."],
+  [/There is an unresolved subject she still remembers/iu, "Я вспомнила одну нашу незакрытую тему."],
+  [/Something happened in her own day that is worth sharing/iu, "У меня сегодня был один маленький момент, который почему-то застрял в голове."],
+];
+
+export function sanitizeProactiveDialogueText(text: string) {
+  const value = text.trim();
+  for (const [pattern, replacement] of legacyInternalInitiativePatterns) {
+    if (pattern.test(value)) return replacement;
+  }
+  return value;
+}
+
+export function hasLegacyInternalInitiativeTopic(initiative: CharacterInitiative) {
+  return legacyInternalInitiativePatterns.some(([pattern]) => pattern.test(initiative.topic));
+}
+
 export function renderLocalInitiative(initiative: CharacterInitiative) {
+  const safeTopic = sanitizeProactiveDialogueText(initiative.topic);
   switch (initiative.kind) {
     case "continue_thread":
-      return `Кстати, я сейчас вспомнила про «${initiative.topic}». Там что-нибудь изменилось?`;
+      return `Кстати, я сейчас вспомнила про «${safeTopic}». Там что-нибудь изменилось?`;
     case "share_world_event":
-      return initiative.topic;
+      return safeTopic;
     case "suggest_activity":
       return "У меня сейчас спокойный вечер. Я бы не отказалась что-нибудь посмотреть вместе. Есть настроение на такое?";
     case "affectionate_checkin":
@@ -338,7 +372,7 @@ export function renderLocalInitiative(initiative: CharacterInitiative) {
         ? "Просто внезапно захотелось сказать: мне сейчас очень тепло от мысли о тебе. Без повода."
         : "Привет. Просто захотелось узнать, как ты. Без повода.";
     case "share_thought":
-      return initiative.topic;
+      return safeTopic;
     case "ask_about_user":
       return "У меня внезапный вопрос к тебе: что тебя в последнее время по-настоящему увлекло?";
     default:
