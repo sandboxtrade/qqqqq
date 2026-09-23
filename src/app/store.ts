@@ -443,6 +443,11 @@ function watchAuth() {
     if (user) void useAppStore.getState().initialize();
   });
 }
+function isRecoverableTurnSyncError(error: unknown) {
+  const message = errorText(error);
+  return /\[(?:state-conflict|state-world-conflict)\]/iu.test(message);
+}
+
 async function sendTurn(message: ChatMessage) {
   const store = useAppStore.getState();
   if (!store.ready || !store.runtime || store.busy) return;
@@ -479,24 +484,50 @@ async function sendTurn(message: ChatMessage) {
         ]),
   }));
   try {
-    const result = await handleUserMessage(message, store.runtime, {
+    const baseHistory = store.messages.filter(
+      (m) =>
+        !/(естественный языковой слой|состояние, память и решение уже)/iu.test(
+          m.text,
+        ),
+    );
+    const turnOptions = (history: ChatMessage[]) => ({
       uid: store.user?.uid ?? null,
       signal: controller.signal,
-      history: store.messages.filter(
-        (m) =>
-          !/(естественный языковой слой|состояние, память и решение уже)/iu.test(
-            m.text,
-          ),
-      ),
-      onChunk: (text) => {
+      history,
+      onChunk: (text: string) => {
         if (version === epoch && !controller.signal.aborted)
           useAppStore.setState({ streamingText: text });
       },
-      onPhase: (phase) => {
+      onPhase: (phase: string) => {
         if (version === epoch && !controller.signal.aborted)
           useAppStore.setState({ phase });
       },
     });
+    let result: Awaited<ReturnType<typeof handleUserMessage>>;
+    try {
+      result = await handleUserMessage(
+        message,
+        store.runtime,
+        turnOptions(baseHistory),
+      );
+    } catch (error) {
+      if (controller.signal.aborted || !isRecoverableTurnSyncError(error)) throw error;
+      useAppStore.setState({
+        streamingText: "",
+        phase: "Восстанавливаем синхронизацию…",
+      });
+      // Same immutable message id is intentionally reused. appendEvent and
+      // handleUserMessage are idempotent, so this recovers state conflicts
+      // without duplicating the user's message or relationship effects.
+      const recovered = await bootstrapRuntime(store.user?.uid ?? null, controller.signal);
+      if (version !== epoch || controller.signal.aborted) return;
+      useAppStore.setState({ runtime: recovered.state, maintenanceError: null });
+      result = await handleUserMessage(
+        message,
+        recovered.state,
+        turnOptions(recovered.recentConversation as ChatMessage[]),
+      );
+    }
     if (version !== epoch || controller.signal.aborted) return;
     useAppStore.setState((state) => {
       const savedMessages = state.messages
@@ -673,9 +704,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   clearConversationAndMemory: async () => {
     const state = get();
-    if (!state.ready || !state.runtime || state.busy || state.resettingData) return;
+    if (!state.ready || !state.runtime || state.resettingData) return;
     const user = state.user;
     const current = state.runtime;
+    // Reset is also the escape hatch for a stuck send/Firebase operation.
+    // invalidate() aborts the active turn, maintenance and live refresh first.
     const version = invalidate();
     const controller = new AbortController();
     active = controller;
