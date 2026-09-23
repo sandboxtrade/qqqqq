@@ -1,0 +1,52 @@
+{
+  "conditions": "80ms per repository operation, 120ms mocked model, same fact and retrieval budgets",
+  "baseline": null,
+  "improved": {
+    "label": "v0.8.0",
+    "beforeModelMs": 174,
+    "firstTextMs": 296,
+    "totalMs": 378,
+    "reads": [
+      [
+        "listMemories",
+        {
+          "statuses": [
+            "active"
+          ],
+          "limit": 72,
+          "sortBy": "updatedAt",
+          "direction": "desc"
+        }
+      ],
+      [
+        "listMemories",
+        {
+          "statuses": [
+            "active"
+          ],
+          "limit": 36,
+          "sortBy": "importance",
+          "direction": "desc"
+        }
+      ],
+      [
+        "listKnowledgeFacts",
+        {
+          "statuses": [
+            "active"
+          ],
+          "limit": 72
+        }
+      ],
+      [
+        "listOpenThreads",
+        {
+          "statuses": [
+            "open"
+          ],
+          "limit": 36
+        }
+      ]
+    ]
+  }
+}

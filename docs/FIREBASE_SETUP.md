@@ -49,6 +49,15 @@ Data is stored below:
 
 The included rules allow a signed-in user to access only paths under their own UID.
 
+## 4.1 Firestore indexes
+
+This version filters and orders memory documents on the server before applying `limit`.
+Create/deploy the composite indexes from the included `firestore.indexes.json` before
+using a large persistent database. `firebase.json` points the Firebase CLI at both the
+rules and index files. The important indexed collections are `memories`,
+`knowledge`, and `openThreads`. If an index is missing, Firestore will reject the query
+instead of silently falling back to the old incorrect client-side ordering.
+
 ## 5. GitHub Pages
 
 Vite uses `base: './'`, so the production bundle works when hosted from a repository subpath such as:

@@ -5,7 +5,7 @@ This archive intentionally contains normal folders. It contains no `.git` direct
 Main layout:
 
 ```text
-virtual-companion-v0.5/
+virtual-companion-v0.7.0/
 ├─ docs/
 ├─ public/
 │  └─ assets/
@@ -16,7 +16,7 @@ virtual-companion-v0.5/
 │     └─ rooms/
 ├─ src/
 │  ├─ ai/
-│  ├─ app/
+│  ├─ app/  # Zustand store + message-sync merge helpers
 │  ├─ avatar/
 │  ├─ character/
 │  ├─ cognition/
@@ -33,6 +33,8 @@ virtual-companion-v0.5/
 │  ├─ relationship/
 │  ├─ shared-life/
 │  ├─ storage/
+│  │  ├─ persistence-schema.ts
+│  │  ├─ live-sync.ts
 │  │  └─ repositories/
 │  ├─ ui/
 │  │  ├─ components/
@@ -51,4 +53,13 @@ virtual-companion-v0.5/
 └─ vite.config.ts
 ```
 
-When copying to a locally cloned GitHub repository, copy the contents of the extracted `virtual-companion-v0.5` folder into the repository root. The folder hierarchy must remain unchanged.
+When copying to a locally cloned GitHub repository, copy the contents of the extracted `virtual-companion-v0.7.0` folder into the repository root. The folder hierarchy must remain unchanged.
+
+
+## Current avatar bridge (v0.7.0)
+
+- `src/avatar/LivePhoto.tsx` — temporary single-photo WebGL renderer.
+- `src/avatar/visual-state.ts` — read-only mapping from response `visualCue` + current emotion/world into render parameters.
+- `src/ui/components/CharacterStage.tsx` — owns the transient cue lifetime and falls back to the current runtime state.
+
+This is intentionally not the future layered pose/outfit/room system.
