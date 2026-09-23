@@ -528,13 +528,34 @@ export class FirestoreCompanionRepository implements CompanionRepository {
       );
       const stateRevision = snapshot?.revision;
       if (
+        snapshot &&
         stateRevision !== undefined &&
         worldRevision !== undefined &&
         stateRevision !== worldRevision
       ) {
-        throw new Error(
-          "Состояние мира и персонажа рассинхронизировано. [state-world-conflict]",
-        );
+        // Older tabs / interrupted historical builds could leave the two
+        // documents one revision apart. Bricking the whole app on read makes
+        // chat and the recovery/reset controls unusable. Preserve the actual
+        // payloads and repair only the revision marker atomically.
+        const repairedRevision = Math.max(stateRevision, worldRevision);
+        if (stateRevision !== repairedRevision) {
+          tx.set(
+            stateRef,
+            sanitizeForFirestore(
+              encodeCompanionSnapshot({ ...snapshot, revision: repairedRevision }),
+            ),
+          );
+        }
+        if (worldRevision !== repairedRevision) {
+          tx.set(
+            worldRef,
+            sanitizeForFirestore(encodeWorldState(world, repairedRevision)),
+          );
+        }
+        return {
+          snapshot: { ...snapshot, revision: repairedRevision },
+          world,
+        };
       }
       return { snapshot, world };
     });
@@ -589,17 +610,12 @@ export class FirestoreCompanionRepository implements CompanionRepository {
         ? decodeCompanionSnapshot(stateSnap.data())
         : null;
       const persistedRevision = persisted?.revision ?? 0;
-      if (worldSnap.exists()) {
-        const decodedWorld = decodeWorldState(worldSnap.data());
-        if (
-          decodedWorld.revision !== undefined &&
-          decodedWorld.revision !== persistedRevision
-        )
-          throw new Error(
-            "Состояние мира и персонажа рассинхронизировано. [state-world-conflict]",
-          );
-      }
-      resetRevision = persistedRevision + 1;
+      const persistedWorldRevision = worldSnap.exists()
+        ? (decodeWorldState(worldSnap.data()).revision ?? 0)
+        : 0;
+      // Reset is the emergency recovery path as well as a destructive action.
+      // It must heal a stale state/world revision pair instead of refusing to run.
+      resetRevision = Math.max(persistedRevision, persistedWorldRevision) + 1;
       tx.set(
         stateRef,
         sanitizeForFirestore(
