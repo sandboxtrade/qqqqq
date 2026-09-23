@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { LivePhoto } from "./LivePhoto";
-import { findCharacterAsset, type CharacterAsset } from "./avatar-model";
+import { findCharacterAsset, renderFallbackAssetId, type CharacterAsset } from "./avatar-model";
 import { transitionKind } from "./avatar-model";
 import type { AvatarVisualState } from "./avatar-model";
 
 const url = (asset: CharacterAsset) =>
-  /^(?:https?:|data:|blob:|\/|\.\/)/u.test(asset.src)
+  /^(?:https?:|file:|data:|blob:|\/|\.\/)/u.test(asset.src)
     ? asset.src
     : `${import.meta.env.BASE_URL}${asset.src}`;
 function preload(asset: CharacterAsset, signal: AbortSignal): Promise<void> {
@@ -74,9 +74,18 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
         if (ticket === generation.current) setScene(s => ({ ...s, previous: null }));
       }, 750);
     }).catch(() => {
-      if (!controller.signal.aborted && ticket === generation.current) {
-        setFailed(true); setScene(s => ({ ...s, previous: null }));
+      if (controller.signal.aborted || ticket !== generation.current) return;
+      const fallback = findCharacterAsset(renderFallbackAssetId);
+      if (requested.id !== fallback.id) {
+        displayed.current = fallback;
+        verified.current = fallback.id;
+        setFailed(false);
+        setRenderRevision((value) => value + 1);
+        setScene({ current: fallback, previous: null, kind: "dissolve" });
+        return;
       }
+      setFailed(true);
+      setScene(s => ({ ...s, previous: null }));
     });
     return () => { controller.abort(); clearTimeout(timer); };
   }, [requested.id, retry]);
