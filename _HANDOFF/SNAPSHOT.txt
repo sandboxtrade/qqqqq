@@ -1,6 +1,0 @@
-Virtual Companion v0.8.0
-
-Read V0.8.0_FINAL_STABILIZATION.md first.
-Stabilization stages 1-7 are complete. Original audit closure: 30/30.
-Regression: 126/126 PASS. AI transport: PASS. TS/TSX syntax: 66/66 PASS.
-Dependency-backed production build and live Firebase/Gemini/two-device/iPhone smoke tests are not claimed in this environment.
