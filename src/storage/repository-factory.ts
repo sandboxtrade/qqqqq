@@ -41,8 +41,8 @@ export function getCompanionRepository(
         checkSignal(signal);
         return bounded(
           Promise.resolve(method.apply(object, args)),
-          8000,
-          "Firebase",
+          key === "resetConversationAndMemory" ? 45000 : 8000,
+          key === "resetConversationAndMemory" ? "Очистка диалога и памяти" : "Firebase",
           signal,
         ).then((value) => {
           checkSignal(signal);
