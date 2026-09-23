@@ -97,7 +97,7 @@ async function render(
         generationConfig: {
           maxOutputTokens,
           ...(runtimeGeminiModel.startsWith("gemini-3")
-            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
             : {}),
         },
       },
