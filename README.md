@@ -1,95 +1,81 @@
-> Актуальная версия: **v0.8.0**. Начни с `_HANDOFF/V0.8.0_FINAL_STABILIZATION.md`: завершён финальный аудит всех 30 исходных проблем и стабилизация после этапов 1–6.
+> Актуальная версия: **v0.9.0 — Local Brain**. Начни с `_HANDOFF/V0.9.0_LOCAL_BRAIN.md` и `docs/LOCAL_DIALOGUE_ENGINE.md`.
 
+# Virtual Companion / Yuzuki v0.9.0
 
+Mobile-first virtual character with a persistent local Character Brain, memory, relationship/emotion state, world simulation and Firebase synchronization.
 
-# Virtual Companion v0.8.0 — final stabilization
-
-Current release notes and verification limits:
-[_HANDOFF/V0.8.0_FINAL_STABILIZATION.md](_HANDOFF/V0.8.0_FINAL_STABILIZATION.md).
-Earlier handoffs remain in `_HANDOFF/` as the implementation history.
-
-Private mobile-first virtual character project. This build focuses on a stable long-term character core, memory, cognition, world simulation, Firebase persistence and a usable interface ready for the character PNG assets.
+The normal chat path no longer depends on Gemini, OpenRouter, OpenAI, Hugging Face API or another LLM/server. Yuzuki can understand the supported everyday Russian conversation set and render replies entirely inside the browser. Firebase remains the account/persistence/live-sync backend.
 
 ## Current architecture
 
 - React + TypeScript + Vite
-- Character Core with stable identity and preferences
-- Emotional state with elapsed-time decay
-- Relationship state separated from short-term emotions
-- Immutable/idempotent raw event log
-- Layered memory: short-term, episodic, semantic facts and open threads
-- Contradiction handling that keeps historical facts instead of silently rewriting them
-- Memory retrieval with relevance, recency, importance, emotional weight and retrieval strength
-- Perception → Interpretation → Thought → Decision → Response Plan cognition pipeline
-- deterministic character decisions; Gemini renders language but does not own personality/state
-- World Engine with elapsed-time catch-up, persisted character timezone and focus/visibility reconciliation
-- Initiative Engine for unfinished topics, own-life stories, check-ins and activity suggestions
+- Character Core with stable identity/preferences/boundaries
+- emotional state with elapsed-time decay
+- persistent relationship + romance state
+- layered evidence-backed memory and open threads
+- existing Character Brain: perception → interpretation → decision → response plan
+- Local NLU with intent/concept/topic/sentiment/question/negation/confidence classification
+- semantic dialogue acts between Character Brain and language rendering
+- `ResponseRenderer` abstraction with `LocalDialogueRenderer` as the current provider
+- data-driven Russian language pack (`src/local-dialogue/language/ru/*.json`)
+- continuity reconstructed from bounded recent conversation events
+- template cooldown + text-similarity anti-repetition
+- deterministic seedable response variation; no `Math.random()` in the local engine
+- local autonomous-message rendering using the existing Initiative Engine
 - Firebase Authentication + user-scoped Firestore persistence
-- cursor-paginated conversation history plus bounded Firestore live sync across tabs/devices
-- Firebase App Check wiring for reCAPTCHA Enterprise/debug mode
-- Firebase AI Logic / Gemini adapter
-- mobile-first UI with Chat / Together / Look / Room / Settings
-- live-photo character asset at `public/assets/character/avatar-main.jpg`, driven by transient response visual cues plus emotion/world idle state
-- engine trace moved out of the main chat and into Settings
-- adult/intimacy stage-A architecture is present but deliberately not connected to normal chat yet
+- pending turns + optimistic revision/atomic turn commit
+- bounded Firestore live sync across tabs/devices
+- Firebase App Check wiring
+- existing optional Gemini adapter isolated under `src/ai/`; it is not imported by the normal response runtime
+- adult/intimacy foundation remains separate from normal chat
 
-## Important security/data rule
+## Normal response path
 
-Firestore data is scoped to the signed-in user:
+`USER -> Local NLU -> Character Brain -> semantic CharacterResponsePlan/dialogue acts -> LocalDialogueRenderer -> response guard -> Firestore/event pipeline -> UI/live sync`
 
-`users/{uid}/characters/{characterId}/...`
-
-Use the included `firestore.rules`. A generic "any authenticated user" rule is intentionally not used.
+A future hybrid mode can add optional LLM polishing after the local semantic/local-language response. The local response remains the fallback and Character Brain does not need to be rewritten.
 
 ## Run locally
 
 1. Copy `.env.example` to `.env.local`.
-2. Add your Firebase Web App config.
-3. Add the reCAPTCHA Enterprise site key after App Check registration.
-4. For localhost set `VITE_APP_CHECK_DEBUG=true` and register the generated debug token in Firebase Console.
-5. Run `npm ci`.
-6. Run `npm run dev`.
+2. Add Firebase Web App config if persistent account/sync is needed.
+3. Configure App Check/reCAPTCHA Enterprise for production Firebase use.
+4. Install dependencies (`npm install`; use `npm ci` when a lockfile is present).
+5. Run `npm run dev`.
 
-If Firebase is completely absent in a development build, the project may use the in-memory repository for engine work. Production builds fail closed: incomplete/missing Firebase or production App Check configuration never falls back to volatile local persistence.
+No Gemini API/model configuration is required for chat.
 
-See `docs/FIREBASE_SETUP.md` for the exact Firebase setup.
+If Firebase is completely absent in a development build, the project can use its existing in-memory repository for engine work. Production persistence still fails closed when Firebase/App Check configuration is incomplete.
 
-## Character image
+See `docs/FIREBASE_SETUP.md` and `docs/FIREBASE_RUNTIME_CONFIG.md`.
 
-The current live-photo prototype uses:
+## Dialogue content
 
-`public/assets/character/avatar-main.jpg`
+- Voice authority: `YUZUKI_VOICE.md`
+- Engine documentation: `docs/LOCAL_DIALOGUE_ENGINE.md`
+- Russian content: `src/local-dialogue/language/ru/`
+- NLU: `src/local-dialogue/nlu/`
+- Planner: `src/local-dialogue/planner/`
+- Renderer: `src/local-dialogue/renderer/`
+- Continuity: `src/local-dialogue/continuity/`
+- Repetition protection: `src/local-dialogue/repetition/`
 
-Later versions will replace the single-image prototype with the full layered asset manifest for poses, outfits, expressions and rooms.
+Adding most new dialogue coverage should be a language-data + test change rather than another branch in the engine.
 
-## Audit/hardening performed in v0.5
+## Tests
 
-- removed Git metadata and temporary download artifacts from the distributable project
-- verified folder hierarchy and import paths
-- fixed GitHub Pages relative base path
-- added Firebase Auth gating before Firestore reads
-- moved Firestore into per-user paths
-- added App Check initialization/debug wiring
-- restored recent conversation from the event log after reload
-- made world-event writes deterministic/idempotent
-- aligned in-memory event upsert behavior with Firestore
-- fixed emotion mood recomputation after elapsed-time decay
-- fixed open-thread matching for inflected Russian topic wording
-- fixed memory/open-thread timestamps so recovered historical events retain their original time
-- protected bootstrap from React StrictMode double initialization
-- added error handling/status UI instead of injecting runtime errors into character dialogue
-- added mobile/iPhone-oriented metadata and a redesigned navigation/interface
-- strict TypeScript audit with Firebase/React type stubs passes
-- executable core smoke test passes
+`npm test` runs:
 
-## Current verification note
+1. the existing regression suite for memory/persistence/Character Brain/world/live sync/etc.;
+2. Local Dialogue tests, including 100+ canonical NLU scenarios, negation/context/memory/state checks, 20-repeat stress and a 400-turn conversation run;
+3. the isolated legacy AI transport test, which verifies the optional adapter but is not part of normal chat runtime.
 
-The v0.8.0 regression suite passes 126/126 with Firebase/Gemini mocked. AI transport passes. All 66 TS/TSX source files pass TypeScript syntax transpilation, and all relative source imports resolve to files in the archive. The final audit re-checked all 30 reported defects and also moved manual conversation pagination to Firestore-side conversation filtering before `limit`, matching the live-sync path. Dependency-backed `npm run typecheck` / Vite production build are not claimed locally because dependency installation could not complete in this environment; global TypeScript stops at missing Vite/React/Firebase typings. GitHub CI/deploy still run locked `npm ci`, tests, typecheck and production build. Live Firebase/Auth/App Check/Gemini/two-device/iPhone verification remains a separate real-cloud smoke test.
+`npm run verify` additionally runs TypeScript typecheck and the Vite production build when project dependencies are installed.
 
-## Stabilization status
+## Security/data rule
 
-The 7/7 stabilization cycle is complete and all 30 original findings were re-checked in v0.8.0. Intimacy and Shared Life remain separate product tracks; live-cloud/device smoke testing remains deployment verification rather than another stabilization stage.
+Firestore data remains scoped to the signed-in user:
 
-## GitHub Pages + Firebase runtime config
+`users/{uid}/characters/{characterId}/...`
 
-GitHub Pages production configuration can be supplied through `public/runtime-config.js`. This avoids repository-level Vite variables for public Firebase client identifiers. See `docs/FIREBASE_RUNTIME_CONFIG.md`.
+No Firestore path, character/user ID scheme, revision rule or destructive migration was introduced by Local Brain.

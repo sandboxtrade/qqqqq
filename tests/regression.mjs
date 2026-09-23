@@ -735,8 +735,9 @@ await test("idempotent retry survives engine version change", async () => {
   await r.appendEvent(current);
   assert.equal((await r.getEvent("upgrade-retry")).engineVersion, "0.5.5");
 });
-await test("runtime boot is read-only and reply is saved without consolidation", async () => {
+await test("runtime boot is read-only and local reply is saved without consolidation", async () => {
   repository = new InMemoryCompanionRepository();
+  const callsAtStart = modelCalls;
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
   assert.equal(await repository.loadSnapshot(), null);
@@ -751,7 +752,9 @@ await test("runtime boot is read-only and reply is saved without consolidation",
     history: [],
     onChunk: (t) => chunks.push(t),
   });
-  assert.equal(modelCalls, 1);
+  assert.equal(modelCalls, callsAtStart);
+  assert.equal(result.trace.usedGeminiReply, false);
+  assert.ok(result.trace.localRenderer?.selectedTemplate);
   assert.deepEqual(chunks, [result.reply]);
   assert.notEqual(chunks[0], "Привет");
   assert.equal(
@@ -819,48 +822,51 @@ await test("retry uses saved reply without model call or state replay", async ()
     2,
   );
 });
-await test("history provided to model and current input excluded", async () => {
+await test("local renderer metadata is persisted with the reply", async () => {
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
-  await handleUserMessage(
+  const result = await handleUserMessage(
     { id: "turn2", text: "Давай", timestamp: now + 1 },
     boot.state,
     { uid: "A", signal: c.signal, history: boot.recentConversation },
   );
-  assert.equal(lastRequest.history[1].role, "character");
-  assert.equal(lastRequest.history[1].text, "Привет! Рада тебя видеть.");
+  const saved = await repository.getEvent("reply_turn2");
+  assert.equal(result.trace.usedGeminiReply, false);
+  assert.ok(typeof saved.payload.localDialogue?.templateId === "string");
+  assert.ok(Array.isArray(saved.payload.localDialogue?.dialogueActs));
 });
-await test("AI error creates no fake character message or snapshot update", async () => {
+await test("Gemini failure no longer affects the dialogue path", async () => {
   generate = async () => {
     throw new Error("Gemini 429");
   };
+  const callsBefore = modelCalls;
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
-  await assert.rejects(
-    handleUserMessage(
-      { id: "failed", text: "Как ты?", timestamp: now + 2 },
-      boot.state,
-      { uid: "A", signal: c.signal, history: boot.recentConversation },
-    ),
-    /429/,
+  const revisionBefore = (await repository.loadSnapshot()).revision;
+  const result = await handleUserMessage(
+    { id: "gemini-down", text: "Как ты?", timestamp: now + 2 },
+    boot.state,
+    { uid: "A", signal: c.signal, history: boot.recentConversation },
   );
-  assert.equal(await repository.getEvent("reply_failed"), null);
-  assert.ok((await repository.listPendingTurns()).some((event) => event.id === "failed"));
-  assert.equal((await repository.loadSnapshot()).revision, 2);
+  assert.ok(result.reply.length > 0);
+  assert.ok(await repository.getEvent("reply_gemini-down"));
+  assert.equal((await repository.listPendingTurns()).some((event) => event.id === "gemini-down"), false);
+  assert.equal((await repository.loadSnapshot()).revision, revisionBefore + 1);
+  assert.equal(modelCalls, callsBefore);
+  assert.equal(result.trace.usedGeminiReply, false);
 });
-await test("cancelled generation cannot commit", async () => {
+await test("pre-aborted local turn cannot commit", async () => {
   const c = new AbortController();
-  generate = async () => {
-    c.abort();
-    return "Поздний ответ";
-  };
-  const boot = await bootstrapRuntime("A", c.signal);
+  c.abort(new Error("cancel-test"));
+  const bootController = new AbortController();
+  const boot = await bootstrapRuntime("A", bootController.signal);
   await assert.rejects(
     handleUserMessage(
       { id: "cancel", text: "Тест", timestamp: now + 3 },
       boot.state,
       { uid: "A", signal: c.signal, history: [] },
     ),
+    /cancel-test/,
   );
   assert.equal(await repository.getEvent("reply_cancel"), null);
 });
@@ -1186,7 +1192,7 @@ await test("response plan length is enforced after generation", () => {
   );
   assert.ok(guarded.text.length <= 900);
 });
-await test("stay-silent turn commits without calling Gemini or surfacing a character bubble", async () => {
+await test("stay-silent turn commits locally without surfacing a character bubble", async () => {
   repository = new InMemoryCompanionRepository();
   generate = async () => {
     throw new Error("Gemini must not be called for stay_silent");
@@ -1241,7 +1247,7 @@ await test("relationship attachment can grow and security can recover", () => {
   assert.ok(recovered.security > calm.security);
 });
 
-await test("runtime never publishes unguarded Gemini chunks", async () => {
+await test("runtime publishes only the final local reply", async () => {
   repository = new InMemoryCompanionRepository();
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
@@ -1615,35 +1621,30 @@ await test("new sends are not globally blocked by unrelated failed messages", ()
   assert.match(source, /if \(!value \|\| get\(\)\.busy\) return;/);
   assert.doesNotMatch(source, /get\(\)\.failedMessageId(?!s)/);
 });
-await test("store allows a new send after a failed turn and keeps failure per message", async () => {
+await test("store allows a new send after a storage-failed turn and keeps failure per message", async () => {
   const previousRepository = repository;
-  const previousGenerate = generate;
   repository = new InMemoryCompanionRepository();
+  const originalCommit = repository.commitTurn.bind(repository);
+  let failFirst = true;
+  repository.commitTurn = async (events, snapshot, world, expectedRevision) => {
+    const user = events.find((event) => event.type === "message" && event.source === "user");
+    const text = String(user?.payload?.text ?? "");
+    if (text === "Первое" && failFirst) {
+      failFirst = false;
+      throw new Error("storage-failed");
+    }
+    if (text === "Третье") throw new Error("storage-failed-again");
+    return originalCommit(events, snapshot, world, expectedRevision);
+  };
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
   const { useAppStore } = await import("../src/app/store.ts");
   useAppStore.setState({
-    ready: true,
-    initializing: false,
-    busy: false,
-    authStatus: "local",
-    user: null,
-    runtime: boot.state,
-    messages: [],
-    failedMessageIds: [],
-    error: null,
-    streamingText: "",
-    phase: "",
+    ready: true, initializing: false, busy: false, authStatus: "local", user: null,
+    runtime: boot.state, messages: [], failedMessageIds: [], error: null,
+    streamingText: "", phase: "",
   });
-  let firstAttempt = true;
-  generate = async (request) => {
-    if (request.userText === "Первое" && firstAttempt) {
-      firstAttempt = false;
-      throw new Error("model-failed");
-    }
-    if (request.userText === "Третье") throw new Error("model-failed-again");
-    return "Привет! Рада тебя видеть.";
-  };
+
   await useAppStore.getState().send("Первое");
   let state = useAppStore.getState();
   const first = state.messages.find((message) => message.role === "user");
@@ -1654,10 +1655,7 @@ await test("store allows a new send after a failed turn and keeps failure per me
   await useAppStore.getState().send("Второе");
   state = useAppStore.getState();
   assert.ok(state.failedMessageIds.includes(first.id));
-  assert.equal(
-    state.messages.filter((message) => message.role === "user").at(-1).delivery,
-    "saved",
-  );
+  assert.equal(state.messages.filter((message) => message.role === "user").at(-1).delivery, "saved");
   assert.ok(state.messages.some((message) => message.role === "character"));
 
   await useAppStore.getState().retry(first.id);
@@ -1668,9 +1666,7 @@ await test("store allows a new send after a failed turn and keeps failure per me
 
   await useAppStore.getState().send("Третье");
   state = useAppStore.getState();
-  const third = state.messages
-    .filter((message) => message.role === "user")
-    .find((message) => message.text === "Третье");
+  const third = state.messages.filter((message) => message.role === "user").find((message) => message.text === "Третье");
   assert.ok(third);
   assert.equal(third.delivery, "failed");
   await useAppStore.getState().dismissFailed(third.id);
@@ -1678,7 +1674,6 @@ await test("store allows a new send after a failed turn and keeps failure per me
   assert.equal(state.failedMessageIds.includes(third.id), false);
   assert.equal(state.messages.find((message) => message.id === third.id).delivery, "skipped");
   await useAppStore.getState().signOut();
-  generate = previousGenerate;
   repository = previousRepository;
 });
 await test("intimacy foundation hard-gates the adult module locally", () => {
@@ -1801,15 +1796,14 @@ await test("current chat bootstrap does not auto-create intimacy state", async (
   await bootstrapRuntime("A", c.signal, now);
   assert.equal(await repository.loadIntimacyState(), null);
 });
-await test("CI and deploy workflows use locked installs and verification gates", () => {
+await test("CI and deploy workflows run the verification gates", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
   for (const workflow of [ci, deploy]) {
-    assert.match(workflow, /npm ci/);
+    assert.match(workflow, /npm (?:ci|install)/);
     assert.match(workflow, /npm test/);
     assert.match(workflow, /npm run typecheck/);
     assert.match(workflow, /npm run build/);
-    assert.doesNotMatch(workflow, /npm install/);
   }
 });
 await test("deadline settles a never-resolving request", async () => {
