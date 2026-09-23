@@ -37,6 +37,7 @@ const { defaultCharacter } = await import("../src/character/character.ts");
 const { initialEmotionalState, deriveMood } = await import("../src/emotions/emotions.ts");
 const { initialRelationshipState } = await import("../src/relationship/relationship.ts");
 const { createInitialWorldState } = await import("../src/world/world.ts");
+const { createInitialIntimacyState } = await import("../src/intimacy/intimacy.ts");
 
 let count = 0;
 async function test(name, fn) {
@@ -90,6 +91,7 @@ async function renderTurn({
   memoryContext = EMPTY_MEMORY,
   relationshipState = relationship("new"),
   emotionState = emotion(),
+  intimacyState = undefined,
 } = {}) {
   const initialNlu = analyzeLocalNLU(text);
   const frame = buildDialogueFrame(history, initialNlu);
@@ -110,6 +112,7 @@ async function renderTurn({
     emotion: emotionState,
     relationship: relationshipState,
     world,
+    intimacy: intimacyState,
     memoryContext,
     history,
     nlu,
@@ -245,6 +248,22 @@ await test("screenshot regressions no longer turn clear short messages into clar
   assert.equal(name.nlu.intent, "ask_character_name");
   assert.match(name.rendered.text, /Yuzuki/iu);
   assert.doesNotMatch(name.rendered.text, /каждый раз|переспрашивать/iu);
+});
+
+await test("short questions about Yuzuki's own previous reaction resolve the referent instead of asking for rephrase", async () => {
+  const history = [
+    { role: "user", text: "И милая", timestamp: NOW - 4000 },
+    { role: "character", text: "Это сейчас был флирт, да?", timestamp: NOW - 3000, dialogueActs: ["FLIRT", "ASK"] },
+    { role: "user", text: "Не знаю даже", timestamp: NOW - 2000 },
+    { role: "character", text: "Ясно. Вот это уже интересно.", timestamp: NOW - 1000, dialogueActs: ["ACKNOWLEDGE", "CURIOSITY"] },
+  ];
+  for (const text of ["Что интересно?", "А что интересно?", "В смысле?", "Что именно?"]) {
+    const result = await renderTurn({ text, turnId: `self_ref_${text}`, history });
+    assert.equal(result.nlu.intent, "clarification_request", text);
+    assert.notEqual(result.decision.action, "ask", text);
+    assert.match(result.rendered.text, /И милая|Не знаю даже|последн|реплик|реакц/iu, text);
+    assert.doesNotMatch(result.rendered.text, /потеряла|скажи чуть по-другому|объясни чуть иначе/iu, text);
+  }
 });
 
 await test("deictic short continuations retain the previous topic instead of becoming unknown", () => {
@@ -494,6 +513,259 @@ await test("character keeps an independent conversational stance", async () => {
   });
   assert.equal(interest.nlu.intent, "ask_relationship");
   assert.match(interest.rendered.text, /интерес|важ|не безразлич/iu);
+});
+
+await test("intimacy NLU is contextual and does not hijack ordinary desire", () => {
+  assert.equal(analyzeLocalNLU("Не хочу туда возвращаться").semantic.intimacy.kind, "none");
+  assert.equal(analyzeLocalNLU("Стоп").semantic.intimacy.kind, "stop");
+  assert.equal(analyzeLocalNLU("Не хочу быть ближе").semantic.intimacy.kind, "stop");
+  assert.equal(analyzeLocalNLU("Я не уверен, но хочу быть ближе").semantic.intimacy.kind, "hesitant");
+  const genericResume = analyzeLocalNLU("Можно продолжить").semantic.intimacy;
+  assert.equal(genericResume.kind, "resume");
+  assert.equal(genericResume.intimacyContext, false);
+  assert.equal(analyzeLocalNLU("После этого просто побудь рядом со мной").semantic.intimacy.kind, "aftercare");
+  assert.equal(analyzeLocalNLU("Просто обними меня и побудь рядом").semantic.intimacy.kind, "approach");
+  assert.equal(analyzeLocalNLU("Хочу тебя").semantic.intimacy.kind, "consent");
+});
+
+await test("intimacy short yes/no resolves only from an intimate previous turn", () => {
+  const intimateHistory = [
+    { role: "user", text: "Я не уверен, но хочу быть ближе", timestamp: NOW - 2000 },
+    { role: "character", text: "Не будем спешить.", timestamp: NOW - 1000, dialogueActs: ["INTIMACY_CHECKIN"] },
+  ];
+  const yes = analyzeLocalNLU("Да");
+  const resolvedYes = resolveContextualNLU(yes, buildDialogueFrame(intimateHistory, yes), "Да");
+  assert.equal(resolvedYes.semantic.intimacy.kind, "consent");
+  const no = analyzeLocalNLU("Нет");
+  const resolvedNo = resolveContextualNLU(no, buildDialogueFrame(intimateHistory, no), "Нет");
+  assert.equal(resolvedNo.semantic.intimacy.kind, "stop");
+
+  const ordinaryHistory = [
+    { role: "user", text: "Будешь чай?", timestamp: NOW - 2000 },
+    { role: "character", text: "Да, можно.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const ordinaryYes = resolveContextualNLU(yes, buildDialogueFrame(ordinaryHistory, yes), "Да");
+  assert.equal(ordinaryYes.semantic.intimacy.kind, "none");
+
+  const aftercareInput = analyzeLocalNLU("Просто обними меня и побудь рядом");
+  const aftercare = resolveContextualNLU(
+    aftercareInput,
+    buildDialogueFrame(intimateHistory, aftercareInput),
+    "Просто обними меня и побудь рядом",
+  );
+  assert.equal(aftercare.semantic.intimacy.kind, "aftercare");
+  assert.equal(aftercare.semantic.intimacy.intimacyContext, true);
+});
+
+await test("adult intimacy mode changes dialogue acts without replacing normal conversation", async () => {
+  const active = {
+    ...createInitialIntimacyState(NOW),
+    adultModeEnabled: true,
+    phase: "intimate",
+    interactionStatus: "open",
+    comfort: 0.82,
+    interest: 0.84,
+    arousal: 0.66,
+  };
+  const close = await renderTurn({
+    text: "Хочу тебя",
+    turnId: "intimacy_consent",
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.9, romanticInterest: 0.9 }),
+    intimacyState: active,
+  });
+  assert.ok(close.plan.dialogueActs.includes("INTIMACY_RECIPROCATE"));
+  assert.equal(close.rendered.templateId, "semantic.authoritative");
+  assert.match(close.rendered.text, /ближе|не спеш|хорошо/iu);
+
+  const pause = await renderTurn({
+    text: "Подожди, не спеши",
+    turnId: "intimacy_pause",
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.9, romanticInterest: 0.9 }),
+    intimacyState: active,
+  });
+  assert.ok(pause.plan.dialogueActs.includes("INTIMACY_PAUSE"));
+  assert.match(pause.rendered.text, /пауз|медлен|останов|спеш/iu);
+});
+
+await test("compound messages keep the secondary emotional need in the response plan", async () => {
+  const result = await renderTurn({
+    text: "Я устал, думаю увольняться, что мне теперь делать?",
+    turnId: "compound_support_and_advice",
+  });
+  assert.equal(result.nlu.intent, "ask_for_opinion");
+  assert.ok(result.nlu.secondaryIntents.includes("user_tired"), JSON.stringify(result.nlu.secondaryIntents));
+  assert.ok(result.plan.dialogueActs.includes("CARE"));
+  assert.ok(result.plan.dialogueActs.includes("ANSWER") || result.plan.dialogueActs.includes("CONTINUE_TOPIC"));
+  assertSafeText(result.rendered.text);
+});
+
+await test("strong internal emotion can leak into an otherwise ordinary reply", async () => {
+  const history = [
+    { role: "user", text: "Как день?", timestamp: NOW - 4000 },
+    { role: "character", text: "Нормально, просто было много мелочей.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Понял", timestamp: NOW - 2000 },
+    { role: "character", text: "Ага.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  const result = await renderTurn({
+    text: "Ну привет ещё раз",
+    turnId: "spontaneous_irritated_strong",
+    history,
+    relationshipState: relationship("close"),
+    emotionState: emotion({ irritation: 0.96, happiness: 0.2, curiosity: 0.55, affection: 0.58 }),
+  });
+  assert.equal(result.plan.spontaneousBeat?.kind, "emotion_flash");
+  assert.equal(result.plan.spontaneousBeat?.emotion, "irritated");
+  assert.match(result.rendered.templateId, /\|beat:emotion_flash$/u);
+  assert.match(result.rendered.text, /раздраж|вспылил|резче/iu);
+});
+
+await test("spontaneous beats have a real conversational cooldown", async () => {
+  const history = [
+    { role: "user", text: "Привет", timestamp: NOW - 4000 },
+    { role: "character", text: "Привет.", timestamp: NOW - 3000, templateId: "greeting|beat:emotion_flash" },
+    { role: "user", text: "Как ты?", timestamp: NOW - 2000 },
+    { role: "character", text: "Нормально.", timestamp: NOW - 1000, templateId: "state.answer" },
+  ];
+  const result = await renderTurn({
+    text: "Ясно",
+    turnId: "spontaneous_cooldown",
+    history,
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ irritation: 0.98, affection: 0.9 }),
+  });
+  assert.equal(result.plan.spontaneousBeat, undefined);
+  assert.doesNotMatch(result.rendered.templateId, /\|beat:/u);
+});
+
+await test("spontaneous initiative does not hijack a strong support turn", async () => {
+  const history = [
+    { role: "user", text: "Привет", timestamp: NOW - 4000 },
+    { role: "character", text: "Привет.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Как ты?", timestamp: NOW - 2000 },
+    { role: "character", text: "Нормально.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  const result = await renderTurn({
+    text: "Мне очень плохо и одиноко, просто побудь со мной",
+    turnId: "spontaneous_support_guard",
+    history,
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ irritation: 0.98, affection: 0.92, curiosity: 0.9 }),
+  });
+  assert.equal(result.plan.spontaneousBeat, undefined);
+  assert.doesNotMatch(result.rendered.templateId, /\|beat:/u);
+});
+
+await test("mixed feelings can surface as one nuanced reaction instead of a binary mood", async () => {
+  const history = [
+    { role: "user", text: "Я что-то тебя сегодня часто подкалываю", timestamp: NOW - 4000 },
+    { role: "character", text: "Я заметила.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Не злись", timestamp: NOW - 2000 },
+    { role: "character", text: "Пока не злюсь.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  const result = await renderTurn({
+    text: "Ты милая всё равно",
+    turnId: "spontaneous_mixed_bashful",
+    history,
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.96, anxiety: 0.86, happiness: 0.58, irritation: 0.08 }),
+  });
+  assert.equal(result.plan.spontaneousBeat?.kind, "mixed_emotion");
+  assert.equal(result.plan.spontaneousBeat?.emotion, "bashful");
+  assert.match(result.rendered.text, /тепло|смущ|смешан/iu);
+  assert.match(result.rendered.templateId, /\|beat:mixed_emotion$/u);
+});
+
+await test("adult intimacy can produce a non-explicit spontaneous intimate reaction", async () => {
+  const history = [
+    { role: "user", text: "Ты рядом?", timestamp: NOW - 4000 },
+    { role: "character", text: "Рядом.", timestamp: NOW - 3000, templateId: "old.one", dialogueActs: ["ANSWER"] },
+    { role: "user", text: "Иди ближе", timestamp: NOW - 2000 },
+    { role: "character", text: "Можно ближе.", timestamp: NOW - 1000, templateId: "old.two", dialogueActs: ["INTIMACY_APPROACH"] },
+  ];
+  const active = {
+    ...createInitialIntimacyState(NOW),
+    adultModeEnabled: true,
+    phase: "intimate",
+    interactionStatus: "open",
+    comfort: 0.9,
+    interest: 0.95,
+    arousal: 0.72,
+  };
+  const result = await renderTurn({
+    text: "Ты сейчас такая милая",
+    turnId: "spontaneous_intimacy_strong",
+    history,
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.96, romanticInterest: 0.98, anxiety: 0.08, happiness: 0.76 }),
+    intimacyState: active,
+  });
+  assert.equal(result.plan.spontaneousBeat?.kind, "intimate_flash");
+  assert.match(result.rendered.templateId, /\|beat:intimate_flash$/u);
+  assert.match(result.rendered.text, /близко|сбиваешь|реагирую|смутил|потеряла мысль/iu);
+});
+
+await test("curiosity can make Yuzuki move a conversation forward on her own", async () => {
+  const history = [
+    { role: "user", text: "Думаю кое-что поменять", timestamp: NOW - 4000 },
+    { role: "character", text: "Звучит как будто ты к этому давно идёшь.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Наверное", timestamp: NOW - 2000 },
+    { role: "character", text: "Может быть.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  let found = null;
+  for (let index = 0; index < 40 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Сегодня просто сижу дома",
+      turnId: `spontaneous_curiosity_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ curiosity: 0.99, boredom: 0.1, affection: 0.62, anxiety: 0.05 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "curiosity_push") found = result;
+  }
+  assert.ok(found, "expected at least one deterministic curiosity impulse across seeds");
+  assert.equal(found.plan.shouldAskQuestion, true);
+  assert.match(found.rendered.text, /\?/u);
+  assert.match(found.rendered.templateId, /\|beat:curiosity_push$/u);
+});
+
+await test("an unresolved remembered thread can reappear naturally in a quiet conversational opening", async () => {
+  const history = [
+    { role: "user", text: "Привет", timestamp: NOW - 4000 },
+    { role: "character", text: "Привет.", timestamp: NOW - 3000, templateId: "old.one" },
+    { role: "user", text: "Как ты?", timestamp: NOW - 2000 },
+    { role: "character", text: "Нормально.", timestamp: NOW - 1000, templateId: "old.two" },
+  ];
+  const memoryContext = {
+    ...EMPTY_MEMORY,
+    openThreads: [{
+      id: "thread_work_change",
+      topic: "work",
+      summary: "ты думал сменить работу и не решил, когда говорить с начальником",
+      priority: 1,
+      sourceEventIds: ["event_work"],
+      createdAt: NOW - 86_400_000,
+      updatedAt: NOW - 3_600_000,
+      lastTouchedAt: NOW - 3_600_000,
+      status: "open",
+    }],
+  };
+  let found = null;
+  for (let index = 0; index < 40 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Понял",
+      turnId: `memory_callback_${index}`,
+      history,
+      memoryContext,
+      relationshipState: relationship("deep"),
+      emotionState: emotion({ curiosity: 0.55, affection: 0.6, boredom: 0.12 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "memory_callback") found = result;
+  }
+  assert.ok(found, "expected a deterministic memory callback across seeds");
+  assert.match(found.rendered.text, /сменить работу|начальник|изменилось|разобрался|закончилось/iu);
+  assert.match(found.rendered.templateId, /\|beat:memory_callback$/u);
 });
 
 await test("anti-repetition varies twenty identical tiredness turns", async () => {

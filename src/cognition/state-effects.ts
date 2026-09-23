@@ -11,19 +11,47 @@ export interface CognitionStateEffects {
 export function inferStateEffects(
   perception: Perception,
   decision: CharacterDecision,
+  sourceIntent?: string,
 ): CognitionStateEffects {
   const emotion: EmotionDelta = { curiosity: 0.005 };
   const relationship: RelationshipDelta = {};
+
+  // Ordinary respectful conversation can slowly turn an acquaintance into a
+  // real friend. This is intentionally tiny; closeness should come from time
+  // and repeated interaction rather than from a single message.
+  const relationallySafe =
+    perception.tone !== "irritated" &&
+    perception.probableIntent !== "boundary" &&
+    !["refuse", "set_boundary", "show_irritation"].includes(decision.action);
+  if (relationallySafe) {
+    relationship.trust = 0.0008;
+    relationship.closeness = 0.0007;
+    relationship.security = 0.0006;
+  }
 
   if (perception.probableIntent === "affection" || perception.tone === "warm") {
     emotion.happiness = 0.035;
     emotion.affection = 0.02;
     emotion.irritation = -0.015;
-    relationship.closeness = 0.006;
-    relationship.trust = 0.003;
-    relationship.attachment = 0.004;
-    relationship.security = 0.002;
+    relationship.closeness = (relationship.closeness ?? 0) + 0.008;
+    relationship.trust = (relationship.trust ?? 0) + 0.004;
+    relationship.attachment = 0.005;
+    relationship.security = (relationship.security ?? 0) + 0.003;
     relationship.unresolvedTension = -0.003;
+  }
+
+
+  // Romance is not part of the starting relationship. It grows only from
+  // repeated, directed romantic signals. A generic compliment barely moves it;
+  // explicit flirting/affection moves it more, but still cannot jump stages.
+  if (sourceIntent === "flirt_character") {
+    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.02;
+    emotion.affection = (emotion.affection ?? 0) + 0.008;
+  } else if (sourceIntent === "affection_declaration") {
+    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.016;
+    emotion.affection = (emotion.affection ?? 0) + 0.012;
+  } else if (sourceIntent === "compliment_character") {
+    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.004;
   }
 
   if (perception.probableIntent === "apology") {

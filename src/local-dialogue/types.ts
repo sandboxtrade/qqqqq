@@ -2,6 +2,7 @@ import type { CharacterCore } from "../character/character";
 import type { CharacterDecision, Perception, ResponsePlan } from "../cognition/cognition-types";
 import type { EmotionalState } from "../emotions/emotions";
 import type { CharacterInitiative } from "../initiative/initiative";
+import type { IntimacySignal, IntimacySignalKind, IntimacyState } from "../intimacy/intimacy";
 import type { MemoryContext } from "../memory/model";
 import type { RelationshipState } from "../relationship/relationship";
 import type { RomanceState } from "../relationship/relationship";
@@ -47,6 +48,9 @@ export type SemanticStance =
   | "react"
   | "neutral";
 
+export type LocalIntimacySignalKind = IntimacySignalKind;
+export type LocalIntimacySignal = IntimacySignal;
+
 export interface LocalSemanticFrame {
   subject: SemanticSubject;
   stance: SemanticStance;
@@ -65,6 +69,8 @@ export interface LocalSemanticFrame {
   asksCharacterView: boolean;
   reciprocal: boolean;
   meaningfulTokens: number;
+  /** Local-only relationship/intimacy cue. It is contextual evidence, never consent by itself. */
+  intimacy: LocalIntimacySignal;
 }
 
 export interface LocalNLUResult {
@@ -115,7 +121,12 @@ export type DialogueAct =
   | "MISS_USER"
   | "CONTINUE_TOPIC"
   | "CLARIFY"
-  | "SHARE";
+  | "SHARE"
+  | "INTIMACY_APPROACH"
+  | "INTIMACY_RECIPROCATE"
+  | "INTIMACY_CHECKIN"
+  | "INTIMACY_PAUSE"
+  | "INTIMACY_AFTERCARE";
 
 export type DialogueGoal =
   | "support"
@@ -128,6 +139,7 @@ export type DialogueGoal =
   | "share"
   | "react"
   | "refuse"
+  | "intimacy"
   | "silence";
 
 export type DialogueTrigger =
@@ -142,6 +154,28 @@ export type DialogueTrigger =
 
 export type LocalResponseLength = "very_short" | "short" | "medium" | "long";
 
+export type SpontaneousBeatKind =
+  | "emotion_flash"
+  | "mixed_emotion"
+  | "affection_flash"
+  | "curiosity_push"
+  | "memory_callback"
+  | "world_share"
+  | "playful_swerve"
+  | "intimate_flash";
+
+export interface SpontaneousBeat {
+  kind: SpontaneousBeatKind;
+  strength: number;
+  placement: "before" | "after";
+  /** Small semantic label used by the renderer; never treated as a fact. */
+  emotion?: "happy" | "irritated" | "sad" | "anxious" | "bashful" | "curious";
+  /** Grounded detail from an open thread/world event/current topic. */
+  detail?: string;
+  sourceId?: string;
+  asksQuestion?: boolean;
+}
+
 export interface CharacterResponsePlan {
   trigger: DialogueTrigger;
   sourceIntent: string;
@@ -152,10 +186,12 @@ export interface CharacterResponsePlan {
   tone: string[];
   relationshipLevel: RelationshipState["stage"];
   intimacyLevel?: number;
+  intimacyPhase?: IntimacyState["phase"];
   energy: number;
   responseLength: LocalResponseLength;
   shouldAskQuestion: boolean;
   topic?: string;
+  spontaneousBeat?: SpontaneousBeat;
   semanticPayload?: Record<string, string | number | boolean | null | undefined>;
   decision: CharacterDecision;
   responsePlan: ResponsePlan;
@@ -170,6 +206,7 @@ export interface DialogueFrame {
   referencedEntities: string[];
   turnsOnTopic: number;
   previousUserText?: string;
+  previousUserTextBeforeLast?: string;
   previousCharacterText?: string;
 }
 
@@ -191,6 +228,7 @@ export interface DialogueContext {
   relationship: RelationshipState;
   world: WorldState;
   romance?: RomanceState;
+  intimacy?: IntimacyState;
   memoryContext: MemoryContext;
   history: DialogueHistoryLine[];
   nlu: LocalNLUResult;

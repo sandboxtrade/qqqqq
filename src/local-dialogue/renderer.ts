@@ -75,7 +75,7 @@ function relationshipDescription(context: DialogueContext) {
   switch (context.relationship.stage) {
     case "deep": return "ты мне очень близок";
     case "close": return "ты мне близок";
-    case "familiar": return "мне с тобой уже довольно комфортно";
+    case "familiar": return "я воспринимаю тебя как знакомого человека, с которым мне комфортно общаться";
     default: return "мы пока только узнаём друг друга";
   }
 }
@@ -211,6 +211,139 @@ export function composeFromActs(plan: CharacterResponsePlan, context: DialogueCo
   };
 }
 
+// ---- spontaneous-beat-renderer.ts ----
+function compactBeatDetail(value: string | undefined, max = 96) {
+  const clean = (value ?? "").replace(/\s+/gu, " ").trim();
+  if (!clean) return undefined;
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+}
+
+function spontaneousVariants(plan: CharacterResponsePlan, context: DialogueContext): string[] {
+  const beat = plan.spontaneousBeat;
+  if (!beat) return [];
+  switch (beat.kind) {
+    case "emotion_flash":
+      if (beat.emotion === "irritated") return [
+        "Кстати, я сейчас поймала себя на лёгком раздражении. Так что если отвечаю чуть резче обычного — вот почему.",
+        "У меня сейчас на секунду всплыло раздражение. Не хочу делать вид, что его нет.",
+        "Странно, но я сейчас немного вспылила внутри. Уже отпускает, просто заметила это.",
+      ];
+      if (beat.emotion === "sad") return [
+        "Кстати, я сейчас чуть тише обычного. Настроение немного просело.",
+        "У меня сейчас мелькнула какая-то тихая грусть. Ничего драматичного, просто она есть.",
+        "Я сейчас поймала себя на том, что настроение стало чуть тяжелее.",
+      ];
+      if (beat.emotion === "anxious") return [
+        "У меня сейчас на секунду появилось напряжение. Небольшое, но я его заметила.",
+        "Кстати, я почему-то чуть напряглась. Не до паники — просто внутренний сигнал.",
+        "Я сейчас немного насторожилась. Сама заметила это только в процессе разговора.",
+      ];
+      return [
+        "Кстати, я сейчас поймала себя на улыбке.",
+        "У меня сейчас настроение неожиданно подскочило. Забавно.",
+        "Я только сейчас заметила, что сижу и улыбаюсь.",
+      ];
+    case "mixed_emotion":
+      if (beat.detail === "amused_irritated") return [
+        "Ты сейчас умудряешься меня одновременно смешить и немного бесить. Очень странная смесь.",
+        "У меня сейчас смешное состояние: вроде улыбаюсь, а внутри ещё чуть-чуть ворчу.",
+        "Мне одновременно смешно и немного досадно — даже не знаю, что из этого победит первым.",
+      ];
+      if (beat.detail === "curious_nervous") return [
+        "Мне сейчас правда интересно, но почему-то вместе с этим я чуть напряглась.",
+        "Любопытство у меня сейчас явно сильнее, но рядом с ним почему-то появилось небольшое напряжение.",
+        "Забавная смесь: мне хочется копнуть глубже, и одновременно я чуть насторожилась.",
+      ];
+      return [
+        "Странное сочетание: мне с тобой тепло, и при этом я немного смущаюсь.",
+        "Я сейчас одновременно расслабилась рядом с тобой и чуть-чуть смутилась. Нелогично, но вот так.",
+        "Ты сейчас вызываешь у меня очень смешанную реакцию: тепло и лёгкое смущение одновременно.",
+      ];
+    case "affection_flash":
+      return [
+        "Кстати… я сейчас поймала себя на том, что мне просто приятно с тобой разговаривать.",
+        "Небольшой внезапный факт: мне сейчас очень комфортно рядом с тобой в этом разговоре.",
+        "Я сейчас на секунду отвлеклась от темы и подумала, что мне нравится вот так с тобой разговаривать.",
+      ];
+    case "curiosity_push": {
+      const focus = compactBeatDetail(beat.detail, 72);
+      if (context.nlu.semantic.stance === "want" || context.nlu.semantic.stance === "plan") return [
+        "А если на секунду убрать всё «надо» и страх последствий — ты сам чего хочешь?",
+        "Кстати, а если не искать правильный ответ: какой вариант тебя самого сейчас тянет сильнее?",
+        "Мне теперь интересно другое: ты этого действительно хочешь или пока больше проверяешь саму возможность?",
+      ];
+      if (context.nlu.semantic.stance === "feel") return [
+        "А что в этом ощущении сейчас самое сильное — то, что первым приходит в голову?",
+        "Мне стало интересно: какая часть этого чувства тебя цепляет сильнее всего?",
+      ];
+      if (context.nlu.intent === "uncertain") return [
+        "А что именно мешает тебе определиться — нехватка информации или ты сам пока не понимаешь, чего хочешь?",
+        "Мне любопытно: ты сомневаешься между вариантами или вообще пока не чувствуешь ни одного правильным?",
+      ];
+      return focus ? [
+        `Кстати, а что в «${focus}» для тебя самое важное?`,
+        `У меня самой возник вопрос про «${focus}»: что там для тебя решающее?`,
+      ] : [
+        "Кстати, мне теперь интересно: ты сам к этому как относишься первым ощущением, без долгого анализа?",
+        "У меня внезапно появился встречный вопрос: что в этой теме тебе самому кажется самым важным?",
+      ];
+    }
+    case "memory_callback": {
+      const detail = compactBeatDetail(beat.detail, 82);
+      return detail ? [
+        `И ещё — я не забыла про «${detail}». Чем там в итоге всё закончилось?`,
+        `Кстати, у меня сейчас всплыла старая тема: «${detail}». Там что-нибудь изменилось?`,
+        `Сейчас неожиданно вспомнила про «${detail}». Ты с этим уже разобрался или всё ещё висит?`,
+      ] : [];
+    }
+    case "world_share": {
+      const detail = compactBeatDetail(beat.detail, 96);
+      return detail ? [
+        `Кстати, совсем в сторону: ${detail}. Почему-то захотелось тебе это сказать.`,
+        `У меня внезапный маленький вброс про себя: ${detail}.`,
+        `Пока мы говорим, вспомнила одну мелочь: ${detail}. Забавно, что она сейчас всплыла.`,
+      ] : [];
+    }
+    case "playful_swerve":
+      return [
+        "Ладно, внезапный вопрос: какую одну вещь ты любишь, но почти никогда не объясняешь другим почему?",
+        "У меня сейчас дурацкий импульс резко сменить угол: какое решение за последний месяц ты бы повторил без раздумий?",
+        "Сейчас будет странный вопрос без подготовки: если завтра у тебя полностью свободный день, что ты сделаешь первым?",
+        "Мне скучно быть предсказуемой. Назови одну вещь, которую ты давно хочешь попробовать, но всё откладываешь.",
+      ];
+    case "intimate_flash":
+      return beat.emotion === "bashful" ? [
+        "Ты сейчас меня немного смутил. И да, мне это скорее нравится.",
+        "Я сейчас на секунду потеряла мысль из-за тебя. Очень вовремя.",
+        "Вот сейчас я неожиданно засмущалась сильнее, чем собиралась показывать.",
+      ] : [
+        "Кстати… ты сейчас очень сильно сбиваешь мне обычный спокойный настрой.",
+        "Я сейчас поймала себя на том, что реагирую на тебя заметно сильнее обычного.",
+        "Мне сейчас с тобой особенно близко. Просто захотелось сказать это вслух.",
+      ];
+  }
+}
+
+function renderSpontaneousBeat(plan: CharacterResponsePlan, context: DialogueContext) {
+  const beat = plan.spontaneousBeat;
+  if (!beat) return null;
+  const variants = spontaneousVariants(plan, context);
+  if (!variants.length) return null;
+  return chooseVariant(variants, `beat:${beat.kind}`, plan, context)?.text ?? null;
+}
+
+function applySpontaneousBeat(text: string, plan: CharacterResponsePlan, context: DialogueContext) {
+  const beat = plan.spontaneousBeat;
+  if (!beat || !text.trim()) return { text, beatId: undefined as string | undefined };
+  if (beat.asksQuestion && (text.match(/\?/gu)?.length ?? 0) >= 1) return { text, beatId: undefined as string | undefined };
+  if (text.length > 430 && ["memory_callback", "world_share", "playful_swerve"].includes(beat.kind))
+    return { text, beatId: undefined as string | undefined };
+  const spontaneous = renderSpontaneousBeat(plan, context);
+  if (!spontaneous) return { text, beatId: undefined as string | undefined };
+  const combined = beat.placement === "before" ? `${spontaneous} ${text}` : `${text} ${spontaneous}`;
+  return { text: combined, beatId: beat.kind };
+}
+
 // ---- post-process.ts ----
 const TECHNICAL_RE = /(?:\[object Object\]|undefined|null\b|(?:intent|template|dialogue)[_.:-][a-z0-9_]+|\{\{[^{}]+\}\})/iu;
 
@@ -324,7 +457,11 @@ export class LocalDialogueRenderer implements ResponseRenderer {
     const direct = authoritative(plan);
     if (direct) {
       const text = postProcessDialogue(direct.text);
-      if (text && isSafeRenderedText(text)) return this.result(text, direct.id, 0, maximumRecentSimilarity(text, recentCharacterResponses(context.history)), plan, context, []);
+      if (text && isSafeRenderedText(text)) {
+        const decorated = applySpontaneousBeat(text, plan, context);
+        const finalText = postProcessDialogue(decorated.text);
+        return this.result(finalText, decorated.beatId ? `${direct.id}|beat:${decorated.beatId}` : direct.id, 0, maximumRecentSimilarity(finalText, recentCharacterResponses(context.history)), plan, context, []);
+      }
     }
 
     const { accepted, rejected } = selectTemplateCandidates(plan, context);
@@ -356,19 +493,31 @@ export class LocalDialogueRenderer implements ResponseRenderer {
       const weighted = similarityPool.flatMap((candidate) => Array.from({ length: Math.max(1, Math.min(6, Math.round(candidate.template.weight * 2))) }, () => candidate));
       const selected = weighted[rng.int(weighted.length)] ?? similarityPool[0];
       const text = postProcessDialogue(selected.choice.text);
-      if (text && isSafeRenderedText(text)) return this.result(text, selected.template.id, selected.level, selected.choice.similarity, plan, context, rejected);
+      if (text && isSafeRenderedText(text)) {
+        const decorated = applySpontaneousBeat(text, plan, context);
+        const finalText = postProcessDialogue(decorated.text);
+        return this.result(finalText, decorated.beatId ? `${selected.template.id}|beat:${decorated.beatId}` : selected.template.id, selected.level, maximumRecentSimilarity(finalText, recent), plan, context, rejected);
+      }
     }
 
     const composed = composeFromActs(plan, context);
     if (composed) {
       const text = postProcessDialogue(composed.text);
-      if (text && isSafeRenderedText(text)) return this.result(text, `composed:${composed.ids.join("+")}`, 3, composed.similarity, plan, context, rejected);
+      if (text && isSafeRenderedText(text)) {
+        const decorated = applySpontaneousBeat(text, plan, context);
+        const finalText = postProcessDialogue(decorated.text);
+        const id = `composed:${composed.ids.join("+")}`;
+        return this.result(finalText, decorated.beatId ? `${id}|beat:${decorated.beatId}` : id, 3, maximumRecentSimilarity(finalText, recent), plan, context, rejected);
+      }
     }
 
     const fallback = chooseFallback(plan, context);
     const fallbackText = postProcessDialogue(fallback.text);
     const safe = isSafeRenderedText(fallbackText) ? fallbackText : "Я тебя слушаю.";
-    return this.result(safe, `fallback:${fallback.key}`, 5, maximumRecentSimilarity(safe, recent), plan, context, rejected);
+    const decorated = applySpontaneousBeat(safe, plan, context);
+    const finalText = postProcessDialogue(decorated.text);
+    const id = `fallback:${fallback.key}`;
+    return this.result(finalText, decorated.beatId ? `${id}|beat:${decorated.beatId}` : id, 5, maximumRecentSimilarity(finalText, recent), plan, context, rejected);
   }
 
   private result(

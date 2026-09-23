@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AppCheckState } from "../storage/firebase";
 import type { AuthProfile } from "../storage/auth";
 import type { RuntimeTrace } from "../engine/runtime";
+import type { IntimacyPhase } from "../intimacy/intimacy";
 import { DebugPanel } from "./components";
 
 const appCheckLabels: Record<AppCheckState, string> = {
@@ -11,6 +12,16 @@ const appCheckLabels: Record<AppCheckState, string> = {
   debug: "debug mode",
   active: "защищён",
   error: "ошибка",
+};
+
+const intimacyPhaseLabels: Record<IntimacyPhase, string> = {
+  normal: "спокойно",
+  romantic: "романтика",
+  close: "близость",
+  intimate: "интимно",
+  high_intimacy: "сильное влечение",
+  aftercare: "нежность",
+  paused: "пауза",
 };
 
 export function SettingsScreen({
@@ -23,6 +34,10 @@ export function SettingsScreen({
   clearingData,
   resetDisabled,
   maintenanceError,
+  intimacyEnabled,
+  intimacyPhase,
+  intimacyUpdating,
+  onSetIntimacyEnabled,
 }: {
   firebaseEnabled: boolean;
   appCheckState: AppCheckState;
@@ -33,8 +48,13 @@ export function SettingsScreen({
   clearingData: boolean;
   resetDisabled: boolean;
   maintenanceError: string | null;
+  intimacyEnabled: boolean;
+  intimacyPhase: IntimacyPhase;
+  intimacyUpdating: boolean;
+  onSetIntimacyEnabled: (enabled: boolean) => Promise<void>;
 }) {
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmAdultMode, setConfirmAdultMode] = useState(false);
   return (
     <section className="panel-screen settings-screen">
       <div className="section-heading">
@@ -64,6 +84,48 @@ export function SettingsScreen({
         <div className="setting-row">
           <span>Аккаунт</span>
           <strong>{user?.email ?? "не используется"}</strong>
+        </div>
+      </div>
+      <div className="settings-intimacy-zone">
+        <div className="settings-intimacy-copy">
+          <strong>Интимный режим 18+</strong>
+          <span>
+            Подключает отдельный intimacy-state к Local Brain: близость развивается постепенно, учитывает отношения, настроение, приватность и текущие границы. Стоп и пауза имеют безусловный приоритет.
+          </span>
+        </div>
+        <div className="settings-intimacy-status">
+          <span>{intimacyEnabled ? `включён · ${intimacyPhaseLabels[intimacyPhase]}` : "выключен"}</span>
+          {intimacyEnabled ? (
+            <button
+              type="button"
+              disabled={intimacyUpdating || clearingData}
+              onClick={() => void onSetIntimacyEnabled(false)}
+            >
+              {intimacyUpdating ? "Сохраняем…" : "Выключить"}
+            </button>
+          ) : !confirmAdultMode ? (
+            <button
+              type="button"
+              disabled={intimacyUpdating || clearingData}
+              onClick={() => setConfirmAdultMode(true)}
+            >
+              Включить
+            </button>
+          ) : (
+            <div className="intimacy-confirmation" role="alert">
+              <span>Режим предназначен только для взрослых пользователей.</span>
+              <div>
+                <button type="button" disabled={intimacyUpdating} onClick={() => setConfirmAdultMode(false)}>Отмена</button>
+                <button
+                  type="button"
+                  disabled={intimacyUpdating}
+                  onClick={() => void onSetIntimacyEnabled(true).finally(() => setConfirmAdultMode(false))}
+                >
+                  {intimacyUpdating ? "Сохраняем…" : "Мне 18+ · включить"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {trace?.timings && (

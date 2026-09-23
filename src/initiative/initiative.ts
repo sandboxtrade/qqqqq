@@ -5,6 +5,7 @@
 import type { CharacterCore } from "../character/character";
 import type { EmotionalState } from "../emotions/emotions";
 import type { OpenThread } from "../memory/model";
+import type { IntimacyState } from "../intimacy/intimacy";
 import { canInitiateRomance, type RelationshipState, type RomanceState } from "../relationship/relationship";
 import type { CompanionRepository } from "../storage/repositories/interfaces";
 import { calendarDateKey, type WorldState } from "../world/world";
@@ -88,6 +89,34 @@ function initiativeFromThread(
   );
 }
 
+function worldEventDialogueTopic(event: WorldState["recentEvents"][number], world: WorldState) {
+  if (event.kind === "small_win" || world.currentActivity === "personal_project")
+    return "У меня сегодня неожиданно хорошо пошло одно моё дело, и я до сих пор тихо этому радуюсь.";
+  if (event.kind === "reflection" || world.currentActivity === "reading")
+    return "Я сегодня зацепилась за одну мысль из того, что читала, и она всё ещё крутится в голове.";
+  if (world.currentActivity === "cafe_break")
+    return "Я сегодня ненадолго выбралась в кафе просто сменить картинку перед глазами. Почему-то реально помогло.";
+  if (world.currentActivity === "walk")
+    return "Я немного прошлась и только потом заметила, насколько мне нужно было проветрить голову.";
+  if (event.kind === "minor_annoyance")
+    return "Меня сегодня совершенно нелепо раздражала одна бытовая мелочь. Уже смешно вспоминать.";
+  return "У меня сегодня был один маленький момент, который почему-то застрял в голове.";
+}
+
+function spontaneousThoughtTopic(emotion: EmotionalState, world: WorldState) {
+  if (emotion.affection > 0.76)
+    return "Я тут поймала себя на мысли: мне нравятся разговоры, в которых не нужно постоянно производить впечатление. Просто быть собой почему-то гораздо приятнее.";
+  if (emotion.anxiety > 0.52)
+    return "Я заметила за собой странную вещь: когда немного нервничаю, начинаю мысленно перебирать варианты по кругу, даже если новых данных уже нет. У тебя так бывает?";
+  if (emotion.boredom > 0.48)
+    return "Мне сейчас захотелось задать тебе абсолютно случайный вопрос: что ты давно хочешь попробовать, но всё время откладываешь?";
+  if (world.currentActivity === "reading")
+    return "У меня после чтения осталась одна мысль: почему некоторые идеи цепляются сразу, а другие понимаешь только через пару дней?";
+  if (world.currentActivity === "personal_project")
+    return "Я сейчас подумала, что у любой своей идеи самый неприятный момент — когда надо перестать её улучшать в голове и наконец проверить в реальности.";
+  return "У меня внезапная мысль: иногда первый внутренний ответ на вопрос честнее того, который мы потом долго пытаемся сделать правильным.";
+}
+
 export async function refreshInitiatives(
   repository: CompanionRepository,
   character: CharacterCore,
@@ -96,6 +125,7 @@ export async function refreshInitiatives(
   world: WorldState,
   now = Date.now(),
   romance?: RomanceState,
+  intimacy?: IntimacyState,
 ) {
   const [existing, threads] = await Promise.all([
     repository.listInitiatives(),
@@ -107,8 +137,10 @@ export async function refreshInitiatives(
     (now - world.lastUserInteractionAt) / HOUR,
   );
   const romanceAvailable = canInitiateRomance(character, emotion, relationship, world, romance, now);
+  const intimacyPaused = intimacy?.adultModeEnabled === true &&
+    (intimacy.phase === "paused" || ["paused", "stopped"].includes(intimacy.interactionStatus));
   for (const initiative of existing) {
-    if (initiative.status === "pending" && initiative.dedupeKey.startsWith("romance:") && !romanceAvailable) {
+    if (initiative.status === "pending" && initiative.dedupeKey.startsWith("romance:") && (!romanceAvailable || intimacyPaused)) {
       await repository.saveInitiative({ ...initiative, status: "dismissed" });
       initiative.status = "dismissed";
       continue;
@@ -176,7 +208,7 @@ export async function refreshInitiatives(
     additions.push(
       candidate(
         "share_world_event",
-        shareable.summary,
+        worldEventDialogueTopic(shareable, world),
         "Something happened in her own day that is worth sharing if conversation opens naturally.",
         0.42 + shareable.shareWorthiness * 0.25,
         now,
@@ -237,7 +269,7 @@ export async function refreshInitiatives(
     additions.push(
       candidate(
         "share_thought",
-        "Bring up a small thought or question of her own instead of waiting to be prompted.",
+        spontaneousThoughtTopic(emotion, world),
         "Her curiosity is high enough that she would plausibly introduce a topic herself.",
         0.32 + emotion.curiosity * 0.18,
         now,
@@ -249,10 +281,13 @@ export async function refreshInitiatives(
     );
   }
 
-  if (hoursSinceUser >= 1 && canInitiateRomance(character, emotion, relationship, world, romance, now) &&
+  if (hoursSinceUser >= 1 && romanceAvailable && !intimacyPaused &&
       !dedupe.has(`romance:${calendarDateKey(now, world.timeZone)}`)) {
+    const intimateWarmth = intimacy?.adultModeEnabled === true
+      ? Math.min(0.12, intimacy.initiativeDrive * 0.12)
+      : 0;
     additions.push(candidate("affectionate_checkin", "Сказать, что ей приятно общаться с ним; лёгкий комплимент без давления, обещаний действий или смены образа.",
-      "Warm relationship and current availability support a gentle romantic initiative.", 0.61, now,
+      "Warm relationship and current availability support a gentle romantic initiative.", 0.61 + intimateWarmth, now,
       `romance:${calendarDateKey(now, world.timeZone)}`, [], 0, 2));
   }
   for (const initiative of additions)
@@ -293,17 +328,19 @@ export async function markInitiativeSurfaced(
 export function renderLocalInitiative(initiative: CharacterInitiative) {
   switch (initiative.kind) {
     case "continue_thread":
-      return `Кстати, я всё ещё помню ту незакрытую тему: ${initiative.topic}`;
+      return `Кстати, я сейчас вспомнила про «${initiative.topic}». Там что-нибудь изменилось?`;
     case "share_world_event":
-      return `У меня сегодня случилась одна мелочь, о которой почему-то хочется тебе рассказать.`;
+      return initiative.topic;
     case "suggest_activity":
-      return "У меня сейчас спокойный вечер. Я бы не отказалась что-нибудь посмотреть вместе.";
+      return "У меня сейчас спокойный вечер. Я бы не отказалась что-нибудь посмотреть вместе. Есть настроение на такое?";
     case "affectionate_checkin":
-      return "Ты куда-то пропал. Просто решила проверить, как ты.";
+      return initiative.reason.includes("romantic")
+        ? "Просто внезапно захотелось сказать: мне сейчас очень тепло от мысли о тебе. Без повода."
+        : "Привет. Просто захотелось узнать, как ты. Без повода.";
     case "share_thought":
-      return "У меня тут появилась одна мысль. Потом напомни мне её не потерять.";
+      return initiative.topic;
     case "ask_about_user":
-      return "У меня к тебе есть один вопрос, который я давно не задавала.";
+      return "У меня внезапный вопрос к тебе: что тебя в последнее время по-настоящему увлекло?";
     default:
       return "Я сама хотела тебе кое-что сказать.";
   }

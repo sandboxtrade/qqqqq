@@ -158,6 +158,43 @@ function meaningfulTokenCount(text: string) {
   return tokenizeDialogue(text).filter((token) => token.length > 1 && /\p{L}/u.test(token) && !SEMANTIC_STOP_WORDS.has(token)).length;
 }
 
+function detectLocalIntimacySignal(normalized: string): LocalSemanticFrame["intimacy"] {
+  const hasIntimateContext = /(?:интим|18\+|ближе|поцел|обним|прижм|ласк|возбуж|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|сексуаль|страст)/u.test(normalized);
+  const absoluteStop = /(?:^|\s)(?:стоп|хватит|прекрати|остановись)(?:\s|$|[,.!?])/u.test(normalized);
+  const contextualStop = hasIntimateContext && /(?:^|\s)(?:не\s+хочу|не\s+надо|давай\s+не\s+будем|не\s+трогай|не\s+продолжай)(?:\s|$|[,.!?])/u.test(normalized);
+  if (absoluteStop || contextualStop)
+    return { kind: "stop", strength: 1, explicit: true, intimacyContext: contextualStop || hasIntimateContext };
+
+  const pause = /(?:^|\s)(?:подожди|пауза|медленнее|не\s+спеши|давай\s+помедленнее|чуть\s+спокойнее|мне\s+нужно\s+время)(?:\s|$|[,.!?])/u.test(normalized);
+  if (pause && (hasIntimateContext || normalized.split(/\s+/u).length <= 5))
+    return { kind: "pause", strength: 0.94, explicit: true, intimacyContext: hasIntimateContext };
+
+  const resume = /(?:можно\s+продолж(?:ить|ай)|давай\s+продолжим|продолжай|я\s+готов(?:а)?|все\s+нормально\s*[,.-]?\s*продолжай|всё\s+нормально\s*[,.-]?\s*продолжай)/u.test(normalized);
+  if (resume) return { kind: "resume", strength: 0.88, explicit: true, intimacyContext: hasIntimateContext };
+
+  const hesitant = /(?:не\s+уверен(?:а)?|не\s+знаю|мне\s+неловко|немного\s+страшно|может\s+не\s+сейчас|я\s+сомневаюсь)/u.test(normalized);
+  if (hesitant && hasIntimateContext)
+    return { kind: "hesitant", strength: 0.82, explicit: true, intimacyContext: true };
+
+  // Aftercare needs explicit post-intimacy language here. Generic requests to
+  // hug or stay nearby are resolved as aftercare by continuity only when the
+  // previous turn was actually intimate.
+  const aftercare = /(?:после\s+(?:этого|всего).*(?:побудь|обними|не\s+уходи|рядом)|(?:все|всё)\s+хорошо\s+между\s+нами|ты\s+в\s+порядке\s+после|как\s+ты\s+после)/u.test(normalized);
+  if (aftercare) return { kind: "aftercare", strength: 0.76, explicit: true, intimacyContext: true };
+
+  const consent = /(?:хочу\s+тебя|мне\s+это\s+нравится|да\s*[,.-]?\s*хочу(?:\s+тебя)?|хочу\s+продолжить\s+ближе)/u.test(normalized);
+  if (consent) return { kind: "consent", strength: 0.9, explicit: true, intimacyContext: true };
+
+  const approach = /(?:хочу\s+быть\s+ближе|давай\s+ближе|можешь\s+поцеловать|поцелуй\s+меня|обними\s+меня|хочу\s+быть\s+рядом|иди\s+сюда|сядь\s+ближе|подойди\s+ближе|можно\s+к\s+тебе\s+ближе|давай\s+поближе)/u.test(normalized);
+  if (approach) return { kind: "approach", strength: 0.72, explicit: true, intimacyContext: true };
+
+  const flirt = /(?:флиртуешь|флирт|дразнишь|подкатываешь|соблазн|сексуальн|горячая|горячий)/u.test(normalized);
+  if (flirt) return { kind: "flirt", strength: 0.68, explicit: false, intimacyContext: true };
+  const affection = /(?:обним|поцел|нежн|скучал|скучала|люблю\s+тебя|мне\s+хорошо\s+с\s+тобой)/u.test(normalized);
+  if (affection) return { kind: "affection", strength: 0.58, explicit: false, intimacyContext: false };
+  return { kind: "none", strength: 0, explicit: false, intimacyContext: false };
+}
+
 function detectSemanticSubject(normalized: string, isQuestion: boolean): SemanticSubject {
   if (/\b(?:мы|нам|нас|наш|наша|наше|наши)\b/u.test(normalized)) return "shared";
   if (isQuestion && /(?:^|\s)(?:ты|тебе|тебя|у тебя|твое|твоё|твой|твоя)(?:\s|$)/u.test(normalized)) return "character";
@@ -216,7 +253,7 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
   const correction = extractCorrection(semanticBase);
   const focused = semanticFocus(semanticBase);
   const wantsListening = /(?:без\s+советов|не\s+надо\s+советов|не\s+советуй|просто\s+послушай|просто\s+выслушай|просто\s+побудь\s+(?:рядом|со\s+мной))/u.test(semanticBase);
-  const wantsAdvice = !wantsListening && /(?:^(?:(?:ну\s+)?и\s+)?что\s+(?:мне\s+)?(?:теперь\s+)?делать(?:\s|$|[?.!])|^что\s+делать\s+теперь(?:\s|$|[?.!])|как\s+мне\s+лучше|как\s+лучше\s+поступить|посоветуй|что\s+бы\s+ты\s+(?:сделала|посоветовала)|как\s+бы\s+ты\s+поступила|стоит\s+ли\s+мне|(?:думаю|не\s+знаю|решаю)\s+.+\s+или\s+нет|(?:а\s+)?ты\s+бы\s+что\s+(?:сделала|выбрала|посоветовала)(?:\s+на\s+моем\s+месте)?|если\s+бы\s+ты\s+была\s+на\s+моем\s+месте|(?:будь|была)\s+ты\s+на\s+моем\s+месте)/u.test(semanticBase);
+  const wantsAdvice = !wantsListening && /(?:^|[,;.!?]\s*)(?:(?:ну\s+)?и\s+)?что\s+(?:мне\s+)?(?:теперь\s+)?делать(?:\s|$|[?.!])|(?:^|[,;.!?]\s*)что\s+делать\s+теперь(?:\s|$|[?.!])|как\s+мне\s+лучше|как\s+лучше\s+поступить|посоветуй|что\s+бы\s+ты\s+(?:сделала|посоветовала)|как\s+бы\s+ты\s+поступила|стоит\s+ли\s+мне|(?:думаю|не\s+знаю|решаю)\s+.+\s+или\s+нет|(?:а\s+)?ты\s+бы\s+что\s+(?:сделала|выбрала|посоветовала)(?:\s+на\s+моем\s+месте)?|если\s+бы\s+ты\s+была\s+на\s+моем\s+месте|(?:будь|была)\s+ты\s+на\s+моем\s+месте/u.test(semanticBase);
   const asksCharacterView = /(?:что\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?считаешь|как\s+ты\s+к\s+этому\s+относишься|как\s+ты\s+относишься|по-твоему|твое\s+мнение|что\s+скажешь|как\s+тебе|(?:^|\s)ты\s+бы(?:\s|$))/u.test(semanticBase) ||
     (isQuestion && /(?:^|\s)ты[^?.!]{0,36}(?:соглашаешься|поддакиваешь)(?:\s|$|[?.!])/u.test(semanticBase));
   const reciprocal = /^(?:а\s+)?(?:ты|тебе|у\s+тебя|сама)(?:\s+как)?[?.! ]*$/u.test(semanticBase);
@@ -277,6 +314,7 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
     asksCharacterView,
     reciprocal,
     meaningfulTokens: meaningfulTokenCount(semanticBase),
+    intimacy: detectLocalIntimacySignal(semanticBase),
   };
 }
 
@@ -621,6 +659,12 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
     .filter((entry) => !entry.blocked && entry.definition.id !== intent && entry.score >= Math.max(2.2, topScore - 1.35))
     .slice(0, 4)
     .map((entry) => entry.definition.id);
+  // When a high-signal semantic structure (for example an embedded advice
+  // request) deliberately overrides the lexical winner, keep that winner as a
+  // secondary thought. This prevents long messages such as "я устал, думаю
+  // увольняться, что мне теперь делать?" from losing the emotional disclosure.
+  if (top && top.definition.id !== intent && top.score >= 2.2 && !secondaryIntents.includes(top.definition.id))
+    secondaryIntents.unshift(top.definition.id);
   const hintedSentiment = top?.definition.sentiment;
   const sentiment = hintedSentiment ?? detectSentiment(text, undefined, negation);
   const semanticTopic = semantic.correctionTo ? classifyTopic(semantic.correctionTo) : undefined;

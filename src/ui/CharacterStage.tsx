@@ -33,8 +33,8 @@ const timeLabel: Record<string, string> = {
 };
 const relationshipLabel: Record<string, string> = {
   new: "знакомство",
-  familiar: "близко",
-  close: "очень близко",
+  familiar: "приятели",
+  close: "близкие",
   deep: "глубокая связь",
 };
 

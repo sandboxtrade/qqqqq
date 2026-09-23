@@ -155,7 +155,7 @@ const {
   encodeIntimacyPreferences,
   decodeIntimacyPreferences,
 } = await import("../src/storage/persistence-schema.ts");
-const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime } = await import(
+const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode } = await import(
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
@@ -165,6 +165,8 @@ const {
   createInitialIntimacyPreferences,
   evaluateIntimacyHardGate,
   isNeutralIntimacySceneId,
+  planIntimacyTurn,
+  currentIntimacyState,
 } = await import("../src/intimacy/intimacy.ts");
 const { defaultIntimacyCoreProfile } = await import(
   "../src/intimacy/intimacy.ts"
@@ -711,6 +713,44 @@ await test("world initiative falls through to the next shareable event", async (
   assert.ok(initiatives.some((i) => i.dedupeKey === "world:w-old"));
 });
 
+await test("paused intimacy suppresses proactive romantic check-ins without disabling ordinary initiatives", async () => {
+  const r = new InMemoryCompanionRepository();
+  const world = {
+    ...createInitialWorldState(now, "UTC"),
+    isAwake: true,
+    availability: "free",
+    currentLocation: "living_room",
+    timeOfDay: "evening",
+    lastUserInteractionAt: now - 2 * 60 * 60_000,
+  };
+  const closeRelationship = {
+    ...initialRelationshipState,
+    trust: 0.9,
+    closeness: 0.9,
+    attachment: 0.8,
+    security: 0.9,
+    stage: "deep",
+  };
+  const pausedIntimacy = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    phase: "paused",
+    interactionStatus: "stopped",
+  };
+  const initiatives = await refreshInitiatives(
+    r,
+    defaultCharacter,
+    { ...initialEmotionalState, energy: 0.7, affection: 0.8, romanticInterest: 0.75 },
+    closeRelationship,
+    world,
+    now,
+    initialRomance(now),
+    pausedIntimacy,
+  );
+  assert.equal(initiatives.some((item) => item.dedupeKey.startsWith("romance:")), false);
+  assert.ok(initiatives.some((item) => item.kind === "suggest_activity" || item.kind === "affectionate_checkin"));
+});
+
 await test("world energy invariant under call frequency", () => {
   const t = new Date(2026, 8, 22, 2).getTime();
   let w = createInitialWorldState(t),
@@ -1232,6 +1272,21 @@ await test("stay-silent turn commits locally without surfacing a character bubbl
     options.onChunk?.("Привет");
     return "Привет! Рада тебя видеть.";
   };
+});
+
+await test("relationship starts as familiar friendship without preloaded romance", () => {
+  assert.equal(initialRelationshipState.stage, "familiar");
+  assert.ok(initialRelationshipState.trust >= 0.35);
+  assert.ok(initialRelationshipState.closeness >= 0.3);
+  assert.ok(initialEmotionalState.romanticInterest <= 0.1);
+  const world = { ...createInitialWorldState(now), isAwake: true, availability: "free", currentLocation: "living_room" };
+  assert.equal(canInitiateRomance(defaultCharacter, initialEmotionalState, initialRelationshipState, world, initialRomance(now), now), false);
+
+  const flirt = cognitionFor("Ты очень милая");
+  const complimentEffects = inferStateEffects(flirt.perception, flirt.decision, "compliment_character");
+  const explicitFlirtEffects = inferStateEffects(flirt.perception, flirt.decision, "flirt_character");
+  assert.ok((complimentEffects.emotion.romanticInterest ?? 0) > 0);
+  assert.ok((explicitFlirtEffects.emotion.romanticInterest ?? 0) > (complimentEffects.emotion.romanticInterest ?? 0));
 });
 
 await test("relationship attachment can grow and security can recover", () => {
@@ -1809,6 +1864,187 @@ await test("current chat bootstrap does not auto-create intimacy state", async (
   await bootstrapRuntime("A", c.signal, now);
   assert.equal(await repository.loadIntimacyState(), null);
 });
+const intimacyTurnInput = (signal, previous = {
+  ...createInitialIntimacyState(now),
+  adultModeEnabled: true,
+  comfort: 0.86,
+  interest: 0.84,
+}) => ({
+  character: defaultCharacter,
+  previous,
+  signal,
+  emotion: {
+    ...initialEmotionalState,
+    energy: 0.82,
+    happiness: 0.66,
+    irritation: 0.02,
+    sadness: 0.02,
+    anxiety: 0.04,
+    affection: 0.9,
+    romanticInterest: 0.9,
+    updatedAt: now,
+  },
+  relationship: {
+    ...initialRelationshipState,
+    trust: 0.92,
+    closeness: 0.9,
+    attachment: 0.86,
+    security: 0.9,
+    respect: 0.9,
+    unresolvedTension: 0,
+    stage: "deep",
+    updatedAt: now,
+  },
+  world: {
+    ...createInitialWorldState(now, "UTC"),
+    isAwake: true,
+    availability: "free",
+    currentLocation: "bedroom",
+    updatedAt: now,
+  },
+  now,
+});
+await test("intimacy engine requires a current-turn cue and never escalates from old consent alone", () => {
+  const previous = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    phase: "close",
+    interactionStatus: "open",
+    comfort: 0.9,
+    interest: 0.9,
+    arousal: 0.78,
+    lastInteractionAt: now,
+  };
+  const result = planIntimacyTurn(intimacyTurnInput({ kind: "none", strength: 0, explicit: false }, previous));
+  assert.equal(result.state.phase, "close");
+  assert.equal(result.action, "none");
+});
+await test("generic stop or continue language cannot activate an idle intimacy state", () => {
+  const idle = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    comfort: 0.8,
+    interest: 0.8,
+  };
+  const stop = planIntimacyTurn(intimacyTurnInput({ kind: "stop", strength: 1, explicit: true, intimacyContext: false }, idle));
+  assert.equal(stop.state.phase, "normal");
+  assert.equal(stop.action, "none");
+  const resume = planIntimacyTurn(intimacyTurnInput({ kind: "resume", strength: 1, explicit: true, intimacyContext: false }, idle));
+  assert.equal(resume.state.phase, "normal");
+  assert.equal(resume.action, "none");
+});
+await test("affectionate approach is capped at close while explicit consent can progress further", () => {
+  const close = {
+    ...intimacyTurnInput({ kind: "approach", strength: 1, explicit: true }).previous,
+    phase: "close",
+    interactionStatus: "open",
+  };
+  const approached = planIntimacyTurn(intimacyTurnInput({ kind: "approach", strength: 1, explicit: true, intimacyContext: true }, close));
+  assert.equal(approached.state.phase, "close");
+  const consented = planIntimacyTurn(intimacyTurnInput({ kind: "consent", strength: 1, explicit: true, intimacyContext: true }, close));
+  assert.equal(consented.state.phase, "intimate");
+});
+await test("intimacy progresses at most one phase per explicit turn", () => {
+  let state = intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }).previous;
+  const phases = [];
+  for (let step = 0; step < 4; step += 1) {
+    const result = planIntimacyTurn(intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }, state));
+    state = result.state;
+    phases.push(state.phase);
+  }
+  assert.deepEqual(phases, ["romantic", "close", "intimate", "high_intimacy"]);
+  assert.equal(state.activeScene?.stageId, "stage.high_intimacy");
+});
+await test("intimacy privacy caps escalation at close", () => {
+  const previous = {
+    ...intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }).previous,
+    phase: "close",
+    interactionStatus: "open",
+  };
+  const input = intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }, previous);
+  input.world = { ...input.world, currentLocation: "cafe" };
+  const result = planIntimacyTurn(input);
+  assert.equal(result.state.phase, "close");
+  assert.equal(result.state.activeScene, null);
+});
+await test("intimacy stop and pause override gates and clear active scenes", () => {
+  const active = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: false,
+    phase: "high_intimacy",
+    interactionStatus: "open",
+    comfort: 0.9,
+    interest: 0.9,
+    arousal: 0.95,
+    initiativeDrive: 0.8,
+    activeScene: {
+      sceneId: "scene.private.default",
+      stageId: "stage.high_intimacy",
+      privacy: "fully_private",
+      startedAt: now,
+      updatedAt: now,
+    },
+  };
+  const stopped = planIntimacyTurn(intimacyTurnInput({ kind: "stop", strength: 1, explicit: true }, active));
+  assert.equal(stopped.action, "stop");
+  assert.equal(stopped.state.phase, "paused");
+  assert.equal(stopped.state.interactionStatus, "stopped");
+  assert.equal(stopped.state.activeScene, null);
+  assert.ok(stopped.state.cooldownUntil > now);
+  const paused = planIntimacyTurn(intimacyTurnInput({ kind: "pause", strength: 1, explicit: true }, active));
+  assert.equal(paused.action, "pause");
+  assert.equal(paused.state.interactionStatus, "paused");
+  assert.equal(paused.state.activeScene, null);
+});
+await test("intimacy resume respects cooldown and aftercare de-escalates arousal", () => {
+  const paused = {
+    ...intimacyTurnInput({ kind: "resume", strength: 1, explicit: true }).previous,
+    phase: "paused",
+    interactionStatus: "paused",
+    cooldownUntil: now + 5 * 60_000,
+    arousal: 0.8,
+  };
+  const early = planIntimacyTurn(intimacyTurnInput({ kind: "resume", strength: 1, explicit: true }, paused));
+  assert.equal(early.action, "check_in");
+  assert.equal(early.state.phase, "paused");
+  const cared = planIntimacyTurn(intimacyTurnInput({ kind: "aftercare", strength: 1, explicit: true }, { ...paused, cooldownUntil: now }));
+  assert.equal(cared.action, "aftercare");
+  assert.equal(cared.state.phase, "aftercare");
+  assert.ok(cared.state.arousal < paused.arousal);
+  assert.equal(cared.state.activeScene, null);
+});
+await test("stale intimacy decays back to normal without granting new intimacy", () => {
+  const old = {
+    ...createInitialIntimacyState(now - 60 * 60_000),
+    adultModeEnabled: true,
+    phase: "intimate",
+    interactionStatus: "open",
+    arousal: 0.9,
+    initiativeDrive: 0.7,
+    lastInteractionAt: now - 60 * 60_000,
+    updatedAt: now - 60 * 60_000,
+  };
+  const current = currentIntimacyState(old, now);
+  assert.equal(current.phase, "normal");
+  assert.equal(current.interactionStatus, "inactive");
+  assert.ok(current.arousal < old.arousal);
+  assert.ok(current.initiativeDrive < old.initiativeDrive);
+});
+await test("adult intimacy mode is explicit, persisted separately and reversible", async () => {
+  repository = new InMemoryCompanionRepository();
+  const controller = new AbortController();
+  const boot = await bootstrapRuntime("A", controller.signal, now);
+  const runtime = boot.state;
+  assert.equal(runtime.intimacy?.adultModeEnabled, false);
+  const enabled = await setIntimacyAdultMode("A", controller.signal, runtime, true);
+  assert.equal(enabled.intimacy?.adultModeEnabled, true);
+  assert.equal((await repository.loadIntimacyState())?.adultModeEnabled, true);
+  const disabled = await setIntimacyAdultMode("A", controller.signal, enabled, false);
+  assert.equal(disabled.intimacy?.adultModeEnabled, false);
+  assert.equal(disabled.intimacy?.phase, "normal");
+  assert.equal(disabled.intimacy?.arousal, 0);
+});
+
 await test("CI and deploy workflows run the verification gates", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
@@ -1827,8 +2063,8 @@ await test("deadline settles a never-resolving request", async () => {
 const romanticInput = (text, previous = initialRomance(now)) => ({
   text, previous, now,
   character: defaultCharacter,
-  emotion: { ...initialEmotionalState, irritation: 0, sadness: 0, energy: 0.8 },
-  relationship: { ...initialRelationshipState, trust: 0.8, closeness: 0.8 },
+  emotion: { ...initialEmotionalState, irritation: 0, sadness: 0, energy: 0.8, romanticInterest: 0.78, affection: 0.76 },
+  relationship: { ...initialRelationshipState, trust: 0.8, closeness: 0.8, attachment: 0.72, security: 0.78, stage: "close" },
   world: { ...createInitialWorldState(now), isAwake: true, availability: "free", currentLocation: "living_room" },
   decision: { action: "answer", tone: "natural", rationale: "test", confidence: 1, shouldAskFollowUp: false, shouldReferenceMemory: false,
     content: { mode: "social", stance: "neutral", summary: "chat", reasons: [], locked: false, provenance: ["conversation"] } },
@@ -1918,7 +2154,7 @@ await test("Firestore snapshot codec preserves romance in the committed turn", a
   assert.equal(await r.getEvent("romance_conflict_reply"), null);
 });
 
-const { selectAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, resolveVisualEmotionState } = await import("../src/avatar/avatar-model.ts");
+const { selectAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
 const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
 const visualAssets = [baseAsset,
@@ -1977,6 +2213,39 @@ await test("visual emotion filenames use the fixed vocabulary and keep horny/hor
   assert.equal(parseVisualEmotionFilename("joy.5.1.png"), null);
   assert.equal(parseVisualEmotionFilename("happy.11.1.png"), null);
 });
+await test("mature visual emotions stay gated when adult intimacy mode is off", () => {
+  const base = romanticInput("");
+  const runtime = {
+    revision: 0,
+    emotion: {
+      ...base.emotion,
+      mood: 0.76, happiness: 0.6, energy: 1, anxiety: 0.02,
+      affection: 1, romanticInterest: 1, irritation: 0, sadness: 0,
+    },
+    relationship: {
+      ...base.relationship, trust: 1, closeness: 1, attachment: 1, security: 1,
+      respect: 1, unresolvedTension: 0, stage: "deep",
+    },
+    world: base.world,
+    romance: { ...initialRomance(now), phase: "private" },
+    intimacy: {
+      ...createInitialIntimacyState(now),
+      adultModeEnabled: false,
+      phase: "high_intimacy",
+      interactionStatus: "open",
+      comfort: 1, interest: 1, arousal: 1,
+    },
+  };
+  const context = {
+    decision: { ...base.decision, confidence: 0.9 },
+    responsePlan: base.plan,
+    dialogueActs: ["INTIMACY_RECIPROCATE"],
+    sourceIntent: "answer",
+    eventIntensity: 0.9,
+  };
+  const resolved = resolveVisualEmotionState(runtime, context).emotion;
+  assert.ok(!["intimate", "seductive", "passionate", "desiring", "horny", "hornys"].includes(resolved), resolved);
+});
 await test("horny and hornys are reachable as distinct internal versus outward states", () => {
   const base = romanticInput("");
   const runtime = {
@@ -1991,6 +2260,16 @@ await test("horny and hornys are reachable as distinct internal versus outward s
     },
     world: { ...base.world, connectionDrive: 0.1 },
     romance: { ...initialRomance(now), phase: "private" },
+    intimacy: {
+      ...createInitialIntimacyState(now),
+      adultModeEnabled: true,
+      phase: "high_intimacy",
+      interactionStatus: "open",
+      comfort: 1,
+      interest: 1,
+      arousal: 1,
+      initiativeDrive: 0.8,
+    },
   };
   const context = {
     decision: { ...base.decision, confidence: 0.8 },
@@ -1999,7 +2278,7 @@ await test("horny and hornys are reachable as distinct internal versus outward s
     eventIntensity: 0.7,
   };
   assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: [] }).emotion, "horny");
-  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: ["FLIRT"] }).emotion, "hornys");
+  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: ["INTIMACY_RECIPROCATE"] }).emotion, "hornys");
 });
 await test("visual emotion resolver picks nearest available level and avoids a recent variant", () => {
   const r = visualRuntime();
@@ -2016,6 +2295,35 @@ await test("visual emotion resolver picks nearest available level and avoids a r
     seed: "variant-test",
   });
   assert.equal(selected.assetId, "emotion.happy.5.2");
+});
+await test("available visual emotion fallback uses the closest supplied image instead of neutral", () => {
+  const r = visualRuntime();
+  const emotionAssets = [
+    baseAsset,
+    { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } },
+    { ...baseAsset, id: "emotion.excited.3.1", src: "assets/character/excited.3.1.png", expression: "excited", motion: "still", visualEmotion: { emotion: "excited", intensity: 3, variant: 1 } },
+    { ...baseAsset, id: "emotion.embarrassed.3.1", src: "assets/character/embarrassed.3.1.png", expression: "embarrassed", motion: "still", visualEmotion: { emotion: "embarrassed", intensity: 3, variant: 1 } },
+    { ...baseAsset, id: "emotion.nervous.5.1", src: "assets/character/nervous.5.1.png", expression: "nervous", motion: "still", visualEmotion: { emotion: "nervous", intensity: 5, variant: 1 } },
+    { ...baseAsset, id: "emotion.confused.3.1", src: "assets/character/confused.3.1.png", expression: "confused", motion: "still", visualEmotion: { emotion: "confused", intensity: 3, variant: 1 } },
+    { ...baseAsset, id: "emotion.loving.2.1", src: "assets/character/loving.2.1.png", expression: "loving", motion: "still", visualEmotion: { emotion: "loving", intensity: 2, variant: 1 } },
+    { ...baseAsset, id: "emotion.hornys.1.1", src: "assets/character/hornys.1.1.png", expression: "hornys", motion: "still", visualEmotion: { emotion: "hornys", intensity: 1, variant: 1 } },
+  ];
+  assert.equal(resolveAvailableVisualEmotion("happy", emotionAssets, r), "excited");
+  assert.equal(resolveAvailableVisualEmotion("shy", emotionAssets, r), "embarrassed");
+  assert.equal(resolveAvailableVisualEmotion("anxious", emotionAssets, r), "nervous");
+  assert.equal(resolveAvailableVisualEmotion("thinking", emotionAssets, r), "confused");
+  assert.equal(resolveAvailableVisualEmotion("affectionate", emotionAssets, r), "loving");
+});
+await test("internal arousal never falls back to the outward hornys image", () => {
+  const r = visualRuntime();
+  r.intimacy = { adultModeEnabled: true };
+  const emotionAssets = [
+    baseAsset,
+    { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } },
+    { ...baseAsset, id: "emotion.hornys.1.1", src: "assets/character/hornys.1.1.png", expression: "hornys", motion: "still", visualEmotion: { emotion: "hornys", intensity: 1, variant: 1 } },
+  ];
+  assert.equal(resolveAvailableVisualEmotion("horny", emotionAssets, r), "neutral");
+  assert.equal(resolveAvailableVisualEmotion("hornys", emotionAssets, r), "hornys");
 });
 await test("visual emotion hysteresis keeps a nearly unchanged image", () => {
   const r = visualRuntime();
@@ -2049,7 +2357,7 @@ await test("conversation and memory reset removes durable history and starts a f
   assert.equal((await r.listKnowledgeFacts({ statuses: ["active", "outdated"] })).length, 0);
   assert.equal((await r.listOpenThreads({ statuses: ["open", "resolved", "expired"] })).length, 0);
   assert.equal(reset.snapshot.revision, 1);
-  assert.equal(reset.snapshot.relationship.stage, "new");
+  assert.equal(reset.snapshot.relationship.stage, "familiar");
   assert.equal(reset.world.timeZone, "UTC");
 });
 

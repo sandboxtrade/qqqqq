@@ -27,13 +27,15 @@ export type RelationshipDelta = Partial<
 const clamp = (v: number) => Math.max(0, Math.min(1, v));
 
 export const initialRelationshipState: RelationshipState = {
-  trust: 0.3,
-  closeness: 0.25,
-  attachment: 0.18,
-  security: 0.35,
+  // Yuzuki starts from an established acquaintance / light-friend baseline.
+  // There is some basic trust and comfort, but no pre-baked romantic bond.
+  trust: 0.42,
+  closeness: 0.34,
+  attachment: 0.22,
+  security: 0.46,
   respect: 0.5,
   unresolvedTension: 0,
-  stage: "new",
+  stage: "familiar",
   updatedAt: Date.now(),
 };
 
@@ -107,7 +109,9 @@ export function canInitiateRomance(character: CharacterCore, emotion: EmotionalS
   return character.adult && character.age >= 18 && r.phase !== "paused" && r.phase !== "private" &&
     now >= r.cooldownUntil && world.isAwake && ["free", "resting"].includes(world.availability) &&
     emotion.energy >= 0.35 && emotion.irritation < 0.3 && emotion.sadness < 0.55 &&
-    relationship.trust >= 0.45 && relationship.closeness >= 0.4 && relationship.unresolvedTension < 0.3;
+    ["close", "deep"].includes(relationship.stage) &&
+    relationship.trust >= 0.55 && relationship.closeness >= 0.55 &&
+    emotion.romanticInterest >= 0.42 && relationship.unresolvedTension < 0.3;
 }
 export function planRomance(input: {
   text: string; previous?: RomanceState; now: number; character: CharacterCore;

@@ -30,6 +30,10 @@ export default function App() {
     initialize,
     signIn,
     signOut,
+    clearConversationAndMemory,
+    resettingData,
+    setIntimacyAdultMode,
+    updatingIntimacyMode,
     send,
     clearError,
     retry,
@@ -164,6 +168,13 @@ export default function App() {
             trace={lastTrace}
             maintenanceError={maintenanceError}
             onSignOut={() => void signOut()}
+            onClearConversationAndMemory={clearConversationAndMemory}
+            clearingData={resettingData}
+            resetDisabled={!ready || busy || resettingData}
+            intimacyEnabled={runtime?.intimacy?.adultModeEnabled === true}
+            intimacyPhase={runtime?.intimacy?.phase ?? "normal"}
+            intimacyUpdating={updatingIntimacyMode}
+            onSetIntimacyEnabled={setIntimacyAdultMode}
           />
         )}
       </div>

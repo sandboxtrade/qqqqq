@@ -48,8 +48,9 @@ const initialBase = {
   anxiety: 0.07,
   curiosity: 0.7,
   boredom: 0.12,
-  affection: 0.42,
-  romanticInterest: 0.28,
+  // Friendly warmth is present from the beginning; romantic attraction is not.
+  affection: 0.34,
+  romanticInterest: 0.06,
 };
 
 export const initialEmotionalState: EmotionalState = {
@@ -98,8 +99,8 @@ export function decayEmotions(
     curiosity: toward(state.curiosity, 0.62, 0.03),
     boredom: toward(state.boredom, 0.12, 0.08),
     // Affection and romantic interest are intentionally slow-moving, but not frozen forever.
-    affection: toward(state.affection, 0.42, 0.004),
-    romanticInterest: toward(state.romanticInterest, 0.28, 0.003),
+    affection: toward(state.affection, 0.34, 0.004),
+    romanticInterest: toward(state.romanticInterest, 0.06, 0.003),
     updatedAt: now,
   };
   next.mood = deriveMood(next);

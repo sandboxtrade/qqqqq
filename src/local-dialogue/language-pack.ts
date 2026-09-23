@@ -18,7 +18,8 @@ const KNOWN_ACTS = new Set<DialogueAct>([
   "REFER_MEMORY", "SURPRISE", "HAPPINESS", "SADNESS", "JEALOUSY", "CURIOSITY",
   "APOLOGY", "GRATITUDE", "BOUNDARY", "REFUSE", "CHANGE_TOPIC", "SILENCE",
   "GOOD_MORNING", "GOOD_NIGHT", "WELCOME_BACK", "MISS_USER", "CONTINUE_TOPIC",
-  "CLARIFY", "SHARE",
+  "CLARIFY", "SHARE", "INTIMACY_APPROACH", "INTIMACY_RECIPROCATE",
+  "INTIMACY_CHECKIN", "INTIMACY_PAUSE", "INTIMACY_AFTERCARE",
 ]);
 const ALLOWED_SLOTS = new Set([
   "user.name", "character.name", "character.age", "character.state", "character.angerAnswer", "character.sadnessAnswer", "relationship.description",

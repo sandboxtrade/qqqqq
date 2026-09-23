@@ -18,6 +18,7 @@ export function buildDialogueFrame(
   const userLines = recent.filter((line) => line.role === "user");
   const characterLines = recent.filter((line) => line.role === "character");
   const previousUser = userLines.at(-1);
+  const previousUserBeforeLast = userLines.at(-2);
   const lastCharacter = characterLines.at(-1);
   const previousNLU = previousUser ? analyzeLocalNLU(previousUser.text) : undefined;
   const previousTopic = previousNLU?.topic ?? (previousUser ? classifyTopic(previousUser.text) : undefined);
@@ -42,6 +43,7 @@ export function buildDialogueFrame(
     referencedEntities: current.entities.map((entity) => entity.normalized).slice(0, 8),
     turnsOnTopic: Math.min(turnsOnTopic, 20),
     previousUserText: previousUser?.text,
+    previousUserTextBeforeLast: previousUserBeforeLast?.text,
     previousCharacterText: lastCharacter?.text,
   };
 }
@@ -175,6 +177,81 @@ function resolveDeicticContinuation(
 }
 
 
+
+const CHARACTER_REPLY_META_QUESTION_RE = /^(?:(?:а|ну)\s+)?(?:(?:что\s+(?:именно\s+)?(?:интересно|странно|смешно|мило|важно|неожиданно|зацепило))|(?:что\s+именно)|(?:в\s+смысле)|(?:ты\s+про\s+что)|(?:про\s+что\s+ты)|(?:что\s+ты\s+имеешь\s+в\s+виду))[?.! ]*$/u;
+
+function resolveCharacterReplyReference(
+  nlu: LocalNLUResult,
+  frame: DialogueFrame,
+  currentText?: string,
+): LocalNLUResult {
+  if (!currentText || !frame.previousCharacterText) return nlu;
+  const normalized = normalizeDialogueForMatching(currentText);
+  if (!CHARACTER_REPLY_META_QUESTION_RE.test(normalized)) return nlu;
+  return {
+    ...nlu,
+    intent: "clarification_request",
+    topic: frame.previousTopic ?? frame.currentTopic ?? nlu.topic ?? "conversation",
+    isQuestion: true,
+    questionType: "what",
+    confidence: Math.max(nlu.confidence, 0.94),
+  };
+}
+
+
+function resolveContextualIntimacy(
+  nlu: LocalNLUResult,
+  frame: DialogueFrame,
+  currentText?: string,
+): LocalNLUResult {
+  if (!currentText) return nlu;
+  const normalized = normalizeDialogueForMatching(currentText);
+  const priorAct = frame.lastCharacterIntent;
+  const intimatePrior = priorAct && [
+    "INTIMACY_APPROACH", "INTIMACY_RECIPROCATE", "INTIMACY_CHECKIN", "INTIMACY_PAUSE", "INTIMACY_AFTERCARE",
+  ].includes(priorAct);
+  if (!intimatePrior) return nlu;
+
+  if (/(?:просто\s+обними|побудь\s+(?:со\s+мной|рядом)|полежи\s+рядом|не\s+уходи)/u.test(normalized)) {
+    return {
+      ...nlu,
+      confidence: Math.max(nlu.confidence, 0.9),
+      semantic: {
+        ...nlu.semantic,
+        intimacy: { kind: "aftercare", strength: 0.8, explicit: true, intimacyContext: true },
+      },
+    };
+  }
+  if (nlu.semantic.intimacy.kind !== "none") return nlu;
+
+  if (/^(?:да|давай|хочу|можно|продолжай|угу|ага)[.! ]*$/u.test(normalized)) {
+    return {
+      ...nlu,
+      confidence: Math.max(nlu.confidence, 0.9),
+      semantic: {
+        ...nlu.semantic,
+        intimacy: {
+          kind: priorAct === "INTIMACY_PAUSE" ? "resume" : "consent",
+          strength: 0.9,
+          explicit: true,
+          intimacyContext: true,
+        },
+      },
+    };
+  }
+  if (/^(?:нет|неа|не хочу|не надо|стоп|хватит)[.! ]*$/u.test(normalized)) {
+    return {
+      ...nlu,
+      confidence: Math.max(nlu.confidence, 0.94),
+      semantic: {
+        ...nlu.semantic,
+        intimacy: { kind: "stop", strength: 1, explicit: true, intimacyContext: true },
+      },
+    };
+  }
+  return nlu;
+}
+
 function resolvePendingQuestionReply(
   nlu: LocalNLUResult,
   frame: DialogueFrame,
@@ -214,7 +291,9 @@ export function resolveContextualNLU(
 ): LocalNLUResult {
   const pendingReply = resolvePendingQuestionReply(nlu, frame, currentText);
   const reciprocal = resolveReciprocalQuestion(pendingReply, frame, currentText);
-  const contextual = resolveDeicticContinuation(reciprocal, frame, currentText);
+  const replyReference = resolveCharacterReplyReference(reciprocal, frame, currentText);
+  const intimacy = resolveContextualIntimacy(replyReference, frame, currentText);
+  const contextual = resolveDeicticContinuation(intimacy, frame, currentText);
   if (!CONTEXTUAL.has(contextual.intent)) return contextual;
   const resolved = hasResolvableReference(contextual, frame);
   return {

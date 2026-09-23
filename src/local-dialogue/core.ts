@@ -121,6 +121,7 @@ export function logLocalDialogueTrace(input: {
       responseLength: input.plan.responseLength,
       shouldAskQuestion: input.plan.shouldAskQuestion,
       topic: input.plan.topic,
+      spontaneousBeat: input.plan.spontaneousBeat,
     },
     selectedTemplate: input.rendered.templateId,
     finalResponse: input.rendered.text,

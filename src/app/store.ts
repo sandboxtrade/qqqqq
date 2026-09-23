@@ -10,6 +10,7 @@ import {
   loadOlderConversation,
   conversationFrom,
   runtimeNow,
+  setIntimacyAdultMode as updateIntimacyAdultModeRuntime,
   type RuntimeState,
   type RuntimeTrace,
   type ConversationLine,
@@ -63,10 +64,12 @@ interface AppStore {
   hasOlderMessages: boolean;
   loadingOlder: boolean;
   resettingData: boolean;
+  updatingIntimacyMode: boolean;
   initialize: () => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   clearConversationAndMemory: () => Promise<void>;
+  setIntimacyAdultMode: (enabled: boolean) => Promise<void>;
   send: (text: string) => Promise<void>;
   retry: (messageId: string) => Promise<void>;
   dismissFailed: (messageId: string) => Promise<void>;
@@ -432,6 +435,7 @@ function watchAuth() {
       hasOlderMessages: false,
       loadingOlder: false,
       resettingData: false,
+      updatingIntimacyMode: false,
       phase: "",
       error: null,
       authStatus: user ? "checking" : "signed_out",
@@ -572,6 +576,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   hasOlderMessages: false,
   loadingOlder: false,
   resettingData: false,
+  updatingIntimacyMode: false,
   initialize: async () => {
     if (get().initializing || get().ready) return;
     const version = invalidate();
@@ -649,6 +654,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       hasOlderMessages: false,
       loadingOlder: false,
       resettingData: false,
+      updatingIntimacyMode: false,
       error: null,
       maintenanceError: null,
     });
@@ -711,6 +717,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       if (version === epoch)
         set({ busy: false, resettingData: false, phase: "", error: message });
+    } finally {
+      controller.abort();
+      if (active === controller) active = null;
+    }
+  },
+  setIntimacyAdultMode: async (enabled) => {
+    const state = get();
+    if (!state.ready || !state.runtime || state.busy || state.updatingIntimacyMode) return;
+    const version = epoch;
+    const controller = new AbortController();
+    active = controller;
+    set({ busy: true, updatingIntimacyMode: true, error: null, phase: enabled ? "Включаем интимный режим…" : "Выключаем интимный режим…" });
+    try {
+      const runtime = await bounded(
+        updateIntimacyAdultModeRuntime(state.user?.uid ?? null, controller.signal, state.runtime, enabled),
+        12000,
+        "Настройка интимного режима",
+        controller.signal,
+      );
+      if (version !== epoch || controller.signal.aborted) return;
+      set({ runtime, busy: false, updatingIntimacyMode: false, phase: "", error: null });
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ busy: false, updatingIntimacyMode: false, phase: "", error: errorText(error) });
     } finally {
       controller.abort();
       if (active === controller) active = null;

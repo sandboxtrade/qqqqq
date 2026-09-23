@@ -37,6 +37,12 @@ import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 
 import { currentRomance, initialRomance, planRomance, type RomanceState } from "../relationship/relationship";
+import {
+  createInitialIntimacyState,
+  currentIntimacyState,
+  planIntimacyTurn,
+  type IntimacyState,
+} from "../intimacy/intimacy";
 
 import {
   resolveVisualEmotionState,
@@ -63,6 +69,7 @@ import {
 export interface RuntimeState {
   appearance?: AppearanceState;
   romance?: RomanceState;
+  intimacy?: IntimacyState;
   pendingWorldEvents?: CharacterEvent[];
   revision: number;
   emotion: EmotionalState;
@@ -89,6 +96,7 @@ export interface RuntimeTrace {
   responsePlan: ReturnType<typeof planResponse>;
   nlu?: LocalNLUResult;
   localRenderer?: RenderDebug;
+  intimacy?: { enabled: boolean; phase: IntimacyState["phase"]; action: string };
   memoryContext: { memories: string[]; facts: string[]; openThreads: string[] };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
   maintenance?: Awaited<ReturnType<typeof maintainRuntime>>;
@@ -141,6 +149,7 @@ function advance(state: RuntimeState, now = runtimeNow(state)) {
     state: {
       ...state,
       romance: currentRomance(state.romance, effectiveNow),
+      intimacy: state.intimacy ? currentIntimacyState(state.intimacy, effectiveNow) : undefined,
       emotion: applyWorldSimulationEmotion(decayed, simulation, effectiveNow),
       relationship,
       world: simulation.world,
@@ -208,16 +217,18 @@ export async function bootstrapRuntime(
 ) {
   const repository = repo(uid, signal);
   const wallNow = now ?? Date.now();
-  const [{ snapshot: stored, world }, conversationPage, pendingTurns] = await Promise.all([
+  const [{ snapshot: stored, world }, conversationPage, pendingTurns, storedIntimacy] = await Promise.all([
     repository.loadRuntimeState(),
     repository.listConversationEvents({ limit: 80 }),
     repository.listPendingTurns(100),
+    repository.loadIntimacyState(),
   ]);
   checkSignal(signal);
   // Read-only bootstrap: a delayed startup cannot overwrite a newer conversation.
   const state: RuntimeState = {
     revision: stored?.revision ?? 0,
     romance: stored?.romance,
+    intimacy: storedIntimacy ?? createInitialIntimacyState(wallNow),
     appearance: stored?.appearance,
     emotion: stored?.emotion ?? { ...initialEmotionalState, updatedAt: wallNow },
     relationship: stored?.relationship ?? {
@@ -256,6 +267,7 @@ export async function clearConversationAndMemory(
   const emotion: EmotionalState = { ...initialEmotionalState, updatedAt: now };
   const relationship: RelationshipState = { ...initialRelationshipState, updatedAt: now };
   const romance = initialRomance(now);
+  const intimacy = createInitialIntimacyState(now);
   const world = createInitialWorldState(now, current.world.timeZone);
   const persisted = await repository.resetConversationAndMemory(
     { emotion, relationship, romance },
@@ -267,6 +279,7 @@ export async function clearConversationAndMemory(
     emotion: persisted.snapshot?.emotion ?? emotion,
     relationship: persisted.snapshot?.relationship ?? relationship,
     romance: persisted.snapshot?.romance ?? romance,
+    intimacy,
     appearance: persisted.snapshot?.appearance,
     world: persisted.world ?? world,
   };
@@ -304,20 +317,55 @@ export async function refreshRuntimeFromPersistence(
   current: RuntimeState,
 ) {
   const repository = repo(uid, signal);
-  const { snapshot, world } = await repository.loadRuntimeState();
+  const [{ snapshot, world }, intimacy] = await Promise.all([
+    repository.loadRuntimeState(),
+    repository.loadIntimacyState(),
+  ]);
   checkSignal(signal);
-  if (!snapshot || !world) return current;
-  const revision = snapshot.revision ?? 0;
-  if (revision <= current.revision) return current;
+  const revision = snapshot?.revision ?? current.revision;
+  const stateChanged = Boolean(snapshot && world && revision > current.revision);
+  const intimacyChanged = Boolean(intimacy && intimacy.revision > (current.intimacy?.revision ?? -1));
+  if (!stateChanged && !intimacyChanged) return current;
   return reconcileRuntimeState({
     pendingWorldEvents: current.pendingWorldEvents,
-    revision,
-    romance: snapshot.romance,
-    appearance: snapshot.appearance,
-    emotion: snapshot.emotion,
-    relationship: snapshot.relationship,
-    world,
+    revision: stateChanged ? revision : current.revision,
+    romance: stateChanged ? snapshot!.romance : current.romance,
+    intimacy: intimacyChanged ? intimacy! : current.intimacy,
+    appearance: stateChanged ? snapshot!.appearance : current.appearance,
+    emotion: stateChanged ? snapshot!.emotion : current.emotion,
+    relationship: stateChanged ? snapshot!.relationship : current.relationship,
+    world: stateChanged ? world! : current.world,
   });
+}
+
+export async function setIntimacyAdultMode(
+  uid: string | null,
+  signal: AbortSignal,
+  current: RuntimeState,
+  enabled: boolean,
+): Promise<RuntimeState> {
+  const repository = repo(uid, signal);
+  const now = runtimeNow(current);
+  const stored = await repository.loadIntimacyState();
+  checkSignal(signal);
+  const base = currentIntimacyState(stored ?? current.intimacy ?? createInitialIntimacyState(now), now);
+  if (base.adultModeEnabled === enabled) return { ...current, intimacy: base };
+  const next: IntimacyState = enabled
+    ? { ...base, adultModeEnabled: true, phase: "normal", interactionStatus: "inactive", updatedAt: now }
+    : {
+        ...base,
+        adultModeEnabled: false,
+        phase: "normal",
+        interactionStatus: "inactive",
+        arousal: 0,
+        initiativeDrive: 0,
+        activeScene: null,
+        cooldownUntil: undefined,
+        updatedAt: now,
+      };
+  const persisted = await repository.commitIntimacyState(next, base.revision);
+  checkSignal(signal);
+  return { ...current, intimacy: persisted };
 }
 export interface TurnInput {
   id: string;
@@ -347,8 +395,10 @@ export async function handleUserMessage(
   const repository = repo(uid, signal);
   const replyId = `reply_${input.id}`;
   options.onPhase?.("Проверяем сохранение…");
-  const [existing, persisted] = await Promise.all([
-    repository.getEvent(replyId), repository.loadRuntimeState(),
+  const [existing, persisted, persistedIntimacy] = await Promise.all([
+    repository.getEvent(replyId),
+    repository.loadRuntimeState(),
+    repository.loadIntimacyState(),
   ]);
   checkSignal(signal);
   const preflightMs = Math.round(performance.now() - started);
@@ -384,10 +434,11 @@ export async function handleUserMessage(
         ...snapshot,
         revision: snapshot.revision ?? 0,
         romance: snapshot.romance,
+        intimacy: persistedIntimacy ?? current.intimacy,
         appearance: snapshot.appearance,
         world: latestWorld ?? current.world,
       }
-    : current;
+    : { ...current, intimacy: persistedIntimacy ?? current.intimacy };
 
   const now = runtimeNow(base);
   const advanced = advance(base, now);
@@ -449,7 +500,7 @@ export async function handleUserMessage(
     before.relationship,
     before.world,
   );
-  const effects = inferStateEffects(perception, preliminary);
+  const effects = inferStateEffects(perception, preliminary, nlu.intent);
   const emotion = applyEmotionDelta(before.emotion, effects.emotion, now);
   const relationship = applyRelationshipDelta(
     before.relationship,
@@ -483,6 +534,15 @@ export async function handleUserMessage(
     world: before.world, decision, plan: responsePlan });
   decision = romance.decision;
   responsePlan = romance.plan;
+  const intimacy = planIntimacyTurn({
+    character: defaultCharacter,
+    previous: before.intimacy,
+    signal: nlu.semantic.intimacy,
+    emotion,
+    relationship,
+    world: before.world,
+    now,
+  });
   const silent = decision.action === "stay_silent";
   options.onPhase?.(silent ? "Она решила промолчать…" : "Она отвечает…");
   const generationStarted = performance.now();
@@ -495,6 +555,7 @@ export async function handleUserMessage(
     relationship,
     world: before.world,
     romance: romance.state,
+    intimacy: intimacy.state,
     memoryContext,
     history: historyForDialogue,
     nlu,
@@ -504,7 +565,7 @@ export async function handleUserMessage(
   });
   const localPlan = planLocalDialogue(dialogueContext, romance.localText);
   const visualEmotion = resolveVisualEmotionState(
-    { ...before, emotion, relationship, romance: romance.state },
+    { ...before, emotion, relationship, romance: romance.state, intimacy: intimacy.state },
     {
       decision,
       responsePlan,
@@ -518,7 +579,7 @@ export async function handleUserMessage(
     .slice(-6)
     .map((line) => line.appearanceAssetId!);
   const appearance = selectAppearance(
-    { ...before, emotion, relationship, romance: romance.state },
+    { ...before, emotion, relationship, romance: romance.state, intimacy: intimacy.state },
     visualEmotion,
     now,
     { recentAssetIds: recentAppearanceIds, seed: input.id },
@@ -554,6 +615,8 @@ export async function handleUserMessage(
       visualCue: responsePlan.visualCue,
       romanceAction: romance.action,
       romancePhase: romance.state.phase,
+      intimacyAction: intimacy.action,
+      intimacyPhase: intimacy.state.phase,
       appearanceAssetId: appearance.assetId,
       localDialogue: {
         templateId: rendered.templateId,
@@ -612,6 +675,18 @@ export async function handleUserMessage(
       trace: null,
     };
   }
+  let savedIntimacy = intimacy.state;
+  if (intimacy.changed) {
+    try {
+      savedIntimacy = await repository.commitIntimacyState(intimacy.state, intimacy.state.revision);
+    } catch (error) {
+      // The chat turn is already durably committed. An intimacy revision race
+      // must not turn a saved message into a failed message; use the newer state.
+      const latest = await repository.loadIntimacyState();
+      if (latest) savedIntimacy = latest;
+      else if (!(error instanceof Error && error.message.includes("intimacy-state-conflict"))) throw error;
+    }
+  }
   checkSignal(signal);
   // Reinforcement is deliberately outside the response critical path. The
   // answer is already validated and committed; a separate repository instance
@@ -629,6 +704,7 @@ export async function handleUserMessage(
     usedGeminiReply: false,
     nlu,
     localRenderer: rendered.debug,
+    intimacy: { enabled: savedIntimacy.adultModeEnabled, phase: savedIntimacy.phase, action: intimacy.action },
     responseGuardFallback: guarded.usedFallback,
     responseGuardReason: guarded.reason,
     decision,
@@ -646,7 +722,7 @@ export async function handleUserMessage(
     replyTimestamp,
     appearanceAssetId: appearance.assetId,
     renderMeta: { templateId: rendered.templateId, dialogueActs: rendered.dialogueActs },
-    state: { emotion, relationship, world, romance: romance.state, appearance, revision: base.revision + 1 },
+    state: { emotion, relationship, world, romance: romance.state, intimacy: savedIntimacy, appearance, revision: base.revision + 1 },
     trace,
   };
 }
@@ -684,6 +760,7 @@ export async function maintainRuntime(
     advanced.state.world,
     maintenanceNow,
     advanced.state.romance,
+    advanced.state.intimacy,
   );
   const [recovery, pending] = await Promise.all([
     repository.loadMemoryRecoveryState(), repository.listPendingMemoryEvents(1),
@@ -735,6 +812,7 @@ export async function maintainRuntime(
               relationship: advanced.state.relationship,
               world: advanced.state.world,
               romance: advanced.state.romance,
+              intimacy: advanced.state.intimacy,
               memoryContext: proactiveMemory,
               history: proactiveHistory.slice(-24),
               nlu: proactiveNlu,

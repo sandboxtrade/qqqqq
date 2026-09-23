@@ -129,6 +129,9 @@ export function resolveVisualEmotionState(
   const e = runtime.emotion;
   const r = runtime.relationship;
   const romance = runtime.romance?.phase ?? "neutral";
+  const intimacy = runtime.intimacy;
+  const adultVisuals = intimacy?.adultModeEnabled === true;
+  const intimacyPhase = adultVisuals ? intimacy?.phase ?? "normal" : "normal";
   const acts = new Set(context.dialogueActs ?? []);
   const intent = context.sourceIntent ?? "";
   const eventIntensity = clamp01(context.eventIntensity ?? 0.45);
@@ -178,12 +181,20 @@ export function resolveVisualEmotionState(
 
   add("caring", (acts.has("CARE") || acts.has("COMFORT") || acts.has("REASSURE") ? 0.72 : 0.08) + e.affection * 0.16, Math.max(e.affection, eventIntensity));
   add("affectionate", e.affection * 0.58 + closeness * 0.2 + (context.decision.action === "show_affection" ? 0.26 : 0), e.affection);
-  add("loving", Math.max(0, e.affection - 0.48) * 0.7 + closeness * 0.34 + (romance === "romantic" ? 0.18 : 0), Math.max(e.affection, closeness));
+  add("loving", Math.max(0, e.affection - 0.48) * 0.7 + closeness * 0.34 + (romance === "romantic" ? 0.18 : 0) + (intimacyPhase === "aftercare" ? 0.24 : 0), Math.max(e.affection, closeness));
+  if (intimacyPhase === "aftercare") {
+    add("gentle", 0.78 + e.affection * 0.14, Math.max(e.affection, intimacy?.comfort ?? 0));
+    add("affectionate", 0.72 + closeness * 0.18, Math.max(e.affection, closeness));
+    add("caring", 0.7 + (intimacy?.comfort ?? 0) * 0.2, Math.max(e.affection, intimacy?.comfort ?? 0));
+  }
   add("welcoming", (acts.has("WELCOME_BACK") ? 0.82 : 0) + positive * 0.1, eventIntensity);
   add("missing_you", (acts.has("MISS_USER") ? 0.88 : 0) + runtime.world.connectionDrive * r.attachment * 0.35, Math.max(runtime.world.connectionDrive, r.attachment));
 
-  const flirtSignal = acts.has("FLIRT") || romance === "playful" || romance === "romantic" || romance === "private";
-  const romanticDrive = clamp01(e.romanticInterest * 0.5 + e.affection * 0.22 + closeness * 0.18 + e.energy * 0.1);
+  const flirtSignal = acts.has("FLIRT") || acts.has("INTIMACY_APPROACH") || acts.has("INTIMACY_RECIPROCATE") || romance === "playful" || romance === "romantic" || romance === "private";
+  const romanticDrive = clamp01(
+    e.romanticInterest * 0.42 + e.affection * 0.2 + closeness * 0.16 + e.energy * 0.08 +
+    (adultVisuals ? (intimacy?.interest ?? 0) * 0.08 + (intimacy?.arousal ?? 0) * 0.06 : 0),
+  );
   add("playful", (acts.has("TEASE") || acts.has("JOKE") ? 0.66 : 0.08) + (romance === "playful" ? 0.32 : 0) + e.happiness * 0.12, Math.max(e.happiness, e.energy));
   add("amused", (acts.has("JOKE") ? 0.68 : 0.04) + e.happiness * 0.22, e.happiness);
   add("laughing", (acts.has("JOKE") && e.happiness > 0.65 ? 0.72 : 0) + Math.max(0, e.happiness - 0.75) * 0.55, e.happiness);
@@ -195,15 +206,21 @@ export function resolveVisualEmotionState(
   add("embarrassed", (acts.has("FLIRT") && e.anxiety > 0.3 ? 0.46 : 0.02) + e.anxiety * 0.32, e.anxiety);
   add("blushing", (acts.has("FLIRT") && romanticDrive > 0.58 ? 0.5 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
 
-  // Private/romantic visuals form a progression instead of letting a generic
-  // "intimate" label permanently win. The two explicit arousal states remain
-  // separate: horny = internal arousal; hornys = active outward expression.
-  add("intimate", (romance === "private" ? 0.56 : romance === "romantic" ? 0.34 : 0) + romanticDrive * 0.18, romanticDrive);
-  add("seductive", (romance === "romantic" || romance === "private" ? 0.2 : 0) + romanticDrive * 0.34 + (acts.has("FLIRT") ? 0.12 : 0), romanticDrive);
-  add("passionate", (romance === "private" ? 0.28 : romance === "romantic" ? 0.12 : 0) + Math.max(0, romanticDrive - 0.55) * 1.15, romanticDrive);
-  add("desiring", (romance === "private" || romance === "romantic" ? 0.18 : 0) + Math.max(0, romanticDrive - 0.62) * 1.35, romanticDrive);
-  add("horny", (romance === "private" ? 0.38 : 0) + Math.max(0, romanticDrive - 0.72) * 2.15, romanticDrive);
-  add("hornys", (romance === "private" && acts.has("FLIRT") ? 0.56 : 0) + Math.max(0, romanticDrive - 0.82) * (acts.has("FLIRT") ? 2.45 : 0.55), romanticDrive);
+  // Mature visual states are driven by the dedicated intimacy state. A private
+  // romance scene alone is not enough to produce explicit arousal visuals.
+  if (adultVisuals) {
+    const arousal = intimacy?.arousal ?? 0;
+    const phaseClose = intimacyPhase === "close";
+    const phaseIntimate = intimacyPhase === "intimate";
+    const phaseHigh = intimacyPhase === "high_intimacy";
+    add("intimate", (phaseIntimate ? 0.64 : phaseHigh ? 0.56 : phaseClose ? 0.28 : 0) + romanticDrive * 0.16, Math.max(romanticDrive, arousal));
+    add("seductive", (phaseIntimate || phaseHigh ? 0.34 : phaseClose ? 0.16 : 0) + romanticDrive * 0.28 + (acts.has("FLIRT") ? 0.1 : 0), Math.max(romanticDrive, arousal));
+    add("passionate", (phaseHigh ? 0.5 : phaseIntimate ? 0.26 : 0) + Math.max(0, arousal - 0.48) * 0.85, Math.max(romanticDrive, arousal));
+    add("desiring", (phaseHigh ? 0.4 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.58) * 1.05, Math.max(romanticDrive, arousal));
+    // horny is internal arousal; hornys additionally requires outward intimate behaviour.
+    add("horny", (phaseHigh ? 0.5 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.68) * 1.5, arousal);
+    add("hornys", (phaseHigh && acts.has("INTIMACY_RECIPROCATE") ? 0.66 : 0) + Math.max(0, arousal - 0.8) * (acts.has("INTIMACY_RECIPROCATE") ? 2.2 : 0.35), arousal);
+  }
 
   add("surprised", (acts.has("SURPRISE") ? 0.76 : 0) + (intent === "share_good_event" ? eventIntensity * 0.12 : 0), eventIntensity);
   add("shocked", (acts.has("SURPRISE") && eventIntensity > 0.78 ? 0.66 + eventIntensity * 0.18 : 0), eventIntensity);
@@ -263,14 +280,14 @@ const emotionImageModules = typeof import.meta.glob === "function"
   : {};
 
 const emotionScenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
-  "neutral.5.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 58], pose: "portrait-neutral", description: "Yuzuki, calm neutral expression" },
-  "happy.8.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-happy", description: "Yuzuki, bright happy smile" },
-  "laughing.9.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-laughing", description: "Yuzuki laughing warmly" },
-  "affectionate.6.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 58], pose: "portrait-affectionate", description: "Yuzuki with an affectionate soft smile" },
-  "bashful.7.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 58], pose: "portrait-bashful", description: "Yuzuki looking bashful and flustered" },
-  "sad.4.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-sad", description: "Yuzuki looking a little sad" },
-  "flirty.8.1": { sceneFit: "contain", sceneScale: 1.02, scenePosition: [56, 62], pose: "fullbody-flirty", description: "Yuzuki in a flirty full-body pose" },
-  "seductive.8.1": { sceneFit: "contain", sceneScale: 1.02, scenePosition: [56, 66], pose: "fullbody-seductive", description: "Yuzuki in a more seductive kneeling pose" },
+  "neutral.1.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 62], pose: "portrait-neutral", description: "Yuzuki, neutral relaxed expression" },
+  "confused.3.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 62], pose: "portrait-confused", description: "Yuzuki looking mildly confused" },
+  "loving.2.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 62], pose: "portrait-loving", description: "Yuzuki with a warm loving expression" },
+  "embarrassed.3.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 62], pose: "portrait-embarrassed", description: "Yuzuki looking embarrassed" },
+  "nervous.5.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 63], pose: "portrait-nervous", description: "Yuzuki visibly nervous" },
+  "excited.3.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 62], pose: "portrait-excited", description: "Yuzuki excited and upbeat" },
+  "hornys.1.1": { sceneFit: "contain", sceneScale: 1.04, scenePosition: [56, 70], pose: "fullbody-hornys-kneeling", description: "Yuzuki actively showing attraction, kneeling pose" },
+  "hornys.2.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [58, 68], pose: "fullbody-hornys-standing", description: "Yuzuki actively showing attraction, standing pose" },
 };
 
 function buildEmotionAssets(): CharacterAsset[] {
@@ -411,6 +428,86 @@ function chooseVariant(candidates: CharacterAsset[], recentAssetIds: readonly st
   return ordered[hashString(seed) % ordered.length];
 }
 
+const visualEmotionFallbacks: Partial<Record<VisualEmotionName, readonly VisualEmotionName[]>> = {
+  happy: ["excited", "neutral"],
+  playful: ["excited", "embarrassed", "neutral"],
+  amused: ["excited", "neutral"],
+  laughing: ["excited", "neutral"],
+  confident: ["excited", "neutral"],
+  mischievous: ["excited", "embarrassed", "neutral"],
+  teasing: ["excited", "embarrassed", "neutral"],
+  welcoming: ["excited", "loving", "neutral"],
+
+  affectionate: ["loving", "neutral"],
+  missing_you: ["loving", "neutral"],
+  gentle: ["neutral", "loving"],
+  caring: ["neutral", "loving"],
+  relaxed: ["neutral"],
+  comfortable: ["neutral"],
+
+  shy: ["embarrassed", "nervous", "neutral"],
+  bashful: ["embarrassed", "nervous", "neutral"],
+  blushing: ["embarrassed", "nervous", "neutral"],
+  anxious: ["nervous", "neutral"],
+  jealous: ["nervous", "neutral"],
+
+  curious: ["confused", "neutral"],
+  thinking: ["confused", "neutral"],
+  skeptical: ["confused", "neutral"],
+  surprised: ["confused", "excited", "neutral"],
+  shocked: ["confused", "nervous", "neutral"],
+
+  flirty: ["embarrassed", "excited", "loving", "neutral"],
+  seductive: ["loving", "embarrassed", "neutral"],
+  intimate: ["loving", "neutral"],
+  passionate: ["loving", "excited", "neutral"],
+  desiring: ["loving", "embarrassed", "neutral"],
+  // horny is internal arousal. Deliberately never fall back to hornys, which
+  // represents active outward sexual behaviour.
+  horny: ["loving", "neutral"],
+
+  annoyed: ["neutral", "nervous"],
+  angry: ["neutral", "nervous"],
+  furious: ["neutral", "nervous"],
+  pouting: ["embarrassed", "neutral"],
+  sad: ["neutral", "nervous"],
+  upset: ["nervous", "neutral"],
+  hurt: ["nervous", "neutral"],
+  crying: ["nervous", "neutral"],
+  lonely: ["neutral", "loving"],
+  tired: ["neutral"],
+  sleepy: ["neutral"],
+  bored: ["neutral"],
+  serious: ["neutral", "confused"],
+  focused: ["neutral", "confused"],
+};
+
+export function resolveAvailableVisualEmotion(
+  requested: VisualEmotionName,
+  assets: readonly CharacterAsset[],
+  runtime?: Pick<RuntimeState, "emotion" | "relationship" | "intimacy">,
+): VisualEmotionName | null {
+  const available = new Set(
+    assets.flatMap((asset) => asset.visualEmotion ? [asset.visualEmotion.emotion] : []),
+  );
+  if (available.has(requested)) return requested;
+
+  let fallbacks: readonly VisualEmotionName[] = visualEmotionFallbacks[requested] ?? ["neutral"];
+  // A flirty expression without nervousness reads better as energetic than
+  // embarrassed. With visible anxiety, embarrassment is the closer image.
+  if (requested === "flirty" && runtime && runtime.emotion.anxiety < 0.24) {
+    fallbacks = ["excited", "loving", "embarrassed", "neutral"];
+  }
+  // Mature-but-not-outward states may use a warm image, but never the explicit
+  // hornys pose. hornys itself is only selected when the Brain emitted hornys.
+  const matureInternalStates: readonly VisualEmotionName[] = ["seductive", "intimate", "passionate", "desiring", "horny"];
+  if (matureInternalStates.includes(requested) && runtime?.intimacy?.adultModeEnabled !== true) {
+    fallbacks = ["loving", "neutral"];
+  }
+  return fallbacks.find((emotion) => available.has(emotion)) ??
+    (available.has("neutral") ? "neutral" : null);
+}
+
 function legacySelectAppearance(
   runtime: RuntimeState,
   cue: AvatarVisualCue,
@@ -447,6 +544,12 @@ export interface AppearanceSelectionOptions {
   seed?: string;
 }
 
+function isCharacterAssetArray(
+  value: AppearanceSelectionOptions | readonly CharacterAsset[],
+): value is readonly CharacterAsset[] {
+  return Array.isArray(value);
+}
+
 export function selectAppearance(
   runtime: RuntimeState,
   request: AvatarVisualCue | VisualEmotionState,
@@ -455,13 +558,20 @@ export function selectAppearance(
   legacyFallbackId = fallbackAssetId,
 ): AppearanceState {
   // Backwards-compatible path for existing reviewed scene assets and tests.
+  const suppliedAssets = isCharacterAssetArray(optionsOrAssets);
   if (typeof request === "string") {
-    const assets = Array.isArray(optionsOrAssets) ? optionsOrAssets : optionsOrAssets.assets ?? characterAssets;
-    const fallbackId = Array.isArray(optionsOrAssets) ? legacyFallbackId : optionsOrAssets.fallbackId ?? fallbackAssetId;
+    const assets: readonly CharacterAsset[] = suppliedAssets
+      ? optionsOrAssets
+      : optionsOrAssets.assets ?? characterAssets;
+    const fallbackId = suppliedAssets
+      ? legacyFallbackId
+      : optionsOrAssets.fallbackId ?? fallbackAssetId;
     return legacySelectAppearance(runtime, request, now, assets, fallbackId);
   }
 
-  const options = Array.isArray(optionsOrAssets) ? { assets: optionsOrAssets } : optionsOrAssets;
+  const options: AppearanceSelectionOptions = suppliedAssets
+    ? { assets: optionsOrAssets }
+    : optionsOrAssets;
   const assets = options.assets ?? characterAssets;
   const fallbackId = options.fallbackId ?? fallbackAssetId;
   const fallback = assets.find((asset) => asset.id === fallbackId);
@@ -469,14 +579,13 @@ export function selectAppearance(
   const previous = runtime.appearance;
   const current = assets.find((asset) => asset.id === previous?.assetId);
   const currentVisual = current?.visualEmotion;
-  const requestedAssets = assets.filter((asset) => asset.visualEmotion?.emotion === request.emotion);
-  const neutralAssets = assets.filter((asset) => asset.visualEmotion?.emotion === "neutral");
-  const emotionPool = requestedAssets.length ? requestedAssets : neutralAssets;
+  const targetEmotion = resolveAvailableVisualEmotion(request.emotion, assets, runtime);
+  const emotionPool = targetEmotion
+    ? assets.filter((asset) => asset.visualEmotion?.emotion === targetEmotion)
+    : [];
   if (!emotionPool.length) return current && previous ? previous : {
     version: 1, assetId: fallback.id, selectedAt: now, outfitChangedAt: now,
   };
-
-  const targetEmotion = requestedAssets.length ? request.emotion : "neutral";
   const availableLevels = [...new Set(emotionPool.map((asset) => asset.visualEmotion!.intensity))]
     .sort((a, b) => Math.abs(a - request.intensity) - Math.abs(b - request.intensity) || a - b);
   const level = availableLevels[0];

@@ -303,9 +303,10 @@ body { overscroll-behavior: none; }
 .quiet-actions button:disabled { opacity:.5; }
 
 /* Asset transitions only start after successful decode. No per-image eye masks. */
-.asset-scene { position:absolute; inset:0; background:#171116; }
-.asset-layer { position:absolute; inset:0; }
-.character-asset-image { display:block; width:100%; height:100%; object-fit:cover; transform: scale(1.08); transform-origin: center 28%; }
+.asset-scene { position:absolute; inset:0; background:#171116; overflow:hidden; }
+.asset-scene-background { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center center; filter:saturate(1.02) brightness(.94); }
+.asset-layer { position:absolute; inset:0; display:flex; align-items:flex-end; justify-content:center; padding:0 8px; }
+.character-asset-image { display:block; width:100%; height:100%; object-fit:contain; object-position:center bottom; transform-origin: center bottom; will-change: transform, opacity; pointer-events:none; user-select:none; }
 .asset-transition.dissolve .asset-current { animation:asset-in 700ms ease-in-out both; }
 .asset-transition.dissolve .asset-previous { animation:asset-out 700ms ease-in-out both; }
 .asset-transition.dip .asset-current { animation:asset-dip-in 700ms ease-in-out both; }
@@ -352,3 +353,62 @@ body { overscroll-behavior: none; }
   font: inherit;
   font-size: 11px;
 }
+
+.settings-danger-zone {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(215, 92, 106, .16);
+  border-radius: 14px;
+  background: rgba(128, 37, 49, .055);
+}
+.settings-danger-copy { display: grid; gap: 5px; margin-bottom: 10px; }
+.settings-danger-copy strong { color: #d8bdc1; font-size: 11px; font-weight: 600; }
+.settings-danger-copy span, .danger-confirmation > span { color: #94878a; font-size: 10px; line-height: 1.45; }
+.danger-button {
+  width: 100%;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(215, 92, 106, .28);
+  color: #d9a7ad;
+  background: rgba(146, 48, 60, .10);
+  font-size: 10px;
+}
+.danger-button:disabled { opacity: .45; }
+.danger-confirmation { display: grid; gap: 10px; }
+.danger-confirmation-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.danger-confirmation-actions > button:not(.danger-button) {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.065);
+  color: #a9a1b0;
+  background: rgba(255,255,255,.025);
+  font-size: 10px;
+}
+
+.settings-intimacy-zone {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(180, 129, 230, .14);
+  border-radius: 14px;
+  background: rgba(114, 72, 145, .055);
+}
+.settings-intimacy-copy { display: grid; gap: 5px; }
+.settings-intimacy-copy strong { color: #d7c7e8; font-size: 11px; font-weight: 600; }
+.settings-intimacy-copy span,
+.settings-intimacy-status > span,
+.intimacy-confirmation > span { color: #93879f; font-size: 10px; line-height: 1.45; }
+.settings-intimacy-status { display: grid; gap: 8px; margin-top: 10px; }
+.settings-intimacy-status > button,
+.intimacy-confirmation button {
+  min-height: 38px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid rgba(190, 147, 235, .16);
+  color: #cdb8df;
+  background: rgba(171, 108, 220, .075);
+  font: inherit;
+  font-size: 10px;
+}
+.settings-intimacy-status button:disabled { opacity: .45; }
+.intimacy-confirmation { display: grid; gap: 8px; }
+.intimacy-confirmation > div { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; }

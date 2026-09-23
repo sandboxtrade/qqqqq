@@ -6,13 +6,14 @@ import type { CharacterCore } from "../character/character";
 import type { CharacterDecision, Perception, ResponsePlan } from "../cognition/cognition-types";
 import type { EmotionalState } from "../emotions/emotions";
 import type { CharacterInitiative } from "../initiative/initiative";
+import type { IntimacyState } from "../intimacy/intimacy";
 import type { MemoryContext } from "../memory/model";
 import type { RelationshipState, RomanceState } from "../relationship/relationship";
 import type { WorldState } from "../world/world";
 import { buildDialogueFrame } from "./continuity";
 import { SeededRandom } from "./core";
 import { normalizeDialogueText } from "./nlu";
-import type { CharacterResponsePlan, DialogueAct, DialogueContext, DialogueGoal, DialogueHistoryLine, LocalNLUResult, LocalResponseLength } from "./types";
+import type { CharacterResponsePlan, DialogueAct, DialogueContext, DialogueGoal, DialogueHistoryLine, LocalNLUResult, LocalResponseLength, SpontaneousBeat } from "./types";
 
 // ---- autonomy-adapter.ts ----
 export function initiativeSemanticBridge(
@@ -63,6 +64,7 @@ export interface DialogueContextInput {
   relationship: RelationshipState;
   world: WorldState;
   romance?: RomanceState;
+  intimacy?: IntimacyState;
   memoryContext: MemoryContext;
   history: DialogueHistoryLine[];
   nlu: LocalNLUResult;
@@ -140,6 +142,49 @@ export function intentActs(nlu: LocalNLUResult): DialogueAct[] {
   }
 }
 
+function compoundSecondaryActs(nlu: LocalNLUResult): DialogueAct[] {
+  const support = new Set([
+    "user_tired", "user_sleepy", "user_sad", "user_lonely", "user_stressed",
+    "user_angry", "share_bad_event", "share_conflict", "share_problem",
+  ]);
+  const positive = new Set(["user_happy", "user_excited", "share_good_event"]);
+  const acts: DialogueAct[] = [];
+  for (const secondary of nlu.secondaryIntents.slice(0, 3)) {
+    if (support.has(secondary)) {
+      acts.push("ACKNOWLEDGE", "CARE");
+      if (["user_sad", "user_lonely", "user_stressed", "share_problem"].includes(secondary)) acts.push("COMFORT");
+    } else if (positive.has(secondary)) {
+      acts.push("HAPPINESS");
+    } else if (["user_like", "user_dislike", "user_want", "user_dont_want", "uncertain"].includes(secondary)) {
+      acts.push("CURIOSITY");
+    }
+  }
+  return [...new Set(acts)];
+}
+
+function intimacyDialogueActs(context: DialogueContext): DialogueAct[] {
+  const semantic = context.nlu.semantic.intimacy;
+  const signal = semantic.kind;
+  const activeIntimacy = Boolean(
+    context.intimacy?.adultModeEnabled &&
+    (context.intimacy.phase !== "normal" || context.intimacy.interactionStatus !== "inactive"),
+  );
+  if ((signal === "stop" || signal === "pause") && (activeIntimacy || semantic.intimacyContext === true))
+    return ["INTIMACY_PAUSE"];
+  if (!context.intimacy?.adultModeEnabled) {
+    return signal === "flirt" || signal === "affection" ? ["FLIRT"] : [];
+  }
+  if (signal === "resume" && context.intimacy.phase !== "paused") return [];
+  if (signal === "hesitant") return ["INTIMACY_CHECKIN", "REASSURE"];
+  if (signal === "aftercare") return ["INTIMACY_AFTERCARE", "CARE"];
+  if (signal === "approach") return ["INTIMACY_APPROACH"];
+  if (signal === "consent" || signal === "resume") return ["INTIMACY_RECIPROCATE"];
+  if (signal === "flirt") return ["FLIRT", "INTIMACY_APPROACH"];
+  if (signal === "affection" && ["close", "intimate", "high_intimacy", "aftercare"].includes(context.intimacy.phase))
+    return ["INTIMACY_AFTERCARE", "CARE"];
+  return [];
+}
+
 // ---- dialogue-planner.ts ----
 function dominantEmotion(emotion: EmotionalState) {
   const candidates = [
@@ -158,6 +203,7 @@ function goalFromActs(acts: readonly DialogueAct[]): DialogueGoal {
   if (acts.includes("SILENCE")) return "silence";
   if (acts.includes("REFUSE")) return "refuse";
   if (acts.includes("BOUNDARY")) return "set_boundary";
+  if (acts.some((act) => ["INTIMACY_APPROACH", "INTIMACY_RECIPROCATE", "INTIMACY_CHECKIN", "INTIMACY_PAUSE", "INTIMACY_AFTERCARE"].includes(act))) return "intimacy";
   if (acts.includes("COMFORT") || acts.includes("CARE")) return "comfort";
   if (acts.includes("TEASE") || acts.includes("FLIRT") || acts.includes("JOKE")) return "tease";
   if (acts.includes("ANSWER") || acts.includes("AGREE") || acts.includes("DISAGREE")) return "answer";
@@ -174,6 +220,7 @@ function styleTones(context: DialogueContext) {
   else if (context.relationship.closeness > 0.52 || context.emotion.affection > 0.58) tones.add("warm");
   else tones.add("neutral");
   if (context.perception.tone === "playful" || context.romance?.phase === "playful") tones.add("playful");
+  if (context.intimacy?.adultModeEnabled && ["close", "intimate", "high_intimacy", "aftercare"].includes(context.intimacy.phase)) tones.add("intimate");
   return [...tones];
 }
 
@@ -198,6 +245,64 @@ function contextualAnswer(context: DialogueContext): string | undefined {
   const preference = context.character.preferenceRules?.find((rule) =>
     rule.topicKeywords.some((keyword) => previous.includes(keyword.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е"))),
   );
+
+  const intimacySignal = context.nlu.semantic.intimacy;
+  const intimacyRelevant = Boolean(
+    intimacySignal.intimacyContext === true ||
+    (context.intimacy?.adultModeEnabled &&
+      (context.intimacy.phase !== "normal" || context.intimacy.interactionStatus !== "inactive")),
+  );
+  if (intimacySignal.kind === "stop" && intimacyRelevant) {
+    return semanticPick(context, "intimacy-stop", [
+      "Хорошо. Остановились. Никуда дальше не идём.",
+      "Стоп значит стоп. Давай просто побудем спокойно.",
+      "Хорошо, я услышала. Останавливаемся.",
+    ]);
+  }
+  if (intimacySignal.kind === "pause" && intimacyRelevant) {
+    return semanticPick(context, "intimacy-pause", [
+      "Хорошо, медленнее. Никуда не спешу.",
+      "Давай сделаем паузу. Мне важнее, чтобы нам обоим было комфортно.",
+      "Конечно. Остановимся здесь и просто побудем рядом.",
+    ]);
+  }
+  if (context.intimacy?.adultModeEnabled) {
+    if (intimacySignal.kind === "hesitant" || context.intimacy.interactionStatus === "hesitant") {
+      return semanticPick(context, "intimacy-hesitant", [
+        "Тогда не торопимся. Если ты не уверен, этого уже достаточно, чтобы остановиться на том, где комфортно.",
+        "Не нужно себя уговаривать. Можем остаться просто рядом и никуда дальше не идти.",
+        "Давай без давления. Мне важнее, чтобы это ощущалось нормально для нас обоих.",
+      ]);
+    }
+    if (intimacySignal.kind === "aftercare" || context.intimacy.phase === "aftercare") {
+      return semanticPick(context, "intimacy-aftercare", [
+        "Иди сюда. Просто побуду рядом с тобой.",
+        "Я рядом. Сейчас можно вообще никуда не спешить.",
+        "Останься рядом. Мне так спокойнее и теплее.",
+      ]);
+    }
+    if (intimacySignal.kind === "resume" && context.intimacy.phase === "paused") {
+      return semanticPick(context, "intimacy-resume", [
+        "Можно. Только без спешки — будем чувствовать темп по ходу.",
+        "Хорошо. Давай продолжим спокойно и без автоматических ожиданий.",
+        "Да. Но идём дальше только пока нам обоим комфортно.",
+      ]);
+    }
+    if (["approach", "consent"].includes(intimacySignal.kind)) {
+      if (["intimate", "high_intimacy"].includes(context.intimacy.phase)) {
+        return semanticPick(context, "intimacy-close", [
+          "Да… иди ближе. Только не спеши.",
+          "Хочу быть ближе. Давай просто чувствовать друг друга без гонки.",
+          "Можно ближе. Мне сейчас с тобой хорошо.",
+        ]);
+      }
+      return semanticPick(context, "intimacy-approach", [
+        "Можно ближе. Но давай без спешки.",
+        "Иди сюда. Мне нравится, когда всё развивается естественно.",
+        "Да, побудь ближе. Посмотрим, как нам будет комфортно.",
+      ]);
+    }
+  }
 
   if (semantic.wantsListening) {
     return semanticPick(context, "listen-only", [
@@ -583,8 +688,31 @@ function contextualAnswer(context: DialogueContext): string | undefined {
     return preference.fallbackText;
   if (context.nlu.intent === "clarification_request") {
     const last = compactQuote(context.dialogueFrame.previousCharacterText);
+    const recentUser = compactQuote(context.dialogueFrame.previousUserText, 72)?.replace(/[.!?]+$/u, "");
+    const priorUser = compactQuote(context.dialogueFrame.previousUserTextBeforeLast, 72)?.replace(/[.!?]+$/u, "");
+    const asksWhatIsInteresting = /(?:что\s+(?:именно\s+)?интересно|а\s+что\s+интересно)/u.test(current);
+    if (asksWhatIsInteresting && recentUser && priorUser) {
+      return semanticPick(context, "explain-interest-reaction", [
+        `То, что сначала ты сказал «${priorUser}», а потом «${recentUser}». Получилось двусмысленно — вот это меня и зацепило.`,
+        `Я про связку «${priorUser}» → «${recentUser}». В ней как раз осталось непонятно, флиртуешь ты или сам ещё не решил — поэтому мне и стало интересно.`,
+        `Вот этот переход: «${priorUser}», а следом «${recentUser}». Я поэтому и сказала, что интересно, а не просто бросила фразу в воздух.`,
+      ]);
+    }
+    if (recentUser && priorUser && /(?:в\s+смысле|что\s+именно|ты\s+про\s+что|про\s+что\s+ты|что\s+ты\s+имеешь\s+в\s+виду)/u.test(current)) {
+      return semanticPick(context, "explain-own-reaction", [
+        `Я про связку последних двух твоих реплик: сначала «${priorUser}», потом «${recentUser}». Именно на этот переход я и отреагировала.`,
+        `Про то, как рядом прозвучали «${priorUser}» и «${recentUser}». Из-за этой связки моя последняя реакция и получилась такой.`,
+        `Я имела в виду не что-то новое, а твои последние две реплики — «${priorUser}» и «${recentUser}». Вот от них и шла моя мысль.`,
+      ]);
+    }
+    if (recentUser && last) {
+      return semanticPick(context, "clarify-own-last-reply", [
+        `Я отреагировала на «${recentUser}». Моя фраза «${last.replace(/[.!?]+$/u, "")}» была именно про это.`,
+        `Я имела в виду твоё «${recentUser}». Если разложить мою прошлую фразу проще — она была реакцией именно на это.`,
+      ]);
+    }
     return last
-      ? `Я про свою последнюю фразу: «${last.replace(/[.!?]+$/u, "")}». Если непонятно, скажу проще.`
+      ? `Я про свою последнюю фразу: «${last.replace(/[.!?]+$/u, "")}». Скажу проще, без новой догадки.`
       : "Похоже, я криво сформулировала. Скажу проще.";
   }
   if (context.nlu.intent === "ask_why" && preference) {
@@ -602,6 +730,189 @@ function dedupeActs(acts: DialogueAct[]) {
   return [...new Set(acts)];
 }
 
+interface BeatCandidate extends SpontaneousBeat {
+  score: number;
+}
+
+const BEAT_BLOCKING_ACTS = new Set<DialogueAct>([
+  "SILENCE", "REFUSE", "BOUNDARY", "CHANGE_TOPIC", "CLARIFY",
+  "INTIMACY_PAUSE", "INTIMACY_CHECKIN",
+]);
+const HEAVY_SUPPORT_INTENTS = new Set([
+  "user_sad", "user_lonely", "user_stressed", "share_bad_event", "share_conflict",
+  "share_problem", "ask_for_support",
+]);
+const CASUAL_IMPULSE_INTENTS = new Set([
+  "greeting", "acknowledgement", "uncertain", "user_bored", "ask_character_state",
+  "ask_character_activity", "thanks", "joke", "tease_character", "compliment_character",
+]);
+
+function clampBeat(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function beatDetail(value: string | undefined, max = 92) {
+  const clean = (value ?? "").replace(/\s+/gu, " ").trim();
+  if (!clean) return undefined;
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+}
+
+function recentBeatOnCooldown(history: readonly DialogueHistoryLine[], turns = 3) {
+  return history
+    .filter((line) => line.role === "character")
+    .slice(-turns)
+    .some((line) => line.templateId?.includes("|beat:"));
+}
+
+function worldBeatDetail(context: DialogueContext) {
+  const event = [...context.world.recentEvents]
+    .reverse()
+    .find((entry) => entry.shareWorthiness >= 0.5);
+  if (!event) return undefined;
+  const activity = context.world.currentActivity;
+  const detail = event.kind === "small_win" || activity === "personal_project"
+    ? "у меня сегодня неожиданно хорошо пошло одно моё дело"
+    : event.kind === "reflection" || activity === "reading"
+      ? "я сегодня зацепилась за одну мысль из того, что читала"
+      : activity === "cafe_break"
+        ? "я ненадолго выбралась в кафе и немного переключилась"
+        : activity === "walk"
+          ? "я немного прошлась и голова стала тише"
+          : event.kind === "minor_annoyance"
+            ? "меня сегодня на ровном месте раздражала одна бытовая мелочь"
+            : "у меня сегодня был один маленький момент, который почему-то запомнился";
+  return { id: event.id, detail };
+}
+
+/**
+ * Plans one optional self-driven conversational beat. This is deliberately not
+ * keyword-to-line randomness: it is gated by Yuzuki's state, relationship,
+ * conversation cadence and grounded memory/world evidence. The renderer may
+ * surface at most one beat on a turn and the template id enforces a short
+ * cooldown across later turns.
+ */
+export function planSpontaneousBeat(
+  context: DialogueContext,
+  acts: readonly DialogueAct[],
+): SpontaneousBeat | undefined {
+  if (context.initiative) return undefined;
+  if (acts.some((act) => BEAT_BLOCKING_ACTS.has(act))) return undefined;
+  if (["external_fact_question", "memory_question", "ask_user_memory", "good_night", "farewell"].includes(context.nlu.intent)) return undefined;
+  if (context.nlu.semantic.wantsListening) return undefined;
+  if (HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) && context.nlu.intensity > 0.55) return undefined;
+  const characterTurns = context.history.filter((line) => line.role === "character").length;
+  if (characterTurns < 2) return undefined;
+  if (recentBeatOnCooldown(context.history, 3)) return undefined;
+
+  const e = context.emotion;
+  const r = context.relationship;
+  const candidates: BeatCandidate[] = [];
+  const add = (candidate: BeatCandidate) => {
+    if (candidate.score >= 0.5) candidates.push({ ...candidate, strength: clampBeat(candidate.strength), score: clampBeat(candidate.score) });
+  };
+
+  // Mixed states get priority because they make reactions feel less binary.
+  if (e.affection > 0.6 && e.anxiety > 0.32 && r.closeness > 0.42) {
+    add({ kind: "mixed_emotion", emotion: "bashful", detail: "warm_bashful", score: 0.52 + Math.min(e.affection, e.anxiety) * 0.34 + r.closeness * 0.08, strength: Math.max(e.affection, e.anxiety), placement: "after" });
+  }
+  if (e.happiness > 0.56 && e.irritation > 0.34) {
+    add({ kind: "mixed_emotion", detail: "amused_irritated", score: 0.5 + Math.min(e.happiness, e.irritation) * 0.38, strength: Math.max(e.happiness, e.irritation), placement: "after" });
+  }
+  if (e.curiosity > 0.7 && e.anxiety > 0.34) {
+    add({ kind: "mixed_emotion", emotion: "curious", detail: "curious_nervous", score: 0.48 + Math.min(e.curiosity, e.anxiety) * 0.36, strength: Math.max(e.curiosity, e.anxiety), placement: "after" });
+  }
+
+  if (e.irritation > 0.62)
+    add({ kind: "emotion_flash", emotion: "irritated", score: 0.51 + e.irritation * 0.42, strength: e.irritation, placement: "after" });
+  if (e.sadness > 0.62)
+    add({ kind: "emotion_flash", emotion: "sad", score: 0.5 + e.sadness * 0.4, strength: e.sadness, placement: "after" });
+  if (e.anxiety > 0.66)
+    add({ kind: "emotion_flash", emotion: "anxious", score: 0.48 + e.anxiety * 0.42, strength: e.anxiety, placement: "after" });
+  if (e.happiness > 0.78)
+    add({ kind: "emotion_flash", emotion: "happy", score: 0.48 + e.happiness * 0.4, strength: e.happiness, placement: "after" });
+
+  const intimateActive = Boolean(
+    context.intimacy?.adultModeEnabled &&
+    ["close", "intimate", "high_intimacy"].includes(context.intimacy.phase) &&
+    !["paused", "stopped"].includes(context.intimacy.interactionStatus),
+  );
+  if (intimateActive && e.romanticInterest > 0.62 && r.closeness > 0.58) {
+    add({
+      kind: "intimate_flash",
+      emotion: e.anxiety > 0.35 ? "bashful" : undefined,
+      detail: context.intimacy?.phase,
+      score: 0.58 + e.romanticInterest * 0.22 + r.closeness * 0.12,
+      strength: Math.max(e.romanticInterest, e.affection),
+      placement: "after",
+    });
+  } else if (e.affection > 0.76 && r.closeness > 0.55 && !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent)) {
+    add({ kind: "affection_flash", score: 0.48 + e.affection * 0.28 + r.closeness * 0.12, strength: e.affection, placement: "after" });
+  }
+
+  const casual = CASUAL_IMPULSE_INTENTS.has(context.nlu.intent) || (!context.nlu.isQuestion && context.dialogueFrame.turnsOnTopic <= 2);
+  if (e.curiosity > 0.78 && !context.nlu.isQuestion && !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) && !acts.some((act) => ["FOLLOW_UP", "ASK"].includes(act))) {
+    add({
+      kind: "curiosity_push",
+      emotion: "curious",
+      detail: beatDetail(context.nlu.semantic.focus ?? context.nlu.topic),
+      score: 0.46 + e.curiosity * 0.35 + Math.min(0.08, context.dialogueFrame.turnsOnTopic * 0.02),
+      strength: e.curiosity,
+      placement: "after",
+      asksQuestion: true,
+    });
+  }
+
+  const thread = [...context.memoryContext.openThreads]
+    .filter((entry) => entry.status === "open")
+    .sort((a, b) => b.priority - a.priority || b.lastTouchedAt - a.lastTouchedAt)[0];
+  if (thread && r.closeness > 0.38 && !acts.some((act) => ["FOLLOW_UP", "ASK"].includes(act)) && (casual || context.dialogueFrame.turnsOnTopic >= 5)) {
+    add({
+      kind: "memory_callback",
+      detail: beatDetail(thread.summary),
+      sourceId: thread.id,
+      score: 0.38 + thread.priority * 0.35 + r.closeness * 0.08,
+      strength: thread.priority,
+      placement: "after",
+      asksQuestion: true,
+    });
+  }
+
+  const worldDetail = worldBeatDetail(context);
+  if (worldDetail && r.closeness > 0.34 && casual && !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent)) {
+    add({
+      kind: "world_share",
+      detail: worldDetail.detail,
+      sourceId: worldDetail.id,
+      score: 0.42 + e.curiosity * 0.12 + r.closeness * 0.08,
+      strength: 0.62,
+      placement: "after",
+    });
+  }
+
+  if (e.boredom > 0.55 && e.energy > 0.42 && r.closeness > 0.42 && casual && !acts.some((act) => ["FOLLOW_UP", "ASK"].includes(act))) {
+    add({
+      kind: "playful_swerve",
+      score: 0.42 + e.boredom * 0.28 + context.character.immutableTraits.playfulness * 0.12,
+      strength: e.boredom,
+      placement: "after",
+      asksQuestion: true,
+    });
+  }
+
+  if (!candidates.length) return undefined;
+  const strongMixed = candidates.filter((entry) => entry.kind === "mixed_emotion" && entry.score >= 0.84);
+  const choiceBase = strongMixed.length ? strongMixed : candidates;
+  const max = Math.max(...choiceBase.map((entry) => entry.score));
+  const closeToTop = choiceBase.filter((entry) => entry.score >= max - 0.1);
+  const rng = new SeededRandom(`${context.turnId}|spontaneous-beat|${context.nlu.intent}|${context.relationship.stage}`);
+  const selected = closeToTop[rng.int(closeToTop.length)] ?? candidates[0];
+  // Strong emotional states leak reliably. Milder impulses stay occasional.
+  const chance = selected.score >= 0.86 ? 1 : Math.max(0.18, Math.min(0.62, 0.08 + selected.score * 0.58));
+  if (rng.next() > chance) return undefined;
+  const { score: _score, ...beat } = selected;
+  return beat;
+}
+
 function mayAskQuestion(context: DialogueContext, acts: readonly DialogueAct[]) {
   if (acts.some((act) => ["SILENCE","REFUSE","BOUNDARY","GOOD_NIGHT","CHANGE_TOPIC"].includes(act))) return false;
   if (acts.includes("CLARIFY")) return true;
@@ -616,11 +927,16 @@ export function planLocalDialogue(
 ): CharacterResponsePlan {
   const forced = decisionActs(context.decision);
   let acts = forced ?? intentActs(context.nlu);
+  if (!acts.some((act) => ["SILENCE", "REFUSE", "BOUNDARY", "CHANGE_TOPIC"].includes(act)))
+    acts = [...acts, ...compoundSecondaryActs(context.nlu)];
+  acts = [...acts, ...intimacyDialogueActs(context)];
   const optionalQuestion = context.responsePlan.questionMode === "direct" ||
     (context.responsePlan.questionMode === "optional" && context.decision.shouldAskFollowUp);
   if (optionalQuestion && mayAskQuestion(context, acts) && !acts.includes("CLARIFY")) acts = [...acts, "FOLLOW_UP"];
   if (context.nlu.intent === "return_after_absence" && ["close","deep"].includes(context.relationship.stage)) acts = [...acts, "MISS_USER"];
   acts = dedupeActs(acts);
+  const spontaneousBeat = planSpontaneousBeat(context, acts);
+  if (spontaneousBeat?.kind === "curiosity_push" && !acts.includes("CURIOSITY")) acts = [...acts, "CURIOSITY"];
   const [emotionName, emotionIntensity] = dominantEmotion(context.emotion);
   const semanticPayload: NonNullable<CharacterResponsePlan["semanticPayload"]> = {
     summary: context.decision.content.summary,
@@ -650,10 +966,12 @@ export function planLocalDialogue(
     tone: styleTones(context),
     relationshipLevel: context.relationship.stage,
     intimacyLevel: context.relationship.closeness,
+    intimacyPhase: context.intimacy?.phase,
     energy: context.emotion.energy,
-    responseLength: responseLength(context.responsePlan.length),
-    shouldAskQuestion: acts.includes("FOLLOW_UP") || acts.includes("CLARIFY"),
+    responseLength: spontaneousBeat && context.responsePlan.length === "very_short" ? "short" : responseLength(context.responsePlan.length),
+    shouldAskQuestion: acts.includes("FOLLOW_UP") || acts.includes("CLARIFY") || spontaneousBeat?.asksQuestion === true,
     topic: context.nlu.topic ?? context.dialogueFrame.currentTopic,
+    spontaneousBeat,
     semanticPayload,
     decision: context.decision,
     responsePlan: context.responsePlan,
@@ -680,6 +998,7 @@ export function planAutonomousDialogue(context: DialogueContext): CharacterRespo
     tone: styleTones(context),
     relationshipLevel: context.relationship.stage,
     intimacyLevel: context.relationship.closeness,
+    intimacyPhase: context.intimacy?.phase,
     energy: context.emotion.energy,
     responseLength: "short",
     shouldAskQuestion: acts.includes("ASK"),
