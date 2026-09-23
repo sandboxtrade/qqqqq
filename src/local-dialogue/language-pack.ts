@@ -65,7 +65,13 @@ function readIntents(raw: unknown, issues: string[]): IntentDefinition[] {
     const regex = value.patterns.regex;
     const negativePatterns = value.negativePatterns;
     const concepts = value.concepts;
-    if (![phrases, tokens, regex, negativePatterns, concepts].every(stringArray)) {
+    if (
+      !stringArray(phrases) ||
+      !stringArray(tokens) ||
+      !stringArray(regex) ||
+      !stringArray(negativePatterns) ||
+      !stringArray(concepts)
+    ) {
       issues.push(`intent ${value.id}: pattern arrays must contain strings`);
       continue;
     }
