@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import defaultStageBackgroundSrc from "../assets/character/backgrounds/main-bedroom.png";
 import { LivePhoto } from "./LivePhoto";
 import { findCharacterAsset, type CharacterAsset } from "./avatar-model";
 import { transitionKind } from "./avatar-model";
 import type { AvatarVisualState } from "./avatar-model";
 
-const url = (asset: CharacterAsset) => `${import.meta.env.BASE_URL}${asset.src}`;
+const url = (asset: CharacterAsset) =>
+  /^(?:https?:|data:|blob:|\/|\.\/)/u.test(asset.src)
+    ? asset.src
+    : `${import.meta.env.BASE_URL}${asset.src}`;
 function preload(asset: CharacterAsset, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -24,10 +28,13 @@ function preload(asset: CharacterAsset, signal: AbortSignal): Promise<void> {
   });
 }
 function ImageLayer({ asset, visualState, animate }: { asset: CharacterAsset; visualState: AvatarVisualState; animate: boolean }) {
+  const position = asset.scenePosition ?? asset.focalPoint;
+  const fit = asset.sceneFit ?? "contain";
+  const scale = asset.sceneScale ?? 1;
   if (animate && asset.motion === "reference_live_photo")
     return <LivePhoto src={url(asset)} visualState={visualState} />;
   return <img className="character-asset-image" src={url(asset)} alt={asset.description}
-    style={{ objectPosition: `${asset.focalPoint[0]}% ${asset.focalPoint[1]}%` }} />;
+    style={{ objectFit: fit, objectPosition: `${position[0]}% ${position[1]}%`, transform: `translateZ(0) scale(${scale})` }} />;
 }
 export function AssetScene({ assetId, visualState }: { assetId?: string; visualState: AvatarVisualState }) {
   const requested = findCharacterAsset(assetId);
@@ -50,15 +57,11 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
       setScene(s => ({ ...s, previous: null }));
       return () => controller.abort();
     }
-    // Validate even the initially selected asset. Previously the initial image
-    // bypassed preload entirely, so its <img> could fail without exposing Retry.
     void preload(requested, controller.signal).then(() => {
       if (controller.signal.aborted || ticket !== generation.current) return;
       const sameAsset = requested.id === displayed.current.id;
       verified.current = requested.id;
       if (sameAsset) {
-        // Force a fresh image element after a successful retry; browsers do not
-        // necessarily retry an already-failed <img> just because preload did.
         setRenderRevision(value => value + 1);
         setFailed(false);
         setScene(s => ({ ...s, previous: null }));
@@ -80,6 +83,7 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
   }, [requested.id, retry]);
   return <>
     <div className={`asset-scene ${scene.previous ? `asset-transition ${scene.kind}` : ""}`} data-asset-id={scene.current.id}>
+      <img className="asset-scene-background" src={defaultStageBackgroundSrc} alt="" aria-hidden="true" />
       <div key={`current-${scene.current.id}-${renderRevision}`} className="asset-layer asset-current">
         <ImageLayer asset={scene.current} visualState={visualState} animate={!scene.previous} />
       </div>

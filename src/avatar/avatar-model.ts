@@ -1,8 +1,8 @@
 /**
- * Consolidated module. Kept intentionally domain-sized to reduce source fragmentation
- * without changing runtime behavior.
+ * Consolidated avatar domain: motion state, image catalog, visual emotion
+ * resolution and persisted appearance selection.
  */
-import type { ResponsePlan } from "../cognition/cognition-types";
+import type { CharacterDecision, ResponsePlan } from "../cognition/cognition-types";
 import type { RuntimeState } from "../engine/runtime";
 import type { WorldLocation } from "../world/world";
 
@@ -82,6 +82,144 @@ export function resolveAvatarVisualState(
   };
 }
 
+// ---- visual-emotion vocabulary / resolver ----
+export const VISUAL_EMOTION_VOCABULARY = [
+  "neutral", "happy", "excited", "playful", "amused", "laughing", "gentle",
+  "affectionate", "loving", "caring", "welcoming", "missing_you", "shy",
+  "bashful", "embarrassed", "blushing", "nervous", "anxious", "surprised",
+  "shocked", "confused", "curious", "thinking", "serious", "focused",
+  "skeptical", "annoyed", "angry", "furious", "jealous", "pouting", "sad",
+  "upset", "hurt", "crying", "lonely", "tired", "sleepy", "bored", "relaxed",
+  "comfortable", "confident", "smug", "mischievous", "flirty", "teasing",
+  "seductive", "intimate", "passionate", "desiring", "horny", "hornys",
+] as const;
+
+export type VisualEmotionName = (typeof VISUAL_EMOTION_VOCABULARY)[number];
+const visualEmotionNames = new Set<string>(VISUAL_EMOTION_VOCABULARY);
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const intensity10 = (value: number) => Math.max(1, Math.min(10, Math.round(1 + clamp01(value) * 9)));
+
+export interface VisualEmotionState {
+  emotion: VisualEmotionName;
+  intensity: number;
+  /** Difference from the next-best emotional interpretation. Used for hysteresis. */
+  confidence: number;
+  /** How strongly the current event argues for changing the visible image. */
+  changeStrength: number;
+}
+
+export interface VisualEmotionContext {
+  decision: CharacterDecision;
+  responsePlan: ResponsePlan;
+  dialogueActs?: readonly string[];
+  sourceIntent?: string;
+  eventIntensity?: number;
+}
+
+interface EmotionCandidate {
+  emotion: VisualEmotionName;
+  score: number;
+  magnitude: number;
+}
+
+export function resolveVisualEmotionState(
+  runtime: RuntimeState,
+  context: VisualEmotionContext,
+): VisualEmotionState {
+  const e = runtime.emotion;
+  const r = runtime.relationship;
+  const romance = runtime.romance?.phase ?? "neutral";
+  const acts = new Set(context.dialogueActs ?? []);
+  const intent = context.sourceIntent ?? "";
+  const eventIntensity = clamp01(context.eventIntensity ?? 0.45);
+  const candidates: EmotionCandidate[] = [];
+  const add = (emotion: VisualEmotionName, score: number, magnitude = score) => {
+    candidates.push({ emotion, score: clamp01(score), magnitude: clamp01(magnitude) });
+  };
+
+  const positive = clamp01(e.happiness * 0.48 + e.affection * 0.34 + e.mood * 0.18);
+  const closeness = clamp01(r.closeness * 0.52 + r.attachment * 0.28 + r.trust * 0.2);
+  const tension = clamp01(e.irritation * 0.62 + r.unresolvedTension * 0.38);
+  const lowEnergy = 1 - e.energy;
+
+  add("neutral", 0.34, 0.25);
+  add("happy", 0.24 + e.happiness * 0.68, e.happiness);
+  add("excited", e.happiness * 0.42 + e.energy * 0.48 + (acts.has("HAPPINESS") ? 0.2 : 0), e.energy * e.happiness);
+  add("gentle", e.affection * 0.36 + (1 - tension) * 0.25 + (1 - e.energy) * 0.18, e.affection * 0.55);
+  add("relaxed", (1 - e.anxiety) * 0.35 + (1 - e.irritation) * 0.26 + (1 - Math.abs(e.energy - 0.48)) * 0.18, 1 - e.anxiety);
+  add("comfortable", closeness * 0.45 + r.security * 0.28 + positive * 0.2, closeness);
+  const confidenceSceneDamping = romance === "private" ? 0.72 : romance === "romantic" ? 0.88 : 1;
+  add("confident", ((1 - e.anxiety) * 0.35 + r.security * 0.24 + r.respect * 0.18 + (context.decision.confidence * 0.2)) * confidenceSceneDamping, context.decision.confidence);
+
+  add("curious", e.curiosity * 0.58 + (acts.has("CURIOSITY") || context.decision.action === "ask" ? 0.28 : 0), e.curiosity);
+  add("thinking", e.curiosity * 0.34 + (context.decision.content.stance === "uncertain" ? 0.32 : 0) + (acts.has("CLARIFY") ? 0.18 : 0), Math.max(e.curiosity, eventIntensity));
+  add("confused", (acts.has("CLARIFY") ? 0.62 : 0) + (intent === "unknown" ? 0.28 : 0), Math.max(0.35, eventIntensity));
+  add("serious", (["set_boundary", "refuse"].includes(context.decision.action) ? 0.68 : 0.12) + context.responsePlan.directness * 0.2, Math.max(tension, context.responsePlan.directness));
+  add("focused", (context.decision.content.mode === "factual" ? 0.46 : 0.12) + context.responsePlan.directness * 0.28 + e.curiosity * 0.16, context.responsePlan.directness);
+  add("skeptical", (context.decision.action === "challenge" ? 0.78 : context.decision.action === "disagree" ? 0.55 : 0.06) + (context.decision.content.stance === "uncertain" ? 0.12 : 0), context.decision.confidence);
+
+  add("annoyed", e.irritation * 0.7 + r.unresolvedTension * 0.18, e.irritation);
+  add("angry", Math.max(0, e.irritation - 0.35) * 1.25 + r.unresolvedTension * 0.14, e.irritation);
+  add("furious", Math.max(0, e.irritation - 0.7) * 2.25 + (context.decision.action === "set_boundary" ? 0.08 : 0), e.irritation);
+  add("pouting", e.irritation * 0.32 + e.affection * 0.25 + (context.decision.tone.includes("restrained") ? 0.16 : 0), Math.max(e.irritation, e.affection * 0.6));
+  add("jealous", (acts.has("JEALOUSY") ? 0.82 : 0) + e.affection * r.attachment * 0.16, eventIntensity);
+
+  add("sad", e.sadness * 0.72 + (acts.has("SADNESS") ? 0.18 : 0), e.sadness);
+  add("upset", e.sadness * 0.5 + tension * 0.32 + (context.decision.tone.includes("hurt") ? 0.16 : 0), Math.max(e.sadness, tension));
+  add("hurt", e.sadness * 0.46 + r.unresolvedTension * 0.28 + (context.decision.tone.includes("hurt") ? 0.34 : 0), Math.max(e.sadness, r.unresolvedTension));
+  add("crying", Math.max(0, e.sadness - 0.65) * 1.9 + (acts.has("SADNESS") ? 0.08 : 0), e.sadness);
+  add("lonely", e.sadness * 0.28 + runtime.world.connectionDrive * 0.48 + r.attachment * 0.14, runtime.world.connectionDrive);
+  add("anxious", e.anxiety * 0.78 + (runtime.world.availability === "occupied" ? 0.08 : 0), e.anxiety);
+  add("nervous", e.anxiety * 0.5 + (romance === "playful" || romance === "romantic" ? 0.18 : 0) + e.affection * 0.12, e.anxiety);
+
+  add("tired", lowEnergy * 0.66 + (runtime.world.availability === "resting" ? 0.2 : 0), lowEnergy);
+  add("sleepy", (!runtime.world.isAwake || runtime.world.availability === "sleeping" ? 0.94 : lowEnergy * 0.48), lowEnergy);
+  add("bored", e.boredom * 0.82 + lowEnergy * 0.08, e.boredom);
+
+  add("caring", (acts.has("CARE") || acts.has("COMFORT") || acts.has("REASSURE") ? 0.72 : 0.08) + e.affection * 0.16, Math.max(e.affection, eventIntensity));
+  add("affectionate", e.affection * 0.58 + closeness * 0.2 + (context.decision.action === "show_affection" ? 0.26 : 0), e.affection);
+  add("loving", Math.max(0, e.affection - 0.48) * 0.7 + closeness * 0.34 + (romance === "romantic" ? 0.18 : 0), Math.max(e.affection, closeness));
+  add("welcoming", (acts.has("WELCOME_BACK") ? 0.82 : 0) + positive * 0.1, eventIntensity);
+  add("missing_you", (acts.has("MISS_USER") ? 0.88 : 0) + runtime.world.connectionDrive * r.attachment * 0.35, Math.max(runtime.world.connectionDrive, r.attachment));
+
+  const flirtSignal = acts.has("FLIRT") || romance === "playful" || romance === "romantic" || romance === "private";
+  const romanticDrive = clamp01(e.romanticInterest * 0.5 + e.affection * 0.22 + closeness * 0.18 + e.energy * 0.1);
+  add("playful", (acts.has("TEASE") || acts.has("JOKE") ? 0.66 : 0.08) + (romance === "playful" ? 0.32 : 0) + e.happiness * 0.12, Math.max(e.happiness, e.energy));
+  add("amused", (acts.has("JOKE") ? 0.68 : 0.04) + e.happiness * 0.22, e.happiness);
+  add("laughing", (acts.has("JOKE") && e.happiness > 0.65 ? 0.72 : 0) + Math.max(0, e.happiness - 0.75) * 0.55, e.happiness);
+  add("mischievous", (acts.has("TEASE") ? 0.66 : 0.04) + (romance === "playful" ? 0.25 : 0) + e.energy * 0.1, Math.max(e.energy, e.happiness));
+  add("teasing", (acts.has("TEASE") ? 0.82 : 0) + (romance === "playful" ? 0.18 : 0), eventIntensity);
+  add("flirty", (flirtSignal ? 0.52 : 0.02) + romanticDrive * 0.38, romanticDrive);
+  add("shy", (flirtSignal ? 0.24 : 0.02) + e.anxiety * 0.34 + e.affection * 0.2 + (acts.has("FLIRT") ? 0.18 : 0), Math.max(e.anxiety, romanticDrive * 0.7));
+  add("bashful", (acts.has("FLIRT") ? 0.38 : 0) + e.anxiety * 0.24 + romanticDrive * 0.3, Math.max(e.anxiety, romanticDrive));
+  add("embarrassed", (acts.has("FLIRT") && e.anxiety > 0.3 ? 0.46 : 0.02) + e.anxiety * 0.32, e.anxiety);
+  add("blushing", (acts.has("FLIRT") && romanticDrive > 0.58 ? 0.5 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
+
+  // Private/romantic visuals form a progression instead of letting a generic
+  // "intimate" label permanently win. The two explicit arousal states remain
+  // separate: horny = internal arousal; hornys = active outward expression.
+  add("intimate", (romance === "private" ? 0.56 : romance === "romantic" ? 0.34 : 0) + romanticDrive * 0.18, romanticDrive);
+  add("seductive", (romance === "romantic" || romance === "private" ? 0.2 : 0) + romanticDrive * 0.34 + (acts.has("FLIRT") ? 0.12 : 0), romanticDrive);
+  add("passionate", (romance === "private" ? 0.28 : romance === "romantic" ? 0.12 : 0) + Math.max(0, romanticDrive - 0.55) * 1.15, romanticDrive);
+  add("desiring", (romance === "private" || romance === "romantic" ? 0.18 : 0) + Math.max(0, romanticDrive - 0.62) * 1.35, romanticDrive);
+  add("horny", (romance === "private" ? 0.38 : 0) + Math.max(0, romanticDrive - 0.72) * 2.15, romanticDrive);
+  add("hornys", (romance === "private" && acts.has("FLIRT") ? 0.56 : 0) + Math.max(0, romanticDrive - 0.82) * (acts.has("FLIRT") ? 2.45 : 0.55), romanticDrive);
+
+  add("surprised", (acts.has("SURPRISE") ? 0.76 : 0) + (intent === "share_good_event" ? eventIntensity * 0.12 : 0), eventIntensity);
+  add("shocked", (acts.has("SURPRISE") && eventIntensity > 0.78 ? 0.66 + eventIntensity * 0.18 : 0), eventIntensity);
+  add("smug", (context.decision.confidence > 0.86 && ["agree", "disagree"].includes(context.decision.action) ? 0.38 : 0) + positive * 0.18, context.decision.confidence);
+
+  candidates.sort((a, b) => b.score - a.score || b.magnitude - a.magnitude || a.emotion.localeCompare(b.emotion));
+  const first = candidates[0] ?? { emotion: "neutral" as const, score: 0.34, magnitude: 0.25 };
+  const second = candidates[1]?.score ?? 0;
+  return {
+    emotion: first.emotion,
+    intensity: intensity10(first.magnitude),
+    confidence: clamp01(first.score - second + 0.45),
+    changeStrength: clamp01(Math.max(first.score, eventIntensity * 0.78)),
+  };
+}
+
 // ---- asset-catalog.ts ----
 export type VisualContext = "everyday" | "playful" | "romantic" | "resting";
 export interface CharacterAsset {
@@ -90,31 +228,108 @@ export interface CharacterAsset {
   description: string;
   pose: string;
   outfit: string;
-  expression: AvatarVisualCue;
+  expression: AvatarVisualCue | VisualEmotionName;
   contexts: VisualContext[];
   locations: WorldLocation[];
-  /** Same camera, framing and body alignment; only these groups crossfade. */
+  /** Same camera/framing and body alignment; only these groups crossfade. */
   transitionGroup: string;
   focalPoint: [number, number];
   motion: "still" | "reference_live_photo";
+  visualEmotion?: { emotion: VisualEmotionName; intensity: number; variant: number };
+  sceneFit?: "cover" | "contain";
+  sceneScale?: number;
+  scenePosition?: [number, number];
 }
 
-// Only existing, reviewed images belong here. Unknown poses must not use the
-// calibrated eye/body shader of the reference photograph.
-export const characterAssets: readonly CharacterAsset[] = [{
-  id: "reference.main",
-  src: "assets/character/avatar-main.jpg",
-  description: "Исходный образ Юдзуки",
-  pose: "reference",
-  outfit: "reference",
+export function parseVisualEmotionFilename(filename: string) {
+  const name = filename.split(/[\\/]/u).at(-1) ?? filename;
+  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.png$/u.exec(name);
+  if (!match || !visualEmotionNames.has(match[1])) return null;
+  return {
+    emotion: match[1] as VisualEmotionName,
+    intensity: Number(match[2]),
+    variant: Number(match[3]),
+  };
+}
+
+// Vite expands this at build time. Node regression tests do not provide
+// import.meta.glob, so the guarded branch intentionally resolves to an empty set there.
+const emotionImageModules = typeof import.meta.glob === "function"
+  ? import.meta.glob("../assets/character/emotions/*.png", {
+      eager: true,
+      query: "?url",
+      import: "default",
+    }) as Record<string, string>
+  : {};
+
+const emotionScenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
+  "neutral.5.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 58], pose: "portrait-neutral", description: "Yuzuki, calm neutral expression" },
+  "happy.8.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-happy", description: "Yuzuki, bright happy smile" },
+  "laughing.9.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-laughing", description: "Yuzuki laughing warmly" },
+  "affectionate.6.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 58], pose: "portrait-affectionate", description: "Yuzuki with an affectionate soft smile" },
+  "bashful.7.1": { sceneFit: "contain", sceneScale: 1.1, scenePosition: [50, 58], pose: "portrait-bashful", description: "Yuzuki looking bashful and flustered" },
+  "sad.4.1": { sceneFit: "contain", sceneScale: 1.08, scenePosition: [50, 60], pose: "portrait-sad", description: "Yuzuki looking a little sad" },
+  "flirty.8.1": { sceneFit: "contain", sceneScale: 1.02, scenePosition: [56, 62], pose: "fullbody-flirty", description: "Yuzuki in a flirty full-body pose" },
+  "seductive.8.1": { sceneFit: "contain", sceneScale: 1.02, scenePosition: [56, 66], pose: "fullbody-seductive", description: "Yuzuki in a more seductive kneeling pose" },
+};
+
+function buildEmotionAssets(): CharacterAsset[] {
+  return Object.entries(emotionImageModules).flatMap(([path, src]) => {
+    const parsed = parseVisualEmotionFilename(path);
+    if (!parsed || typeof src !== "string") return [];
+    const { emotion, intensity, variant } = parsed;
+    const presetKey = `${emotion}.${intensity}.${variant}`;
+    const preset = emotionScenePresets[presetKey] ?? {
+      sceneFit: "contain" as const,
+      sceneScale: 1.08,
+      scenePosition: [50, 60] as [number, number],
+      pose: `variant-${variant}`,
+      description: `Yuzuki: ${emotion}, intensity ${intensity}, variant ${variant}`,
+    };
+    return [{
+      id: `emotion.${emotion}.${intensity}.${variant}`,
+      src,
+      description: preset.description,
+      pose: preset.pose,
+      outfit: "emotion-set",
+      expression: emotion,
+      contexts: ["everyday", "playful", "romantic", "resting"] as VisualContext[],
+      locations: [],
+      transitionGroup: "visual-emotions",
+      focalPoint: [50, 18] as [number, number],
+      motion: "still" as const,
+      visualEmotion: { emotion, intensity, variant },
+      sceneFit: preset.sceneFit,
+      sceneScale: preset.sceneScale,
+      scenePosition: preset.scenePosition,
+    }];
+  }).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+const placeholderAsset: CharacterAsset = {
+  id: "placeholder.neutral",
+  src: "assets/character/placeholder-avatar.png",
+  description: "Yuzuki placeholder silhouette",
+  pose: "placeholder",
+  outfit: "placeholder",
   expression: "neutral",
   contexts: ["everyday"],
   locations: [],
-  transitionGroup: "reference.main",
-  focalPoint: [50, 12],
-  motion: "reference_live_photo",
-}];
-export const fallbackAssetId = "reference.main";
+  transitionGroup: "visual-emotions",
+  focalPoint: [50, 50],
+  motion: "still",
+  sceneFit: "contain",
+  sceneScale: 1,
+  scenePosition: [50, 66],
+};
+
+export const characterAssets: readonly CharacterAsset[] = [placeholderAsset, ...buildEmotionAssets()];
+export const fallbackAssetId = characterAssets.find((asset) => asset.visualEmotion?.emotion === "neutral")?.id ?? placeholderAsset.id;
+
+const legacyExpressions = new Set<AvatarVisualCue>([
+  "neutral", "warm", "soft_smile", "curious", "annoyed_soft", "guarded", "sad_soft", "playful",
+]);
+
 export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback = fallbackAssetId) {
   const ids = new Set<string>();
   for (const a of assets) {
@@ -122,21 +337,32 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
     ids.add(a.id);
     if (!/^[a-zA-Z0-9._-]{1,100}$/u.test(a.id) ||
         !["still", "reference_live_photo"].includes(a.motion) ||
-        !["neutral", "warm", "soft_smile", "curious", "annoyed_soft", "guarded", "sad_soft", "playful"].includes(a.expression) ||
+        (!legacyExpressions.has(a.expression as AvatarVisualCue) && !visualEmotionNames.has(a.expression)) ||
         a.contexts.some(c => !["everyday", "playful", "romantic", "resting"].includes(c)) ||
         a.locations.some(l => !["bedroom", "living_room", "kitchen", "outside", "cafe", "unknown"].includes(l)))
       throw new Error(`Invalid asset metadata: ${a.id}`);
-    if (!/^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp)$/u.test(a.src) || a.src.includes(".."))
+    const publicPath = /^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|svg)$/u.test(a.src);
+    const bundledPath = /^(?:\.\/|\/)(?:src\/)?assets\/[a-zA-Z0-9_./@?=&%~-]+\.(?:png|jpe?g|webp|svg)(?:\?[^#]*)?$/u.test(a.src);
+    if ((!publicPath && !bundledPath) || a.src.includes(".."))
       throw new Error(`Invalid asset path: ${a.id}`);
     if (!a.pose || !a.outfit || !a.transitionGroup || !a.description || !a.contexts.length ||
-        a.focalPoint.length !== 2 || a.focalPoint.some(v => !Number.isFinite(v) || v < 0 || v > 100))
+        a.focalPoint.length !== 2 || a.focalPoint.some(v => !Number.isFinite(v) || v < 0 || v > 100) ||
+        (a.scenePosition && (a.scenePosition.length !== 2 || a.scenePosition.some(v => !Number.isFinite(v) || v < 0 || v > 100))) ||
+        (a.sceneScale !== undefined && (!Number.isFinite(a.sceneScale) || a.sceneScale <= 0 || a.sceneScale > 3)))
       throw new Error(`Incomplete asset metadata: ${a.id}`);
-    if (a.motion === "reference_live_photo" && a.src !== "assets/character/avatar-main.jpg")
-      throw new Error("Live-photo calibration only supports the reference image");
+    if (a.visualEmotion) {
+      if (!visualEmotionNames.has(a.visualEmotion.emotion) ||
+          !Number.isInteger(a.visualEmotion.intensity) || a.visualEmotion.intensity < 1 || a.visualEmotion.intensity > 10 ||
+          !Number.isInteger(a.visualEmotion.variant) || a.visualEmotion.variant < 1)
+        throw new Error(`Invalid visual emotion metadata: ${a.id}`);
+    }
+    if (a.motion === "reference_live_photo" && a.src !== "assets/character/placeholder-avatar.png")
+      throw new Error("Live-photo calibration only supports the placeholder calibration image");
   }
   if (!ids.has(fallback)) throw new Error("Missing character fallback asset");
 }
 validateAssetCatalog(characterAssets);
+
 export function findCharacterAsset(id?: string) {
   return characterAssets.find(a => a.id === id) ?? characterAssets.find(a => a.id === fallbackAssetId)!;
 }
@@ -156,28 +382,50 @@ export function decodeAppearance(raw: unknown): AppearanceState {
     throw new Error("Invalid appearance state");
   return { version: 1, assetId: a.assetId, selectedAt: a.selectedAt as number, outfitChangedAt: a.outfitChangedAt as number };
 }
+
 function context(runtime: RuntimeState): VisualContext {
   if (!runtime.world.isAwake || runtime.world.availability === "sleeping") return "resting";
-  if (runtime.romance?.phase === "paused" || runtime.emotion.irritation >= 0.5 || runtime.emotion.sadness >= 0.55) return "everyday";
   if (runtime.romance?.phase === "playful") return "playful";
-  if (runtime.romance?.phase === "romantic") return "romantic";
+  if (["romantic", "private"].includes(runtime.romance?.phase ?? "")) return "romantic";
   return "everyday";
 }
-export function selectAppearance(runtime: RuntimeState, cue: AvatarVisualCue, now: number,
-  assets: readonly CharacterAsset[] = characterAssets, fallbackId = fallbackAssetId): AppearanceState {
+
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function chooseVariant(candidates: CharacterAsset[], recentAssetIds: readonly string[], seed: string) {
+  const recent = new Set(recentAssetIds.slice(-3));
+  let pool = candidates.filter((asset) => !recent.has(asset.id));
+  if (!pool.length) {
+    const current = recentAssetIds.at(-1);
+    pool = candidates.filter((asset) => asset.id !== current);
+  }
+  if (!pool.length) pool = candidates;
+  const ordered = [...pool].sort((a, b) => a.id.localeCompare(b.id));
+  return ordered[hashString(seed) % ordered.length];
+}
+
+function legacySelectAppearance(
+  runtime: RuntimeState,
+  cue: AvatarVisualCue,
+  now: number,
+  assets: readonly CharacterAsset[],
+  fallbackId: string,
+): AppearanceState {
   const fallback = assets.find(a => a.id === fallbackId);
   if (!fallback) throw new Error("Missing appearance fallback");
   const previous = runtime.appearance;
   const current = assets.find(a => a.id === previous?.assetId);
   const desiredContext = context(runtime);
   const compatible = (a: CharacterAsset) => a.id === fallbackId ||
-    ((!a.locations.length || a.locations.includes(runtime.world.currentLocation)) &&
-     a.contexts.includes(desiredContext));
-  // The private fade never selects a more revealing image or a staged scene.
-  if (runtime.romance?.phase === "private" && current && previous) return previous;
-  const currentValid = current && (current.id === fallbackId ||
-    ((!current.locations.length || current.locations.includes(runtime.world.currentLocation)) &&
-     (["playful", "romantic"].includes(desiredContext) || current.contexts.includes(desiredContext))));
+    ((!a.locations.length || a.locations.includes(runtime.world.currentLocation)) && a.contexts.includes(desiredContext));
+  const currentValid = current && compatible(current);
   const score = (a: CharacterAsset) =>
     (a.expression === cue ? 6 : 0) + (a.contexts.includes(desiredContext) ? 5 : 0) +
     (a.locations.includes(runtime.world.currentLocation) ? 2 : 0) +
@@ -188,10 +436,79 @@ export function selectAppearance(runtime: RuntimeState, cue: AvatarVisualCue, no
   const best = [...candidates].sort((a,b) => score(b)-score(a) || a.id.localeCompare(b.id))[0] ?? fallback;
   if (currentValid && previous && (best.id === current.id || now - previous.selectedAt < 12_000 || score(best) < score(current) + 3))
     return previous;
-  const selected = best;
-  return { version: 1, assetId: selected.id, selectedAt: now,
-    outfitChangedAt: previous && current?.outfit === selected.outfit ? previous.outfitChangedAt : now };
+  return { version: 1, assetId: best.id, selectedAt: now,
+    outfitChangedAt: previous && current?.outfit === best.outfit ? previous.outfitChangedAt : now };
 }
+
+export interface AppearanceSelectionOptions {
+  assets?: readonly CharacterAsset[];
+  fallbackId?: string;
+  recentAssetIds?: readonly string[];
+  seed?: string;
+}
+
+export function selectAppearance(
+  runtime: RuntimeState,
+  request: AvatarVisualCue | VisualEmotionState,
+  now: number,
+  optionsOrAssets: AppearanceSelectionOptions | readonly CharacterAsset[] = {},
+  legacyFallbackId = fallbackAssetId,
+): AppearanceState {
+  // Backwards-compatible path for existing reviewed scene assets and tests.
+  if (typeof request === "string") {
+    const assets = Array.isArray(optionsOrAssets) ? optionsOrAssets : optionsOrAssets.assets ?? characterAssets;
+    const fallbackId = Array.isArray(optionsOrAssets) ? legacyFallbackId : optionsOrAssets.fallbackId ?? fallbackAssetId;
+    return legacySelectAppearance(runtime, request, now, assets, fallbackId);
+  }
+
+  const options = Array.isArray(optionsOrAssets) ? { assets: optionsOrAssets } : optionsOrAssets;
+  const assets = options.assets ?? characterAssets;
+  const fallbackId = options.fallbackId ?? fallbackAssetId;
+  const fallback = assets.find((asset) => asset.id === fallbackId);
+  if (!fallback) throw new Error("Missing appearance fallback");
+  const previous = runtime.appearance;
+  const current = assets.find((asset) => asset.id === previous?.assetId);
+  const currentVisual = current?.visualEmotion;
+  const requestedAssets = assets.filter((asset) => asset.visualEmotion?.emotion === request.emotion);
+  const neutralAssets = assets.filter((asset) => asset.visualEmotion?.emotion === "neutral");
+  const emotionPool = requestedAssets.length ? requestedAssets : neutralAssets;
+  if (!emotionPool.length) return current && previous ? previous : {
+    version: 1, assetId: fallback.id, selectedAt: now, outfitChangedAt: now,
+  };
+
+  const targetEmotion = requestedAssets.length ? request.emotion : "neutral";
+  const availableLevels = [...new Set(emotionPool.map((asset) => asset.visualEmotion!.intensity))]
+    .sort((a, b) => Math.abs(a - request.intensity) - Math.abs(b - request.intensity) || a - b);
+  const level = availableLevels[0];
+
+  if (currentVisual && previous) {
+    const sameEmotion = currentVisual.emotion === targetEmotion;
+    const intensityShift = Math.abs(currentVisual.intensity - request.intensity);
+    const age = Math.max(0, now - previous.selectedAt);
+    // Stable state: keep the current photo instead of changing on every line.
+    if (sameEmotion && intensityShift <= 1 && age < 90_000) return previous;
+    // Mild re-interpretations are intentionally sticky; a strong emotional turn
+    // bypasses this delay and may change immediately.
+    if (!sameEmotion && request.changeStrength < 0.62 && intensityShift < 3 && age < 18_000)
+      return previous;
+  }
+
+  const levelCandidates = emotionPool.filter((asset) => asset.visualEmotion?.intensity === level);
+  const recent = [...(options.recentAssetIds ?? []), ...(previous ? [previous.assetId] : [])];
+  const selected = chooseVariant(
+    levelCandidates,
+    recent,
+    `${options.seed ?? "visual"}|${targetEmotion}|${request.intensity}|${level}|${recent.slice(-4).join("|")}`,
+  );
+  if (previous && selected.id === previous.assetId) return previous;
+  return {
+    version: 1,
+    assetId: selected.id,
+    selectedAt: now,
+    outfitChangedAt: previous && current?.outfit === selected.outfit ? previous.outfitChangedAt : now,
+  };
+}
+
 export function transitionKind(a: CharacterAsset, b: CharacterAsset) {
   return a.transitionGroup === b.transitionGroup && a.pose === b.pose ? "dissolve" : "dip";
 }
