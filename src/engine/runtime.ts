@@ -36,9 +36,13 @@ import { refreshInitiatives } from "../initiative/initiative";
 import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 
-import { currentRomance, planRomance, type RomanceState } from "../relationship/relationship";
+import { currentRomance, initialRomance, planRomance, type RomanceState } from "../relationship/relationship";
 
-import { selectAppearance, type AppearanceState } from "../avatar/avatar-model";
+import {
+  resolveVisualEmotionState,
+  selectAppearance,
+  type AppearanceState,
+} from "../avatar/avatar-model";
 
 import {
   analyzeLocalNLU,
@@ -74,6 +78,7 @@ export interface ConversationLine {
   silent?: boolean;
   templateId?: string;
   dialogueActs?: DialogueAct[];
+  appearanceAssetId?: string;
 }
 export interface RuntimeTrace {
   usedGeminiPerception: boolean;
@@ -172,6 +177,7 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         text?: string;
         silent?: boolean;
         localDialogue?: { templateId?: string; dialogueActs?: string[] };
+        appearanceAssetId?: string;
       };
       const text = String(payload?.text ?? "").trim();
       const silent = e.source === "character" && payload?.silent === true;
@@ -189,6 +195,7 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
               silent,
               templateId: typeof payload.localDialogue?.templateId === "string" ? payload.localDialogue.templateId : undefined,
               dialogueActs,
+              appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
             },
           ]
         : [];
@@ -236,6 +243,32 @@ export async function bootstrapRuntime(
     pendingTurnIds: pendingTurns.map((event) => event.id),
     historyCursor: conversationPage.nextCursor,
     hasOlderConversation: conversationPage.hasMore,
+  };
+}
+
+export async function clearConversationAndMemory(
+  uid: string | null,
+  signal: AbortSignal,
+  current: RuntimeState,
+): Promise<RuntimeState> {
+  const repository = repo(uid, signal);
+  const now = runtimeNow(current);
+  const emotion: EmotionalState = { ...initialEmotionalState, updatedAt: now };
+  const relationship: RelationshipState = { ...initialRelationshipState, updatedAt: now };
+  const romance = initialRomance(now);
+  const world = createInitialWorldState(now, current.world.timeZone);
+  const persisted = await repository.resetConversationAndMemory(
+    { emotion, relationship, romance },
+    world,
+  );
+  checkSignal(signal);
+  return {
+    revision: persisted.snapshot?.revision ?? current.revision + 1,
+    emotion: persisted.snapshot?.emotion ?? emotion,
+    relationship: persisted.snapshot?.relationship ?? relationship,
+    romance: persisted.snapshot?.romance ?? romance,
+    appearance: persisted.snapshot?.appearance,
+    world: persisted.world ?? world,
   };
 }
 
@@ -326,12 +359,14 @@ export async function handleUserMessage(
       text?: string;
       silent?: boolean;
       localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
+      appearanceAssetId?: string;
     };
     return {
       reply: String(payload.text ?? ""),
       silent: payload.silent === true,
       replyId,
       replyTimestamp: existing.timestamp,
+      appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
       renderMeta: payload.localDialogue
         ? {
             templateId: payload.localDialogue.templateId,
@@ -448,7 +483,6 @@ export async function handleUserMessage(
     world: before.world, decision, plan: responsePlan });
   decision = romance.decision;
   responsePlan = romance.plan;
-  const appearance = selectAppearance({ ...before, romance: romance.state }, responsePlan.visualCue, now);
   const silent = decision.action === "stay_silent";
   options.onPhase?.(silent ? "Она решила промолчать…" : "Она отвечает…");
   const generationStarted = performance.now();
@@ -469,6 +503,26 @@ export async function handleUserMessage(
     responsePlan,
   });
   const localPlan = planLocalDialogue(dialogueContext, romance.localText);
+  const visualEmotion = resolveVisualEmotionState(
+    { ...before, emotion, relationship, romance: romance.state },
+    {
+      decision,
+      responsePlan,
+      dialogueActs: localPlan.dialogueActs,
+      sourceIntent: localPlan.sourceIntent,
+      eventIntensity: nlu.intensity,
+    },
+  );
+  const recentAppearanceIds = history
+    .filter((line) => line.role === "character" && line.appearanceAssetId)
+    .slice(-6)
+    .map((line) => line.appearanceAssetId!);
+  const appearance = selectAppearance(
+    { ...before, emotion, relationship, romance: romance.state },
+    visualEmotion,
+    now,
+    { recentAssetIds: recentAppearanceIds, seed: input.id },
+  );
   const rendered = await localDialogueRenderer.render(localPlan, dialogueContext);
   logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
   checkSignal(signal);
@@ -540,12 +594,14 @@ export async function handleUserMessage(
       text?: string;
       silent?: boolean;
       localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
+      appearanceAssetId?: string;
     };
     return {
       reply: String(savedPayload.text ?? ""),
       silent: savedPayload.silent === true,
       replyId,
       replyTimestamp: saved!.timestamp,
+      appearanceAssetId: typeof savedPayload.appearanceAssetId === "string" ? savedPayload.appearanceAssetId : undefined,
       renderMeta: savedPayload.localDialogue
         ? {
             templateId: savedPayload.localDialogue.templateId,
@@ -588,6 +644,7 @@ export async function handleUserMessage(
     silent,
     replyId,
     replyTimestamp,
+    appearanceAssetId: appearance.assetId,
     renderMeta: { templateId: rendered.templateId, dialogueActs: rendered.dialogueActs },
     state: { emotion, relationship, world, romance: romance.state, appearance, revision: base.revision + 1 },
     trace,
