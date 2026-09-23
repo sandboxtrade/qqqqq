@@ -162,7 +162,12 @@ export type SpontaneousBeatKind =
   | "memory_callback"
   | "world_share"
   | "playful_swerve"
-  | "intimate_flash";
+  | "intimate_flash"
+  | "afterthought"
+  | "conversation_pull"
+  | "playful_pushback"
+  | "situational_joke"
+  | "cadence_notice";
 
 export interface SpontaneousBeat {
   kind: SpontaneousBeatKind;
@@ -208,6 +213,7 @@ export interface DialogueFrame {
   previousUserText?: string;
   previousUserTextBeforeLast?: string;
   previousCharacterText?: string;
+  previousCharacterTextBeforeLast?: string;
 }
 
 export interface DialogueHistoryLine {

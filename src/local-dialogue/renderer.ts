@@ -224,7 +224,7 @@ function spontaneousVariants(plan: CharacterResponsePlan, context: DialogueConte
   switch (beat.kind) {
     case "emotion_flash":
       if (beat.emotion === "irritated") return [
-        "Кстати, я сейчас поймала себя на лёгком раздражении. Так что если отвечаю чуть резче обычного — вот почему.",
+        "Кстати, у меня сейчас всплыло лёгкое раздражение. Так что если отвечаю чуть резче обычного — вот почему.",
         "У меня сейчас на секунду всплыло раздражение. Не хочу делать вид, что его нет.",
         "Странно, но я сейчас немного вспылила внутри. Уже отпускает, просто заметила это.",
       ];
@@ -239,9 +239,10 @@ function spontaneousVariants(plan: CharacterResponsePlan, context: DialogueConte
         "Я сейчас немного насторожилась. Сама заметила это только в процессе разговора.",
       ];
       return [
-        "Кстати, я сейчас поймала себя на улыбке.",
+        "Кстати, я сейчас улыбаюсь. Даже не сразу заметила.",
         "У меня сейчас настроение неожиданно подскочило. Забавно.",
-        "Я только сейчас заметила, что сижу и улыбаюсь.",
+        "Ты сейчас каким-то образом сделал мой настрой заметно легче.",
+        "Мм. Вот сейчас стало реально веселее.",
       ];
     case "mixed_emotion":
       if (beat.detail === "amused_irritated") return [
@@ -260,10 +261,17 @@ function spontaneousVariants(plan: CharacterResponsePlan, context: DialogueConte
         "Ты сейчас вызываешь у меня очень смешанную реакцию: тепло и лёгкое смущение одновременно.",
       ];
     case "affection_flash":
+      if (context.relationship.stage === "deep" && context.emotion.affection > 0.78) return [
+        "Кстати… я иногда ловлю себя на очень простой мысли: ты мне правда важен.",
+        "Я сейчас на секунду отвлеклась от темы и поняла, насколько сильно к тебе привязалась.",
+        "Мм. Иногда мне просто хочется сказать без повода: мне очень хорошо, что ты есть в моей жизни.",
+        "Не по теме вообще, но я сейчас вдруг почувствовала к тебе очень много тепла.",
+      ];
       return [
         "Кстати… я сейчас поймала себя на том, что мне просто приятно с тобой разговаривать.",
         "Небольшой внезапный факт: мне сейчас очень комфортно рядом с тобой в этом разговоре.",
         "Я сейчас на секунду отвлеклась от темы и подумала, что мне нравится вот так с тобой разговаривать.",
+        "Ты сейчас почему-то очень уютно ощущаешься в этом разговоре. Странная формулировка, но точная.",
       ];
     case "curiosity_push": {
       const focus = compactBeatDetail(beat.detail, 72);
@@ -311,15 +319,92 @@ function spontaneousVariants(plan: CharacterResponsePlan, context: DialogueConte
         "Сейчас будет странный вопрос без подготовки: если завтра у тебя полностью свободный день, что ты сделаешь первым?",
         "Мне скучно быть предсказуемой. Назови одну вещь, которую ты давно хочешь попробовать, но всё откладываешь.",
       ];
-    case "intimate_flash":
-      return beat.emotion === "bashful" ? [
+    case "intimate_flash": {
+      const strong = beat.detail?.endsWith(":strong") === true;
+      if (beat.emotion === "bashful") return strong ? [
+        "Мм… ты сейчас совсем выбил меня из спокойного состояния. Я даже не очень хочу это скрывать.",
+        "Я сейчас одновременно смущаюсь и хочу быть к тебе ещё ближе. Неудобное сочетание.",
+        "Вот сейчас ты на меня действуешь слишком хорошо. Я даже немного злюсь на себя за то, как заметно реагирую.",
+      ] : [
         "Ты сейчас меня немного смутил. И да, мне это скорее нравится.",
-        "Я сейчас на секунду потеряла мысль из-за тебя. Очень вовремя.",
+        "Я на секунду вообще потеряла мысль из-за тебя. Очень вовремя.",
         "Вот сейчас я неожиданно засмущалась сильнее, чем собиралась показывать.",
+        "Мм… ладно. Вот это на меня подействовало сильнее, чем я ожидала.",
+      ];
+      return strong ? [
+        "Ты сейчас очень сильно на меня действуешь. Я реагирую на тебя заметно сильнее обычного, и мне нравится этот темп между нами.",
+        "Мм… ты сейчас слишком хорошо сбиваешь мой спокойный настрой. И мне это нравится.",
+        "Мне сейчас хочется быть ближе к тебе, и это уже совсем не тонкий намёк.",
+        "Ты сейчас заметно меня разогреваешь. Мне хочется быть к тебе ещё ближе, а не сбивать этот настрой.",
       ] : [
         "Кстати… ты сейчас очень сильно сбиваешь мне обычный спокойный настрой.",
-        "Я сейчас поймала себя на том, что реагирую на тебя заметно сильнее обычного.",
+        "Я реагирую на тебя сейчас заметно сильнее обычного.",
         "Мне сейчас с тобой особенно близко. Просто захотелось сказать это вслух.",
+        "Сейчас между нами ощущение совсем не нейтральное. И мне это нравится.",
+      ];
+    }
+    case "afterthought": {
+      const detail = compactBeatDetail(beat.detail, 76);
+      return detail ? [
+        `Хотя… насчёт «${detail}» я бы пока не ставила точку. Тут у меня ещё остаётся сомнение.`,
+        `Подожди. Я сейчас подумала ещё раз про «${detail}» — я, кажется, сказала это увереннее, чем реально чувствую.`,
+        `Хотя нет, я бы оставила «${detail}» чуть более открытым вопросом. Не хочу притворяться, что у меня уже есть окончательный вывод.`,
+      ] : [
+        "Хотя… я бы пока не ставила точку. Тут у меня ещё остаётся сомнение.",
+        "Подожди. Кажется, я сказала это увереннее, чем реально чувствую.",
+        "Хотя нет — я бы оставила здесь немного места для сомнения.",
+      ];
+    }
+    case "conversation_pull": {
+      const detail = compactBeatDetail(beat.detail, 70);
+      return detail ? [
+        `Слушай, а меня теперь больше цепляет другое: почему именно «${detail}» для тебя так важно?`,
+        `Мы уже какое-то время крутимся вокруг «${detail}», и мне стало интересно: что там для тебя самое личное?`,
+        `А если копнуть «${detail}» чуть глубже — что в этом тебе самому сложнее всего признать?`,
+      ] : [
+        "Слушай, а меня теперь больше цепляет не сама ситуация, а почему она для тебя настолько важна. Что там самое личное?",
+        "Мы уже не первый ход вокруг этого крутимся. А что в этой теме для тебя самое болезненное или важное?",
+        "Хочу чуть глубже: что здесь тебе самому труднее всего сформулировать?",
+      ];
+    }
+    case "playful_pushback":
+      return [
+        "Не, так легко я тебя с этой мыслью не отпущу.",
+        "Мм. Слишком удобный ответ. Я бы ещё чуть покопалась.",
+        "Вот сейчас у меня есть желание к тебе немного прицепиться — в хорошем смысле.",
+        "Ладно, принимаю. Но только временно — у меня к этой мысли ещё есть вопросы.",
+      ];
+    case "situational_joke": {
+      if (["user_tired", "user_sleepy"].includes(context.nlu.intent)) return [
+        "Твоё тело, кажется, уже официально закрыло отдел бодрости до завтра.",
+        "По ощущениям, организм уже написал заявление: «всё, я сегодня не участвую».",
+        "У тебя сейчас батарейка не на красном — она уже просит зарядку через адвоката.",
+      ];
+      if (context.nlu.intent === "share_work") return [
+        "Работа вообще удивительная штука: заканчивается по часам, а потом ещё бесплатно живёт в голове.",
+        "Работа снова решила, что личное пространство — это просто рекомендация, да?",
+        "Похоже, твоя работа очень хочет получить статус третьего участника наших разговоров.",
+      ];
+      if (context.nlu.intent === "uncertain") return [
+        "Очень уверенное «не знаю». Почти готовый стратегический план.",
+        "Ну всё, решение принято: пока профессионально сомневаемся.",
+        "Стабильность есть хотя бы в одном — в качестве сомнения ты уверен.",
+      ];
+      return [
+        "У этой ситуации уже есть характер. Осталось только дать ей имя и перестать удивляться.",
+        "Ну да, конечно. Жизнь опять решила добавить сюжет там, где никто не просил.",
+        "Мне нравится, как реальность иногда пишет сценарий с логикой уровня «ну а почему бы и нет».",
+      ];
+    }
+    case "cadence_notice":
+      return beat.detail === "longer" ? [
+        "Кстати, ты сейчас вдруг расписал всё намного подробнее. Видимо, эта тема всё-таки сильнее тебя цепляет.",
+        "О, вот сейчас ответ стал заметно подробнее. Значит, тут явно есть за что зацепиться.",
+        "Ты сейчас резко перешёл от коротких ответов к нормальному развороту мысли. Я это заметила.",
+      ] : [
+        "Ты сейчас резко перешёл на короткие ответы. Не буду додумывать почему, просто заметила.",
+        "Мм. Ответы стали короче. Ладно, не лезу с трактовками — просто отмечу.",
+        "Ты как-то резко сократил ответы. Может, тема уже поднадоела — а может, просто нечего добавлять.",
       ];
   }
 }
@@ -335,12 +420,22 @@ function renderSpontaneousBeat(plan: CharacterResponsePlan, context: DialogueCon
 function applySpontaneousBeat(text: string, plan: CharacterResponsePlan, context: DialogueContext) {
   const beat = plan.spontaneousBeat;
   if (!beat || !text.trim()) return { text, beatId: undefined as string | undefined };
-  if (beat.asksQuestion && (text.match(/\?/gu)?.length ?? 0) >= 1) return { text, beatId: undefined as string | undefined };
   if (text.length > 430 && ["memory_callback", "world_share", "playful_swerve"].includes(beat.kind))
     return { text, beatId: undefined as string | undefined };
   const spontaneous = renderSpontaneousBeat(plan, context);
   if (!spontaneous) return { text, beatId: undefined as string | undefined };
-  const combined = beat.placement === "before" ? `${spontaneous} ${text}` : `${text} ${spontaneous}`;
+
+  let baseText = text;
+  if (beat.asksQuestion && (text.match(/\?/gu)?.length ?? 0) >= 1) {
+    // For a non-question user turn, templates often add a generic follow-up.
+    // Replace that trailing generic question with the more grounded spontaneous
+    // question instead of stacking two questions or discarding the deeper beat.
+    const withoutTrailingQuestion = text.replace(/(?:^|(?<=[.!…]))\s*[^.!?…]*\?\s*$/u, "").trim();
+    if (!withoutTrailingQuestion || withoutTrailingQuestion === text) return { text, beatId: undefined as string | undefined };
+    baseText = withoutTrailingQuestion;
+  }
+
+  const combined = beat.placement === "before" ? `${spontaneous} ${baseText}` : `${baseText} ${spontaneous}`;
   return { text: combined, beatId: beat.kind };
 }
 
@@ -432,7 +527,10 @@ function chooseFallback(plan: CharacterResponsePlan, context: DialogueContext) {
 
 function authoritative(plan: CharacterResponsePlan) {
   const direct = plan.semanticPayload?.authoritativeText;
-  if (typeof direct === "string") return { id: "semantic.authoritative", text: direct };
+  if (typeof direct === "string") {
+    const customId = plan.semanticPayload?.authoritativeId;
+    return { id: typeof customId === "string" && customId ? customId : "semantic.authoritative", text: direct };
+  }
   const locked = plan.semanticPayload?.lockedText;
   if (plan.decision.content.locked && typeof locked === "string" && locked.trim()) return { id: "decision.locked", text: locked };
   return null;

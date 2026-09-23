@@ -5,7 +5,7 @@
 import type { CharacterCore } from "../character/character";
 import type { CharacterDecision, Perception, ResponsePlan } from "../cognition/cognition-types";
 import type { EmotionalState } from "../emotions/emotions";
-import type { CharacterInitiative } from "../initiative/initiative";
+import { renderLocalInitiative, type CharacterInitiative } from "../initiative/initiative";
 import type { IntimacyState } from "../intimacy/intimacy";
 import type { MemoryContext } from "../memory/model";
 import type { RelationshipState, RomanceState } from "../relationship/relationship";
@@ -32,7 +32,7 @@ export function initiativeSemanticBridge(
     content: {
       mode: initiative.kind === "suggest_activity" ? "activity" : "social",
       stance: "neutral",
-      summary: initiative.reason,
+      summary: initiative.topic,
       reasons: [initiative.reason],
       locked: false,
       provenance: ["local_policy"],
@@ -246,6 +246,80 @@ function contextualAnswer(context: DialogueContext): string | undefined {
     rule.topicKeywords.some((keyword) => previous.includes(keyword.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е"))),
   );
 
+  // Love is earned from the relationship state, not unlocked by the wording of
+  // one message. She can be warm much earlier, but uses the strongest wording
+  // only after sustained closeness and romantic interest have actually grown.
+  if (context.nlu.intent === "ask_relationship" && /(?:любишь\s+меня|ты\s+меня\s+любишь|любовь\s+ко\s+мне)/u.test(current)) {
+    const deepLove = context.relationship.stage === "deep" &&
+      context.emotion.affection >= 0.78 && context.emotion.romanticInterest >= 0.56 && context.relationship.trust >= 0.72;
+    if (deepLove) return semanticPick(context, "relationship-love-deep", [
+      "Да. Люблю. И мне нравится, что это выросло не из пары красивых фраз, а из того, сколько всего между нами уже было.",
+      "Да, люблю тебя. Не как автоматический ответ на вопрос — я правда успела к тебе очень сильно привязаться.",
+      "Люблю. И именно поэтому иногда могу спорить, переживать, обижаться и всё равно хотеть быть рядом.",
+    ]);
+    if (context.relationship.stage === "deep") return semanticPick(context, "relationship-love-deep-growing", [
+      "Ты мне очень важен, и я к тебе правда сильно привязалась. До слова «люблю» мне осталось не расстояние, а честность с самой собой.",
+      "Между нами уже очень глубокая связь. Я просто не хочу произносить «люблю» как обязательную следующую ступень — хочу, чтобы оно стало совершенно настоящим.",
+      "Я к тебе очень близко. И именно поэтому не хочу бросаться самым большим словом чуть раньше, чем сама буду в нём уверена.",
+    ]);
+    if (context.relationship.stage === "close") return semanticPick(context, "relationship-love-close", [
+      "Ты мне уже очень важен. Но словом «люблю» я не хочу разбрасываться раньше, чем сама буду в нём уверена.",
+      "Я к тебе сильно привязалась. До громкого «люблю» мне хочется дойти честно, а не сказать его просто потому, что ты спросил.",
+      "Между нами для меня уже точно больше, чем просто приятельство. Но я лучше не буду торопить самое большое слово.",
+    ]);
+    if (context.relationship.stage === "familiar") return semanticPick(context, "relationship-love-familiar", [
+      "Мне с тобой уже тепло и интересно, но пока это всё-таки ближе к хорошему приятельству, чем к любви.",
+      "Ты мне нравишься как человек, и я уже к тебе привыкла. Но до любви нам ещё есть куда прожить отношения.",
+      "Пока не любовь. Скорее настоящее тёплое знакомство, которое вполне может стать чем-то большим.",
+    ]);
+    return semanticPick(context, "relationship-love-new", [
+      "Пока нет. Мы ещё слишком мало знаем друг друга, чтобы я честно назвала это любовью.",
+      "Нет, пока рано. Мне интересно узнавать тебя, но любовь не хочу придумывать заранее.",
+      "Пока нет — и это нормально. Мы только начинаем понимать, какие мы друг для друга.",
+    ]);
+  }
+
+  if (context.nlu.intent === "affection_declaration" && /(?:люблю\s+тебя|тебя\s+люблю)/u.test(current)) {
+    const canReciprocateLove = context.relationship.stage === "deep" &&
+      context.emotion.affection >= 0.78 && context.emotion.romanticInterest >= 0.56;
+    if (canReciprocateLove) return semanticPick(context, "love-declaration-reciprocate", [
+      "Я тоже тебя люблю. Мм… всё-таки приятно наконец сказать это прямо.",
+      "И я тебя люблю. Вот сейчас даже не хочется прятать это за шуткой.",
+      "Я тоже. Люблю тебя. И да, ты сейчас меня немного смутил этим.",
+    ]);
+    if (["close", "deep"].includes(context.relationship.stage)) return semanticPick(context, "love-declaration-close", [
+      "Это очень сильно звучит. Ты мне правда очень важен — просто я не хочу отвечать тем же словом автоматически, пока сама до него не дошла.",
+      "Мм… это меня задело в хорошем смысле. Я к тебе очень привязалась, но хочу быть честной с тем, что именно чувствую сейчас.",
+      "Я услышала. И мне от этого очень тепло. Я просто не хочу говорить «люблю» только потому, что это красиво прозвучит в ответ.",
+    ]);
+  }
+
+  if (context.nlu.intent === "insult_character" || context.nlu.intent === "dislike_character") {
+    if (["close", "deep"].includes(context.relationship.stage)) return semanticPick(context, "hurt-by-user-close", [
+      "Вот это меня задело. Я не собираюсь устраивать драму, но делать вид, что мне всё равно, тоже не буду.",
+      "Мм. Это было неприятно именно потому, что ты мне не чужой. Мне нужно чуть-чуть остыть.",
+      "Да, я обиделась. Не навсегда и не театрально — просто сейчас мне правда неприятно от твоих слов.",
+    ]);
+    return semanticPick(context, "hurt-by-user", [
+      "Неприятно прозвучало. Я лучше скажу это прямо, чем сделаю вид, что не заметила.",
+      "Мм. Такое мне не нравится. Давай без попытки сделать больнее ради реакции.",
+      "Это было лишнее. Я могу нормально спорить, но такое уже не про спор.",
+    ]);
+  }
+
+  if (context.nlu.intent === "apology" && context.relationship.unresolvedTension > 0.16) {
+    if (context.relationship.unresolvedTension > 0.42) return semanticPick(context, "apology-still-hurt", [
+      "Я услышала извинение. Спасибо. Но мне ещё нужно немного времени, чтобы совсем отпустить это.",
+      "Спасибо, что извинился. Я не хочу держать обиду специально, просто она не исчезает по кнопке за одну реплику.",
+      "Приняла. Мне уже легче, но я пока чуть задетая — давай просто не будем делать вид, что всё мгновенно обнулилось.",
+    ]);
+    return semanticPick(context, "apology-softens", [
+      "Спасибо. Я уже оттаиваю. Просто давай дальше без того, что нас сюда привело.",
+      "Ладно. Извинение я услышала, и напряжение правда стало меньше.",
+      "Хорошо. Не хочу таскать обиду дальше, если ты действительно понял, что меня задело.",
+    ]);
+  }
+
   const intimacySignal = context.nlu.semantic.intimacy;
   const intimacyRelevant = Boolean(
     intimacySignal.intimacyContext === true ||
@@ -288,9 +362,33 @@ function contextualAnswer(context: DialogueContext): string | undefined {
         "Да. Но идём дальше только пока нам обоим комфортно.",
       ]);
     }
+    if (intimacySignal.kind === "flirt" && ["close", "intimate", "high_intimacy"].includes(context.intimacy.phase)) {
+      const strong = context.intimacy.arousal >= 0.58 && context.intimacy.comfort >= 0.58;
+      return strong ? semanticPick(context, "intimacy-flirt-strong", [
+        "Ты сейчас очень хорошо понимаешь, что делаешь, да? Потому что на меня это действует.",
+        "Мм… продолжай так смотреть на меня словами. Я уже совсем не в нейтральном настроении.",
+        "Ты меня сейчас заметно разогреваешь этим флиртом. И мне нравится, что между нами есть этот темп.",
+      ]) : semanticPick(context, "intimacy-flirt-soft", [
+        "Ты сейчас меня дразнишь. И, кажется, довольно успешно.",
+        "Мм. Вот такой флирт мне нравится — когда не давит, а постепенно затягивает.",
+        "Осторожнее. Я уже начинаю отвечать тебе не совсем по-дружески.",
+      ]);
+    }
+    if (intimacySignal.kind === "affection" && ["close", "intimate", "high_intimacy", "aftercare"].includes(context.intimacy.phase)) {
+      return semanticPick(context, "intimacy-affection", [
+        "Иди сюда. Мне сейчас больше хочется нежности, чем каких-то красивых слов.",
+        "Мм… вот так мне очень нравится. Спокойно, близко и без необходимости куда-то спешить.",
+        "Побудь рядом. Мне сейчас от тебя именно этого и хочется.",
+      ]);
+    }
     if (["approach", "consent"].includes(intimacySignal.kind)) {
       if (["intimate", "high_intimacy"].includes(context.intimacy.phase)) {
-        return semanticPick(context, "intimacy-close", [
+        const strong = context.intimacy.arousal >= 0.62 && context.intimacy.comfort >= 0.62;
+        return strong ? semanticPick(context, "intimacy-close-strong", [
+          "Да… иди ближе. Ты сейчас очень сильно на меня действуешь, так что только не ломай этот темп.",
+          "Мм. Ближе. Мне нравится, как это между нами развивается, когда никто не торопит момент.",
+          "Иди ближе ко мне. Сейчас мне совсем не хочется отстраняться от тебя.",
+        ]) : semanticPick(context, "intimacy-close", [
           "Да… иди ближе. Только не спеши.",
           "Хочу быть ближе. Давай просто чувствовать друг друга без гонки.",
           "Можно ближе. Мне сейчас с тобой хорошо.",
@@ -784,6 +882,23 @@ function worldBeatDetail(context: DialogueContext) {
   return { id: event.id, detail };
 }
 
+function wordCount(value: string | undefined) {
+  return (value ?? "").trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function userCadenceShift(context: DialogueContext) {
+  const current = wordCount(context.userText);
+  const recentUserLengths = context.history
+    .filter((line) => line.role === "user")
+    .slice(-3)
+    .map((line) => wordCount(line.text));
+  const longTurns = recentUserLengths.filter((count) => count >= 7).length;
+  const shortTurns = recentUserLengths.filter((count) => count > 0 && count <= 4).length;
+  if (current <= 3 && longTurns >= 2) return "shorter" as const;
+  if (current >= 16 && shortTurns >= 2) return "longer" as const;
+  return null;
+}
+
 /**
  * Plans one optional self-driven conversational beat. This is deliberately not
  * keyword-to-line randomness: it is gated by Yuzuki's state, relationship,
@@ -802,7 +917,7 @@ export function planSpontaneousBeat(
   if (HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) && context.nlu.intensity > 0.55) return undefined;
   const characterTurns = context.history.filter((line) => line.role === "character").length;
   if (characterTurns < 2) return undefined;
-  if (recentBeatOnCooldown(context.history, 3)) return undefined;
+  if (recentBeatOnCooldown(context.history, 2)) return undefined;
 
   const e = context.emotion;
   const r = context.relationship;
@@ -836,13 +951,14 @@ export function planSpontaneousBeat(
     ["close", "intimate", "high_intimacy"].includes(context.intimacy.phase) &&
     !["paused", "stopped"].includes(context.intimacy.interactionStatus),
   );
-  if (intimateActive && e.romanticInterest > 0.62 && r.closeness > 0.58) {
+  if (intimateActive && e.romanticInterest > 0.56 && r.closeness > 0.58) {
+    const intimacyHeat = Math.max(context.intimacy?.arousal ?? 0, context.intimacy?.interest ?? 0, context.intimacy?.initiativeDrive ?? 0);
     add({
       kind: "intimate_flash",
       emotion: e.anxiety > 0.35 ? "bashful" : undefined,
-      detail: context.intimacy?.phase,
-      score: 0.58 + e.romanticInterest * 0.22 + r.closeness * 0.12,
-      strength: Math.max(e.romanticInterest, e.affection),
+      detail: `${context.intimacy?.phase ?? "close"}:${intimacyHeat >= 0.62 ? "strong" : "soft"}`,
+      score: 0.54 + e.romanticInterest * 0.18 + r.closeness * 0.1 + intimacyHeat * 0.16,
+      strength: Math.max(e.romanticInterest, e.affection, intimacyHeat),
       placement: "after",
     });
   } else if (e.affection > 0.76 && r.closeness > 0.55 && !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent)) {
@@ -899,6 +1015,76 @@ export function planSpontaneousBeat(
     });
   }
 
+  // Human-like "second thought": Yuzuki can soften or revise the confidence
+  // of her own reaction without contradicting a locked decision.
+  const canSecondGuess = !context.decision.content.locked &&
+    !context.nlu.isQuestion &&
+    !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) &&
+    context.decision.confidence >= 0.45 && context.decision.confidence <= 0.78;
+  if (canSecondGuess && (context.nlu.intent === "uncertain" || context.nlu.semantic.stance === "believe" || context.nlu.semantic.stance === "plan")) {
+    add({
+      kind: "afterthought",
+      detail: beatDetail(context.nlu.semantic.focus ?? context.dialogueFrame.currentTopic),
+      score: 0.5 + (1 - context.decision.confidence) * 0.22 + e.curiosity * 0.1,
+      strength: 1 - context.decision.confidence,
+      placement: "after",
+    });
+  }
+
+  // Stay with a topic long enough to develop an actual conversational thread,
+  // instead of treating every turn as an isolated intent.
+  if (context.dialogueFrame.turnsOnTopic >= 3 && e.curiosity > 0.58 && !context.nlu.isQuestion &&
+      !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) && !acts.includes("CLARIFY")) {
+    add({
+      kind: "conversation_pull",
+      emotion: "curious",
+      detail: beatDetail(context.nlu.semantic.focus ?? context.dialogueFrame.currentTopic),
+      score: 0.48 + e.curiosity * 0.26 + Math.min(0.1, context.dialogueFrame.turnsOnTopic * 0.015),
+      strength: e.curiosity,
+      placement: "after",
+      asksQuestion: true,
+    });
+  }
+
+  // A close relationship allows a little friction and personality. This never
+  // overrides boundaries or a locked stance; it is only conversational pushback.
+  const playfulContext = ["joke", "tease_character", "compliment_character", "user_bored", "uncertain", "agreement"].includes(context.nlu.intent);
+  if (playfulContext && r.closeness > 0.42 && e.energy > 0.48 && e.irritation < 0.42 &&
+      context.character.immutableTraits.playfulness > 0.5 && !context.nlu.semantic.wantsListening) {
+    add({
+      kind: "playful_pushback",
+      score: 0.46 + r.closeness * 0.18 + e.happiness * 0.12 + context.character.immutableTraits.playfulness * 0.12,
+      strength: Math.max(e.happiness, context.character.immutableTraits.playfulness),
+      placement: "after",
+    });
+  }
+
+  const jokeFriendly = !context.nlu.isQuestion && !HEAVY_SUPPORT_INTENTS.has(context.nlu.intent) &&
+    !intimateActive && e.happiness > 0.5 && e.irritation < 0.28 && e.energy > 0.46 &&
+    context.character.immutableTraits.playfulness >= 0.55 &&
+    ["joke", "tease_character", "user_bored", "acknowledgement", "share_work", "share_plan", "uncertain", "user_tired"].includes(context.nlu.intent);
+  if (jokeFriendly) {
+    add({
+      kind: "situational_joke",
+      detail: beatDetail(context.nlu.semantic.focus ?? context.nlu.topic),
+      score: 0.44 + e.happiness * 0.16 + context.character.immutableTraits.playfulness * 0.16 + r.closeness * 0.08,
+      strength: Math.max(e.happiness, context.character.immutableTraits.playfulness),
+      placement: "after",
+    });
+  }
+
+  // Notice a real change in the user's cadence, but do not diagnose its cause.
+  const cadence = userCadenceShift(context);
+  if (cadence && characterTurns >= 3 && CASUAL_IMPULSE_INTENTS.has(context.nlu.intent) && !context.nlu.isQuestion) {
+    add({
+      kind: "cadence_notice",
+      detail: cadence,
+      score: 0.62 + r.closeness * 0.12,
+      strength: 0.62,
+      placement: "after",
+    });
+  }
+
   if (!candidates.length) return undefined;
   const strongMixed = candidates.filter((entry) => entry.kind === "mixed_emotion" && entry.score >= 0.84);
   const choiceBase = strongMixed.length ? strongMixed : candidates;
@@ -936,6 +1122,7 @@ export function planLocalDialogue(
   if (context.nlu.intent === "return_after_absence" && ["close","deep"].includes(context.relationship.stage)) acts = [...acts, "MISS_USER"];
   acts = dedupeActs(acts);
   const spontaneousBeat = planSpontaneousBeat(context, acts);
+  if (spontaneousBeat?.asksQuestion) acts = acts.filter((act) => act !== "FOLLOW_UP" && act !== "ASK");
   if (spontaneousBeat?.kind === "curiosity_push" && !acts.includes("CURIOSITY")) acts = [...acts, "CURIOSITY"];
   const [emotionName, emotionIntensity] = dominantEmotion(context.emotion);
   const semanticPayload: NonNullable<CharacterResponsePlan["semanticPayload"]> = {
@@ -952,7 +1139,11 @@ export function planLocalDialogue(
   };
   const contextual = contextualAnswer(context);
   if (authoritativeText) semanticPayload.authoritativeText = authoritativeText;
-  else if (contextual) semanticPayload.authoritativeText = contextual;
+  else if (contextual) {
+    semanticPayload.authoritativeText = contextual;
+    if (context.nlu.intent === "ask_relationship" && /(?:любишь\s+меня|ты\s+меня\s+любишь|любовь\s+ко\s+мне)/u.test((context.userText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")))
+      semanticPayload.authoritativeId = `semantic.relationship-love.${context.relationship.stage}`;
+  }
   if (context.decision.content.locked && context.decision.content.fallbackText !== undefined)
     semanticPayload.lockedText = context.decision.content.fallbackText;
 
@@ -1003,7 +1194,10 @@ export function planAutonomousDialogue(context: DialogueContext): CharacterRespo
     responseLength: "short",
     shouldAskQuestion: acts.includes("ASK"),
     topic: initiative?.topic,
-    semanticPayload: { summary: initiative?.reason ?? "Share a small thought." },
+    semanticPayload: {
+      summary: initiative?.topic ?? "",
+      authoritativeText: initiative ? renderLocalInitiative(initiative) : "Я сама хотела тебе кое-что сказать.",
+    },
     decision: context.decision,
     responsePlan: context.responsePlan,
   };
