@@ -47,6 +47,19 @@ const sdk = {
     }
     return result;
   },
+  writeBatch: () => {
+    const writes = [];
+    return {
+      delete: (ref) => writes.push(["delete", ref]),
+      set: (ref, value) => writes.push(["set", ref, value]),
+      commit: async () => {
+        for (const [op, r, v] of writes) {
+          if (op === "delete") db.delete(r);
+          else db.set(r, structuredClone(v));
+        }
+      },
+    };
+  },
 };
 globalThis.__sdk = sdk;
 registerHooks({
@@ -68,7 +81,7 @@ registerHooks({
   load(url, context, next) {
     let source;
     if (url === "mock:firestore")
-      source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction}=globalThis.__sdk;`;
+      source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction,writeBatch}=globalThis.__sdk;`;
     else if (url === "mock:zustand")
       source = `export const create=(creator)=>{let state; const set=(update)=>{const patch=typeof update==='function'?update(state):update; state={...state,...patch}; return state;}; const get=()=>state; state=creator(set,get); const hook=()=>state; hook.getState=get; hook.setState=set; return hook;};`;
     else if (url.endsWith("/storage/repository-factory.ts"))
@@ -1905,7 +1918,7 @@ await test("Firestore snapshot codec preserves romance in the committed turn", a
   assert.equal(await r.getEvent("romance_conflict_reply"), null);
 });
 
-const { selectAppearance, transitionKind, decodeAppearance } = await import("../src/avatar/avatar-model.ts");
+const { selectAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, resolveVisualEmotionState } = await import("../src/avatar/avatar-model.ts");
 const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
 const visualAssets = [baseAsset,
@@ -1955,6 +1968,89 @@ await test("snapshot codec roundtrips selected appearance with romance", () => {
   const r = visualRuntime();
   const decoded = decodeCompanionSnapshot({ schemaVersion: 2, ...r });
   assert.deepEqual(decoded.appearance, r.appearance);
+});
+
+await test("visual emotion filenames use the fixed vocabulary and keep horny/hornys distinct", () => {
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.png"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("horny.7.1.png"), { emotion: "horny", intensity: 7, variant: 1 });
+  assert.deepEqual(parseVisualEmotionFilename("hornys.7.1.png"), { emotion: "hornys", intensity: 7, variant: 1 });
+  assert.equal(parseVisualEmotionFilename("joy.5.1.png"), null);
+  assert.equal(parseVisualEmotionFilename("happy.11.1.png"), null);
+});
+await test("horny and hornys are reachable as distinct internal versus outward states", () => {
+  const base = romanticInput("");
+  const runtime = {
+    revision: 0,
+    emotion: {
+      ...base.emotion,
+      mood: 0.72, happiness: 0.48, energy: 1, anxiety: 0.02, curiosity: 0.25, boredom: 0,
+      affection: 1, romanticInterest: 1, irritation: 0, sadness: 0,
+    },
+    relationship: {
+      ...base.relationship, trust: 1, closeness: 1, attachment: 1, security: 0.8, respect: 0.8, unresolvedTension: 0, stage: "deep",
+    },
+    world: { ...base.world, connectionDrive: 0.1 },
+    romance: { ...initialRomance(now), phase: "private" },
+  };
+  const context = {
+    decision: { ...base.decision, confidence: 0.8 },
+    responsePlan: base.plan,
+    sourceIntent: "answer",
+    eventIntensity: 0.7,
+  };
+  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: [] }).emotion, "horny");
+  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: ["FLIRT"] }).emotion, "hornys");
+});
+await test("visual emotion resolver picks nearest available level and avoids a recent variant", () => {
+  const r = visualRuntime();
+  r.appearance = { version: 1, assetId: baseAsset.id, selectedAt: now - 120_000, outfitChangedAt: now - 120_000 };
+  const emotionAssets = [
+    baseAsset,
+    { ...baseAsset, id: "emotion.happy.5.1", src: "assets/character/happy.5.1.png", expression: "happy", motion: "still", visualEmotion: { emotion: "happy", intensity: 5, variant: 1 } },
+    { ...baseAsset, id: "emotion.happy.5.2", src: "assets/character/happy.5.2.png", expression: "happy", motion: "still", visualEmotion: { emotion: "happy", intensity: 5, variant: 2 } },
+    { ...baseAsset, id: "emotion.happy.7.1", src: "assets/character/happy.7.1.png", expression: "happy", motion: "still", visualEmotion: { emotion: "happy", intensity: 7, variant: 1 } },
+  ];
+  const selected = selectAppearance(r, { emotion: "happy", intensity: 6, confidence: .8, changeStrength: .8 }, now, {
+    assets: emotionAssets,
+    recentAssetIds: ["emotion.happy.5.1"],
+    seed: "variant-test",
+  });
+  assert.equal(selected.assetId, "emotion.happy.5.2");
+});
+await test("visual emotion hysteresis keeps a nearly unchanged image", () => {
+  const r = visualRuntime();
+  const emotionAssets = [
+    baseAsset,
+    { ...baseAsset, id: "emotion.shy.5.1", src: "assets/character/shy.5.1.png", expression: "shy", motion: "still", visualEmotion: { emotion: "shy", intensity: 5, variant: 1 } },
+    { ...baseAsset, id: "emotion.shy.6.1", src: "assets/character/shy.6.1.png", expression: "shy", motion: "still", visualEmotion: { emotion: "shy", intensity: 6, variant: 1 } },
+  ];
+  r.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 15_000, outfitChangedAt: now - 15_000 };
+  assert.equal(selectAppearance(r, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.5.1");
+});
+await test("conversation and memory reset removes durable history and starts a fresh revision", async () => {
+  const r = new InMemoryCompanionRepository();
+  const event = ev("reset-memory", "Я живу в Москве.", now);
+  await r.appendEvent(event);
+  await consolidateEvents([event], r);
+  assert.equal((await r.listConversationEvents({ limit: 20 })).events.length, 1);
+  assert.ok((await r.listMemories({ includeArchived: true })).length > 0);
+  assert.ok((await r.listKnowledgeFacts()).length > 0);
+  const freshWorld = createInitialWorldState(now + 1000, "UTC");
+  const reset = await r.resetConversationAndMemory(
+    {
+      emotion: { ...initialEmotionalState, updatedAt: now + 1000 },
+      relationship: { ...initialRelationshipState, updatedAt: now + 1000 },
+      romance: initialRomance(now + 1000),
+    },
+    freshWorld,
+  );
+  assert.equal((await r.listConversationEvents({ limit: 20 })).events.length, 0);
+  assert.equal((await r.listMemories({ includeArchived: true })).length, 0);
+  assert.equal((await r.listKnowledgeFacts({ statuses: ["active", "outdated"] })).length, 0);
+  assert.equal((await r.listOpenThreads({ statuses: ["open", "resolved", "expired"] })).length, 0);
+  assert.equal(reset.snapshot.revision, 1);
+  assert.equal(reset.snapshot.relationship.stage, "new");
+  assert.equal(reset.world.timeZone, "UTC");
 });
 
 await test("bounded preserves falsy promise rejection reasons", async () => {
