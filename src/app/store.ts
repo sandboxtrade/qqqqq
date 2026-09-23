@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   bootstrapRuntime,
+  clearConversationAndMemory as resetConversationMemoryRuntime,
   dismissPendingTurn,
   handleUserMessage,
   maintainRuntime,
@@ -61,9 +62,11 @@ interface AppStore {
   historyCursor: ConversationCursor | null;
   hasOlderMessages: boolean;
   loadingOlder: boolean;
+  resettingData: boolean;
   initialize: () => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
+  clearConversationAndMemory: () => Promise<void>;
   send: (text: string) => Promise<void>;
   retry: (messageId: string) => Promise<void>;
   dismissFailed: (messageId: string) => Promise<void>;
@@ -428,6 +431,7 @@ function watchAuth() {
       historyCursor: null,
       hasOlderMessages: false,
       loadingOlder: false,
+      resettingData: false,
       phase: "",
       error: null,
       authStatus: user ? "checking" : "signed_out",
@@ -514,6 +518,7 @@ async function sendTurn(message: ChatMessage) {
                 timestamp: result.replyTimestamp,
                 templateId: result.renderMeta?.templateId,
                 dialogueActs: result.renderMeta?.dialogueActs,
+                appearanceAssetId: result.appearanceAssetId,
                 delivery: "saved" as const,
               },
             ]),
@@ -566,6 +571,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   historyCursor: null,
   hasOlderMessages: false,
   loadingOlder: false,
+  resettingData: false,
   initialize: async () => {
     if (get().initializing || get().ready) return;
     const version = invalidate();
@@ -642,6 +648,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       historyCursor: null,
       hasOlderMessages: false,
       loadingOlder: false,
+      resettingData: false,
       error: null,
       maintenanceError: null,
     });
@@ -656,6 +663,57 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ busy: false, error: errorText(error) });
     } finally {
       authAction = false;
+    }
+  },
+  clearConversationAndMemory: async () => {
+    const state = get();
+    if (!state.ready || !state.runtime || state.busy || state.resettingData) return;
+    const user = state.user;
+    const current = state.runtime;
+    const version = invalidate();
+    const controller = new AbortController();
+    active = controller;
+    set({
+      busy: true,
+      resettingData: true,
+      error: null,
+      maintenanceError: null,
+      streamingText: "",
+      phase: "Очищаем диалог и память…",
+    });
+    try {
+      await bounded(
+        resetConversationMemoryRuntime(user?.uid ?? null, controller.signal, current),
+        50000,
+        "Очистка диалога и памяти",
+        controller.signal,
+      );
+      if (version !== epoch || controller.signal.aborted) return;
+      set({
+        messages: [],
+        lastTrace: null,
+        chatDraft: "",
+        failedMessageIds: [],
+        historyCursor: null,
+        hasOlderMessages: false,
+        loadingOlder: false,
+      });
+      await boot(version, user);
+      if (version === epoch)
+        set({ resettingData: false, lastTrace: null, chatDraft: "", error: null });
+    } catch (error) {
+      if (version !== epoch) return;
+      const message = errorText(error);
+      try {
+        await boot(version, user);
+      } catch {
+        // Keep the original destructive-operation error; normal initialize can retry boot.
+      }
+      if (version === epoch)
+        set({ busy: false, resettingData: false, phase: "", error: message });
+    } finally {
+      controller.abort();
+      if (active === controller) active = null;
     }
   },
   send: async (text) => {
