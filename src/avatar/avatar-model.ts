@@ -277,13 +277,18 @@ export function parseVisualEmotionFilename(filename: string) {
 // may use either upper or lower case. No single concrete file is hard-required:
 // the catalog discovers the scene pack at build time and chooses a neutral still
 // when available. This prevents a renamed .jpg/.png from breaking the whole UI.
-const sceneMediaModules = typeof import.meta.glob === "function"
-  ? import.meta.glob("../assets/character/scenes/*", {
-      eager: true,
-      query: "?url",
-      import: "default",
-    }) as Record<string, string>
-  : {};
+let sceneMediaModules: Record<string, string> = {};
+// Vite transforms import.meta.glob at build time; it is not a normal runtime
+// function. Guard the browser branch instead of probing import.meta.glob itself,
+// otherwise production may silently fall back to an empty catalog. Node tests
+// skip this branch while the browser receives the fully expanded scene map.
+if (typeof window !== "undefined") {
+  sceneMediaModules = import.meta.glob("../assets/character/scenes/*", {
+    eager: true,
+    query: "?url",
+    import: "default",
+  }) as Record<string, string>;
+}
 
 const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
   "neutral.1.1": {
