@@ -262,7 +262,7 @@ export interface CharacterAsset {
 
 export function parseVisualEmotionFilename(filename: string) {
   const name = filename.split(/[\\/]/u).at(-1) ?? filename;
-  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/u.exec(name);
+  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/iu.exec(name);
   if (!match || !visualEmotionNames.has(match[1])) return null;
   return {
     emotion: match[1] as VisualEmotionName,
@@ -273,15 +273,12 @@ export function parseVisualEmotionFilename(filename: string) {
 
 // Full-scene media only. The old background + transparent-overlay system is removed.
 // Add images or looping videos directly to src/assets/character/scenes using
-// emotion.intensity.variant.(png|jpg|jpeg|webp|mp4|webm|mov).
-// Existing image ids remain unchanged; video ids receive a .video suffix so
-// persisted appearances from older versions stay valid when packs are mixed.
-// Keep the original neutral photo as a guaranteed still fallback. Emotional
-// packs may otherwise migrate to video gradually without removing photo support.
-const baseNeutralSceneSrc = new URL("../assets/character/scenes/neutral.1.1.jpg", import.meta.url).href;
-
+// emotion.intensity.variant.(png|jpg|jpeg|webp|mp4|webm|mov). File extensions
+// may use either upper or lower case. No single concrete file is hard-required:
+// the catalog discovers the scene pack at build time and chooses a neutral still
+// when available. This prevents a renamed .jpg/.png from breaking the whole UI.
 const sceneMediaModules = typeof import.meta.glob === "function"
-  ? import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp,mp4,webm,mov}", {
+  ? import.meta.glob("../assets/character/scenes/*", {
       eager: true,
       query: "?url",
       import: "default",
@@ -342,10 +339,6 @@ function buildSceneEmotionAssets(): CharacterAsset[] {
     const parsed = parseVisualEmotionFilename(path);
     if (!parsed || typeof src !== "string") return [];
     const mediaType = mediaTypeFromPath(path);
-    // neutral.1.1.jpg is injected explicitly below so it remains available in
-    // tests and as a stable persisted fallback even when import.meta.glob is not.
-    if (mediaType === "image" && parsed.emotion === "neutral" && parsed.intensity === 1 && parsed.variant === 1)
-      return [];
     return [createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant, mediaType)];
   }).sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -368,10 +361,21 @@ const placeholderAsset: CharacterAsset = {
   scenePosition: [50, 50],
 };
 
-const baseNeutralSceneAsset = createSceneAsset(baseNeutralSceneSrc, "neutral", 1, 1, "image");
 const discoveredSceneAssets = buildSceneEmotionAssets();
-// Stable default/fallback stays the original still photo. A matching video is
-// still preferred by selectAppearance once the visual emotion resolver runs.
+const discoveredNeutralStill = discoveredSceneAssets.find((asset) =>
+  asset.mediaType === "image" &&
+  asset.visualEmotion?.emotion === "neutral" &&
+  asset.visualEmotion.intensity === 1 &&
+  asset.visualEmotion.variant === 1,
+);
+// Node-based tests do not provide Vite's import.meta.glob. Keep the stable
+// scene.neutral.1.1 id there too, but use the technical public placeholder only
+// as the last-resort source. In the browser the discovered real neutral image
+// wins automatically, regardless of whether it is .jpg, .png, .webp, etc.
+const baseNeutralSceneAsset = discoveredNeutralStill ??
+  createSceneAsset("assets/character/placeholder-avatar.png", "neutral", 1, 1, "image");
+// Stable default/fallback stays a still image. Matching videos are still
+// preferred later by selectAppearance once an emotional state is resolved.
 const defaultSceneAsset = baseNeutralSceneAsset;
 const catalogById = new Map<string, CharacterAsset>();
 for (const asset of [baseNeutralSceneAsset, ...discoveredSceneAssets, placeholderAsset]) {

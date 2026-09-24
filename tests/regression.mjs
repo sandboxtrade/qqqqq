@@ -1916,9 +1916,10 @@ await test("character stage uses one full-scene media pack and ignores the old o
   const assetSceneSource = readFileSync(new URL("../src/avatar/AssetScene.tsx", import.meta.url), "utf8");
   const avatarSource = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
   assert.doesNotMatch(assetSceneSource, /asset-scene-background|main-bedroom/);
-  assert.match(avatarSource, /assets\/character\/scenes\/neutral\.1\.1\.jpg/);
+  assert.match(avatarSource, /assets\/character\/scenes\/\*/);
+  assert.doesNotMatch(avatarSource, /new URL\([^\n]*neutral\.1\.1\.jpg/);
   assert.match(avatarSource, /mp4\|webm\|mov/);
-  assert.match(avatarSource, /png\|jpg\|jpeg\|webp/);
+  assert.match(avatarSource, /png\|jpe\?g\|webp/);
   assert.match(avatarSource, /placeholder-avatar\.png/);
   assert.doesNotMatch(avatarSource, /builtInEmotionImageModules|assets\/character\/emotions\/\*\.png/);
 });
@@ -2628,10 +2629,10 @@ const visualAssets = [baseAsset,
 ];
 const visualRuntime = () => { const a = romanticInput(""); return { revision: 0, emotion: a.emotion, relationship: a.relationship, world: a.world,
   romance: { ...initialRomance(now), phase: "playful" }, appearance: { version: 1, assetId: baseAsset.id, selectedAt: now - 20_000, outfitChangedAt: now - 20_000 } }; };
-await test("full-scene catalog keeps the neutral photo as a stable still-image fallback", () => {
+await test("full-scene catalog keeps a stable neutral still fallback without hard-coding an extension", () => {
   assert.equal(characterAssets[0]?.id, "scene.neutral.1.1");
   assert.equal(characterAssets[0]?.mediaType, "image");
-  assert.match(characterAssets[0]?.src ?? "", /neutral\.1\.1\.jpg/u);
+  assert.match(characterAssets[0]?.src ?? "", /(?:neutral\.1\.1\.(?:png|jpe?g|webp)|placeholder-avatar\.png)/iu);
   assert.notEqual(characterAssets[0]?.id, "placeholder.neutral");
 });
 await test("appearance chooses available expression without a user command", () => {
@@ -2686,6 +2687,8 @@ await test("visual emotion filenames use one vocabulary for photos and videos an
   assert.deepEqual(parseVisualEmotionFilename("happy.5.2.mov"), { emotion: "happy", intensity: 5, variant: 2 });
   assert.deepEqual(parseVisualEmotionFilename("horny.7.1.mp4"), { emotion: "horny", intensity: 7, variant: 1 });
   assert.deepEqual(parseVisualEmotionFilename("hornys.7.1.png"), { emotion: "hornys", intensity: 7, variant: 1 });
+  assert.deepEqual(parseVisualEmotionFilename("neutral.1.2.PNG"), { emotion: "neutral", intensity: 1, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("welcoming.1.1.JPG"), { emotion: "welcoming", intensity: 1, variant: 1 });
   assert.equal(parseVisualEmotionFilename("joy.5.1.mp4"), null);
   assert.equal(parseVisualEmotionFilename("happy.11.1.mp4"), null);
 });
