@@ -4,7 +4,7 @@
  */
 import type { CharacterCore } from "../character/character";
 import type { EmotionalState } from "../emotions/emotions";
-import type { OpenThread } from "../memory/model";
+import { decodeCharacterViewValue, type KnowledgeFact, type OpenThread } from "../memory/model";
 import type { IntimacyState } from "../intimacy/intimacy";
 import { canInitiateRomance, type RelationshipState, type RomanceState } from "../relationship/relationship";
 import type { CompanionRepository } from "../storage/repositories/interfaces";
@@ -103,6 +103,24 @@ function worldEventDialogueTopic(event: WorldState["recentEvents"][number], worl
   return "У меня сегодня был один маленький момент, который почему-то застрял в голове.";
 }
 
+function characterViewInitiativeTopic(fact: KnowledgeFact) {
+  const view = decodeCharacterViewValue(fact.value);
+  if (!view) return undefined;
+  const topic = `«${view.topic}»`;
+  switch (view.position) {
+    case "positive":
+      return `Я сегодня снова поймала себя на мысли про ${topic}. Похоже, мне это всё-таки скорее близко, чем нет. Интересно, я бы так же ответила через месяц.`;
+    case "negative":
+      return `Я почему-то снова вспомнила наш разговор про ${topic}. Моё «скорее нет» никуда не делось, хотя теперь мне любопытно, что вообще могло бы меня переубедить.`;
+    case "mixed":
+      return `Я ещё думала про ${topic}. Забавно, но чем дольше кручу это в голове, тем меньше хочется сводить всё к простому «да» или «нет».`;
+    case "cautious":
+      return `Я вернулась мыслями к ${topic}. Осторожность у меня пока осталась, но я уже не хочу заранее закрывать эту тему.`;
+    case "curious":
+      return `Я сегодня снова вспомнила про ${topic}. Мнение у меня всё ещё не окончательное, зато любопытства стало больше.`;
+  }
+}
+
 function spontaneousThoughtTopic(emotion: EmotionalState, world: WorldState) {
   if (emotion.affection > 0.76)
     return "Я тут поймала себя на мысли: мне нравятся разговоры, в которых не нужно постоянно производить впечатление. Просто быть собой почему-то гораздо приятнее.";
@@ -127,9 +145,10 @@ export async function refreshInitiatives(
   romance?: RomanceState,
   intimacy?: IntimacyState,
 ) {
-  const [existing, threads] = await Promise.all([
+  const [existing, threads, knowledge] = await Promise.all([
     repository.listInitiatives(),
     repository.listOpenThreads({ statuses: ["open"], limit: 160 }),
+    repository.listKnowledgeFacts({ statuses: ["active"], limit: 96 }),
   ]);
 
   const hoursSinceUser = Math.max(
@@ -201,6 +220,37 @@ export async function refreshInitiatives(
     )
     .find((thread) => !dedupe.has(`thread:${thread.id}`));
   if (unresolved) additions.push(initiativeFromThread(unresolved, now));
+
+  const ownView = knowledge
+    .filter((fact) =>
+      fact.status === "active" &&
+      fact.subject === "character" &&
+      fact.key.startsWith("character.opinion.") &&
+      fact.confidence >= 0.56 &&
+      now - fact.lastConfirmedAt >= 2 * HOUR &&
+      !dedupe.has(`mind:${fact.id}`)
+    )
+    .sort((a, b) =>
+      b.evidenceCount - a.evidenceCount ||
+      b.confidence - a.confidence ||
+      b.lastConfirmedAt - a.lastConfirmedAt
+    )[0];
+  const ownViewTopic = ownView ? characterViewInitiativeTopic(ownView) : undefined;
+  if (ownView && ownViewTopic && relationship.closeness > 0.25) {
+    additions.push(
+      candidate(
+        "share_thought",
+        ownViewTopic,
+        "A previously formed self-view stayed salient long enough to return as her own thought, rather than only as a reaction to the user.",
+        0.42 + Math.min(0.16, ownView.evidenceCount * 0.025) + ownView.confidence * 0.08,
+        now,
+        `mind:${ownView.id}`,
+        [ownView.id],
+        0,
+        36,
+      ),
+    );
+  }
 
   const shareable = [...world.recentEvents]
     .reverse()

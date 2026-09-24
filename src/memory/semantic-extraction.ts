@@ -1,5 +1,12 @@
 import type { CharacterEvent } from "../events/event-types";
-import type { KnowledgeFact } from "./model";
+import {
+  characterViewTopicKey,
+  encodeCharacterViewValue,
+  type CharacterMindContinuityPayload,
+  type CharacterViewPosition,
+  type CharacterViewReason,
+  type KnowledgeFact,
+} from "./model";
 
 export interface FactCandidate {
   key: string;
@@ -147,6 +154,93 @@ export function factFromCandidate(
     statement: candidate.statement,
     value: candidate.value,
     confidence: candidate.confidence,
+    evidenceCount: 1,
+    sourceEventIds: [event.id],
+    sourceMemoryIds: [],
+    createdAt: now,
+    updatedAt: now,
+    lastConfirmedAt: now,
+    validFrom: event.timestamp,
+    status: "active",
+  };
+}
+
+
+const POSITION_LABEL: Record<CharacterViewPosition, string> = {
+  positive: "скорее положительно",
+  negative: "скорее отрицательно",
+  mixed: "неоднозначно",
+  cautious: "с осторожностью",
+  curious: "с интересом, оставляя мнение открытым",
+};
+
+const REASON_LABEL: Record<CharacterViewReason, string> = {
+  honesty: "для неё здесь важна честность",
+  reciprocity: "для неё важна взаимность",
+  autonomy: "для неё важны свобода выбора и самостоятельность",
+  consistency: "для неё важна последовательность",
+  comfort: "для неё важен внутренний комфорт",
+  curiosity: "ей важно оставлять место любопытству",
+  depth: "ей важны смысл и глубина",
+  respect: "для неё важно уважение к другому человеку",
+  experience: "она опирается на собственное ощущение и опыт",
+};
+
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+export function characterOpinionFactFromMind(
+  mind: CharacterMindContinuityPayload,
+  event: CharacterEvent,
+  now = Date.now(),
+): KnowledgeFact | null {
+  const topic = cleanValue(mind.topic);
+  const topicKey = characterViewTopicKey(mind.topicKey || topic);
+  if (!topic || !topicKey || mind.persistence < 0.58) return null;
+  const value = encodeCharacterViewValue({
+    topic,
+    position: mind.position,
+    reason: mind.reason,
+  });
+  return {
+    id: `fact_${event.id}_character_opinion_${topicKey}`,
+    subject: "character",
+    key: `character.opinion.${topicKey}`,
+    statement: `Yuzuki относится к теме «${topic}» ${POSITION_LABEL[mind.position]}; ${REASON_LABEL[mind.reason]}.`,
+    value,
+    confidence: clamp01(Math.max(0.45, mind.confidence)),
+    evidenceCount: 1,
+    sourceEventIds: [event.id],
+    sourceMemoryIds: [],
+    createdAt: now,
+    updatedAt: now,
+    lastConfirmedAt: now,
+    validFrom: event.timestamp,
+    status: "active",
+  };
+}
+
+export function characterTensionFactFromMind(
+  mind: CharacterMindContinuityPayload,
+  event: CharacterEvent,
+  now = Date.now(),
+): KnowledgeFact | null {
+  const topic = cleanValue(mind.topic);
+  const topicKey = characterViewTopicKey(mind.topicKey || topic);
+  if (!topic || !topicKey || !mind.reconsideration || !mind.challengeDirection) return null;
+  const integrated = Boolean(mind.changedFrom);
+  const direction = mind.challengeDirection;
+  return {
+    id: `fact_${event.id}_character_tension_${topicKey}`,
+    subject: "character",
+    key: `character.tension.${topicKey}`,
+    statement: integrated
+      ? `Yuzuki уже встроила встречный аргумент по теме «${topic}» и постепенно скорректировала позицию.`
+      : `У Yuzuki появилось реальное сомнение по теме «${topic}», но одного встречного аргумента пока недостаточно, чтобы перевернуть её позицию.`,
+    value: `${integrated ? "integrated" : "challenge"}|${direction}`,
+    confidence: clamp01(Math.max(0.48, mind.confidence - (integrated ? 0 : 0.08))),
     evidenceCount: 1,
     sourceEventIds: [event.id],
     sourceMemoryIds: [],

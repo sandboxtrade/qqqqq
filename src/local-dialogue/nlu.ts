@@ -88,6 +88,11 @@ export function normalizeDialogueForMatching(value: string): string {
       const squashed = squashExpressiveToken(token);
       return CHAT_TOKEN_ALIASES[squashed] ?? squashed;
     })
+    // Matching phrases are stored without terminal punctuation. Keeping a
+    // trailing "?" made a broad fragment such as "как ты" outscore the
+    // exact phrase "как ты ко мне относишься". Strip only outer punctuation;
+    // the original text is still used by question/tone detection.
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
 }
@@ -158,43 +163,60 @@ function meaningfulTokenCount(text: string) {
   return tokenizeDialogue(text).filter((token) => token.length > 1 && /\p{L}/u.test(token) && !SEMANTIC_STOP_WORDS.has(token)).length;
 }
 
+export function detectLocalHumorSignal(text: string): NonNullable<LocalSemanticFrame["humor"]> {
+  const normalized = normalizeDialogueForMatching(text);
+  if (!normalized) return { kind: "none", confidence: 0 };
+  if (/(?:ахах+|хаха+|ха-ха|лол(?:\b|$)|ору(?:\b|$)|ржу(?:\b|$)|😂|🤣|😆)/u.test(text.toLocaleLowerCase("ru-RU")))
+    return { kind: "laughter", confidence: 0.96 };
+  if (/(?:я\s+шучу|шучу|пошутил(?:а)?|это\s+шутка|рофл|рофлю|прикол(?:олся|олась)?|сарказм|ирония)/u.test(normalized))
+    return { kind: "explicit", confidence: 0.98 };
+  if (/(?:^|[,.!?]\s*)(?:ну\s+да|ага|ну\s+конечно|да\s+конечно)\s*[,.-]?\s*(?:конечно\s*)?(?:как\s+же|прям|идеально|прекрасно|замечательно|вовремя|очень\s+удобно)/u.test(normalized) ||
+      /(?:просто\s+идеально|ну\s+идеально|как\s+всегда\s+вовремя|лучшего\s+момента\s+не\s+нашлось)/u.test(normalized))
+    return { kind: "irony", confidence: 0.82 };
+  if (/(?:мозг|организм|работа|жизнь|реальность|кошелек|кошелёк|будильник|дедлайн)\s+(?:решил(?:а)?|сказал(?:а)?|объявил(?:а)?|официально|ушел|ушёл|сдался|уволился|забастовал)/u.test(normalized) ||
+      /(?:отдел\s+(?:бодрости|мотивации)|личный\s+антагонист|план\s+века|гениальный\s+план)/u.test(normalized))
+    return { kind: "absurdity", confidence: 0.72 };
+  return { kind: "none", confidence: 0 };
+}
+
 function detectLocalIntimacySignal(normalized: string): LocalSemanticFrame["intimacy"] {
-  const hasIntimateContext = /(?:интим|18\+|ближе|поцел|обним|прижм|ласк|возбуж|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|сексуаль|страст)/u.test(normalized);
+  const hasIntimateContext = /(?:интим|18\+|близост|ближе|поцел|обним|прижм|ласк|возбуж|желан|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|соблазн|сексуаль|эрот|страст|секс|хими[яи])/u.test(normalized);
   const absoluteStop = /(?:^|\s)(?:стоп|хватит|прекрати|остановись)(?:\s|$|[,.!?])/u.test(normalized);
-  const contextualStop = hasIntimateContext && /(?:^|\s)(?:не\s+хочу|не\s+надо|давай\s+не\s+будем|не\s+трогай|не\s+продолжай)(?:\s|$|[,.!?])/u.test(normalized);
+  const contextualStop = hasIntimateContext && /(?:^|\s)(?:не\s+хочу|не\s+надо|давай\s+не\s+будем|не\s+трогай|не\s+продолжай|не\s+хочу\s+дальше|мне\s+это\s+неприятно|мне\s+некомфортно)(?:\s|$|[,.!?])/u.test(normalized);
   if (absoluteStop || contextualStop)
     return { kind: "stop", strength: 1, explicit: true, intimacyContext: contextualStop || hasIntimateContext };
 
-  const pause = /(?:^|\s)(?:подожди|пауза|медленнее|не\s+спеши|давай\s+помедленнее|чуть\s+спокойнее|мне\s+нужно\s+время)(?:\s|$|[,.!?])/u.test(normalized);
+  const pause = /(?:^|\s)(?:подожди|пауза|медленнее|помедленнее|не\s+спеши|давай\s+помедленнее|чуть\s+спокойнее|мне\s+нужно\s+время|давай\s+не\s+торопиться|мне\s+надо\s+чуть\s+выдохнуть)(?:\s|$|[,.!?])/u.test(normalized);
   if (pause && (hasIntimateContext || normalized.split(/\s+/u).length <= 5))
     return { kind: "pause", strength: 0.94, explicit: true, intimacyContext: hasIntimateContext };
 
-  const resume = /(?:можно\s+продолж(?:ить|ай)|давай\s+продолжим|продолжай|я\s+готов(?:а)?|все\s+нормально\s*[,.-]?\s*продолжай|всё\s+нормально\s*[,.-]?\s*продолжай)/u.test(normalized);
+  const resume = /(?:можно\s+продолж(?:ить|ай)|давай\s+продолжим|продолжай|я\s+готов(?:а)?|все\s+нормально\s*[,.-]?\s*продолжай|всё\s+нормально\s*[,.-]?\s*продолжай|теперь\s+можно\s+дальше|я\s+хочу\s+продолжить)/u.test(normalized);
   if (resume) return { kind: "resume", strength: 0.88, explicit: true, intimacyContext: hasIntimateContext };
 
-  const hesitant = /(?:не\s+уверен(?:а)?|не\s+знаю|мне\s+неловко|немного\s+страшно|может\s+не\s+сейчас|я\s+сомневаюсь)/u.test(normalized);
+  const hesitant = /(?:не\s+уверен(?:а)?|не\s+знаю|мне\s+неловко|немного\s+страшно|может\s+не\s+сейчас|я\s+сомневаюсь|я\s+немного\s+волнуюсь|не\s+знаю\s+готов(?:а)?\s+ли)/u.test(normalized);
   if (hesitant && hasIntimateContext)
     return { kind: "hesitant", strength: 0.82, explicit: true, intimacyContext: true };
 
   // Aftercare needs explicit post-intimacy language here. Generic requests to
   // hug or stay nearby are resolved as aftercare by continuity only when the
   // previous turn was actually intimate.
-  const aftercare = /(?:после\s+(?:этого|всего).*(?:побудь|обними|не\s+уходи|рядом)|(?:все|всё)\s+хорошо\s+между\s+нами|ты\s+в\s+порядке\s+после|как\s+ты\s+после)/u.test(normalized);
-  if (aftercare) return { kind: "aftercare", strength: 0.76, explicit: true, intimacyContext: true };
+  const aftercare = /(?:после\s+(?:этого|всего).*(?:побудь|обними|не\s+уходи|рядом|поговори)|(?:все|всё)\s+хорошо\s+между\s+нами|ты\s+в\s+порядке\s+после|как\s+ты\s+после|побудь\s+со\s+мной\s+после|не\s+уходи\s+сразу)/u.test(normalized);
+  if (aftercare) return { kind: "aftercare", strength: 0.78, explicit: true, intimacyContext: true };
 
-  const consent = /(?:хочу\s+тебя|мне\s+это\s+нравится|да\s*[,.-]?\s*хочу(?:\s+тебя)?|хочу\s+продолжить\s+ближе)/u.test(normalized);
-  if (consent) return { kind: "consent", strength: 0.9, explicit: true, intimacyContext: true };
+  const directConsent = /(?:хочу\s+тебя|я\s+тебя\s+хочу|да\s*[,.-]?\s*(?:я\s+тебя\s+хочу|хочу\s+тебя)|хочу\s+быть\s+с\s+тобой\s+так\s+близко)/u.test(normalized);
+  const contextualConsent = hasIntimateContext && /(?:мне\s+это\s+нравится|да\s*[,.-]?\s*хочу|хочу\s+продолжить|хочу\s+дальше|мне\s+хочется\s+еще|мне\s+хочется\s+ещё|мне\s+нравится\s+куда\s+это\s+идет|мне\s+нравится\s+куда\s+это\s+идёт)/u.test(normalized);
+  if (directConsent || contextualConsent)
+    return { kind: "consent", strength: directConsent ? 0.94 : 0.88, explicit: true, intimacyContext: true };
 
-  const approach = /(?:хочу\s+быть\s+ближе|давай\s+ближе|можешь\s+поцеловать|поцелуй\s+меня|обними\s+меня|хочу\s+быть\s+рядом|иди\s+сюда|сядь\s+ближе|подойди\s+ближе|можно\s+к\s+тебе\s+ближе|давай\s+поближе)/u.test(normalized);
-  if (approach) return { kind: "approach", strength: 0.72, explicit: true, intimacyContext: true };
+  const approach = /(?:хочу\s+быть\s+ближе|давай\s+ближе|можешь\s+поцеловать|поцелуй\s+меня|обними\s+меня|хочу\s+быть\s+рядом|иди\s+сюда|сядь\s+ближе|подойди\s+ближе|можно\s+к\s+тебе\s+ближе|давай\s+поближе|прижмись\s+ко\s+мне|можно\s+я\s+тебя\s+обниму|можно\s+я\s+тебя\s+поцелую)/u.test(normalized);
+  if (approach) return { kind: "approach", strength: 0.74, explicit: true, intimacyContext: true };
 
-  const flirt = /(?:флиртуешь|флирт|дразнишь|подкатываешь|соблазн|сексуальн|горячая|горячий)/u.test(normalized);
+  const flirt = /(?:флиртуешь|флирт|дразнишь|подкатываешь|соблазн|сексуальн|горячая|горячий|искушаешь|провоцируешь|заигрываешь|химия\s+между\s+нами)/u.test(normalized);
   if (flirt) return { kind: "flirt", strength: 0.68, explicit: false, intimacyContext: true };
-  const affection = /(?:обним|поцел|нежн|скучал|скучала|люблю\s+тебя|мне\s+хорошо\s+с\s+тобой)/u.test(normalized);
-  if (affection) return { kind: "affection", strength: 0.58, explicit: false, intimacyContext: false };
-  return { kind: "none", strength: 0, explicit: false, intimacyContext: false };
+  const affection = /(?:обним|поцел|нежн|скучал|скучала|люблю\s+тебя|мне\s+хорошо\s+с\s+тобой|хочу\s+побыть\s+рядом|прижаться\s+к\s+тебе)/u.test(normalized);
+  if (affection) return { kind: "affection", strength: 0.58, explicit: false, intimacyContext: hasIntimateContext };
+  return { kind: "none", strength: 0, explicit: false, intimacyContext: hasIntimateContext };
 }
-
 function detectSemanticSubject(normalized: string, isQuestion: boolean): SemanticSubject {
   if (/\b(?:мы|нам|нас|наш|наша|наше|наши)\b/u.test(normalized)) return "shared";
   if (isQuestion && /(?:^|\s)(?:ты|тебе|тебя|у тебя|твое|твоё|твой|твоя)(?:\s|$)/u.test(normalized)) return "character";
@@ -252,9 +274,13 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
     .trim();
   const correction = extractCorrection(semanticBase);
   const focused = semanticFocus(semanticBase);
+  const characterReconsideration = isQuestion
+    ? /^(?:а\s+)?ты\s+(?:не\s+)?передумала(?:\s+(?:насчет|насчёт|про|о|об)\s+(.+?))?[?.! ]*$/u.exec(semanticBase)
+    : null;
   const wantsListening = /(?:без\s+советов|не\s+надо\s+советов|не\s+советуй|просто\s+послушай|просто\s+выслушай|просто\s+побудь\s+(?:рядом|со\s+мной))/u.test(semanticBase);
   const wantsAdvice = !wantsListening && /(?:^|[,;.!?]\s*)(?:(?:ну\s+)?и\s+)?что\s+(?:мне\s+)?(?:теперь\s+)?делать(?:\s|$|[?.!])|(?:^|[,;.!?]\s*)что\s+делать\s+теперь(?:\s|$|[?.!])|как\s+мне\s+лучше|как\s+лучше\s+поступить|посоветуй|что\s+бы\s+ты\s+(?:сделала|посоветовала)|как\s+бы\s+ты\s+поступила|стоит\s+ли\s+мне|(?:думаю|не\s+знаю|решаю)\s+.+\s+или\s+нет|(?:а\s+)?ты\s+бы\s+что\s+(?:сделала|выбрала|посоветовала)(?:\s+на\s+моем\s+месте)?|если\s+бы\s+ты\s+была\s+на\s+моем\s+месте|(?:будь|была)\s+ты\s+на\s+моем\s+месте/u.test(semanticBase);
-  const asksCharacterView = /(?:что\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?считаешь|как\s+ты\s+к\s+этому\s+относишься|как\s+ты\s+относишься|по-твоему|твое\s+мнение|что\s+скажешь|как\s+тебе|(?:^|\s)ты\s+бы(?:\s|$))/u.test(semanticBase) ||
+  const asksCharacterView = Boolean(characterReconsideration) ||
+    /(?:что\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?думаешь|как\s+(?:ты\s+)?считаешь|как\s+ты\s+к\s+этому\s+относишься|как\s+ты\s+относишься|по-твоему|твое\s+мнение|что\s+скажешь|как\s+тебе|(?:^|\s)ты\s+бы(?:\s|$))/u.test(semanticBase) ||
     (isQuestion && /(?:^|\s)ты[^?.!]{0,36}(?:соглашаешься|поддакиваешь)(?:\s|$|[?.!])/u.test(semanticBase));
   const reciprocal = /^(?:а\s+)?(?:ты|тебе|у\s+тебя|сама)(?:\s+как)?[?.! ]*$/u.test(semanticBase);
   const hypothetical = /(?:^|\s)(?:если\s+бы|представь|допустим|а\s+если)(?:\s|$)/u.test(semanticBase) ||
@@ -267,7 +293,7 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
   else if (/(?:^|\s)(?:чувствую|грустно|плохо|тревожно|одиноко|скучно|устал|устала|злюсь|бесит)(?:\s|$|[,.!?])/u.test(semanticBase)) stance = "feel";
   else if (/^(?:да|нет|понял|понятно|ясно|ладно|окей)(?:\s|$|[,.!?])/u.test(semanticBase)) stance = "react";
 
-  let focus = focused.focus;
+  let focus = focused.focus ?? compactSemantic(characterReconsideration?.[1]);
   let reason = extractReason(semanticBase);
   let alternative: string | undefined;
   if (focus && !reason && ["want", "plan"].includes(focused.stance ?? "")) {
@@ -314,6 +340,7 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
     asksCharacterView,
     reciprocal,
     meaningfulTokens: meaningfulTokenCount(semanticBase),
+    humor: detectLocalHumorSignal(text),
     intimacy: detectLocalIntimacySignal(semanticBase),
   };
 }
@@ -568,18 +595,40 @@ export function detectSentiment(text: string, hinted?: LocalSentiment, negation 
 }
 
 // ---- topic-classifier.ts ----
-export function classifyTopic(text: string): string | undefined {
+function topicTokenMatches(candidate: string, target: string) {
+  if (candidate === target || tokenStem(candidate) === tokenStem(target)) return true;
+
+  // Small Russian case-family matcher for topical nouns. The general stemmer is
+  // deliberately conservative because aggressive one-letter stripping makes
+  // conversational words collide (for example "просто" / "прости"). Topic
+  // vocabulary is narrower, so we can safely recognise common noun cases here.
+  if (target.length >= 6 && /[ая]$/u.test(target)) {
+    const root = target.slice(0, -1);
+    if (!candidate.startsWith(root)) return false;
+    const ending = candidate.slice(root.length);
+    return /^(?:а|я|ы|и|у|ю|е|ой|ей|ою|ею|ам|ям|ами|ями|ах|ях)$/u.test(ending);
+  }
+  return false;
+}
+
+export function topicMatchScore(text: string, topicId: string): number {
+  const definition = russianLanguagePack.topics[topicId];
+  if (!definition) return 0;
   const normalized = normalizeDialogueForMatching(text);
   const tokens = tokenizeDialogue(text);
-  const stems = new Set(tokens.map(tokenStem));
+  let score = 0;
+  for (const phrase of definition.phrases) if (normalized.includes(normalizeDialogueForMatching(phrase))) score += 3;
+  for (const token of definition.tokens) {
+    const target = normalizeDialogueForMatching(token);
+    if (tokens.some((candidate) => topicTokenMatches(candidate, target))) score += 1;
+  }
+  return score;
+}
+
+export function classifyTopic(text: string): string | undefined {
   let best: { id: string; score: number } | undefined;
-  for (const [id, definition] of Object.entries(russianLanguagePack.topics)) {
-    let score = 0;
-    for (const phrase of definition.phrases) if (normalized.includes(normalizeDialogueForMatching(phrase))) score += 3;
-    for (const token of definition.tokens) {
-      const stem = tokenStem(normalizeDialogueForMatching(token));
-      if (stems.has(stem) || tokens.includes(normalizeDialogueForMatching(token))) score += 1;
-    }
+  for (const id of Object.keys(russianLanguagePack.topics)) {
+    const score = topicMatchScore(text, id);
     if (score > (best?.score ?? 0)) best = { id, score };
   }
   return best && best.score > 0 ? best.id : undefined;
@@ -633,6 +682,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   else if (!question.isQuestion && /(?:мне\s+)?(?:вроде\s+)?нравится\s+.+\s+но\s+.+(?:туп|сомн|плох|не уверен|не уверена|странн)/u.test(normalized)) intent = "uncertain";
   else if (/^(?:я\s+)?не\s+понимаю\s+почему\s+(?:он|она|они)(?:\s|$)/u.test(normalized)) intent = "uncertain";
   else if (question.isQuestion && /(?:тебе\s+(?:правда\s+)?интересно|тебе\s+не\s+скучно).*(?:что\s+я|со\s+мной|слушать\s+меня)/u.test(normalized)) intent = "ask_relationship";
+  else if (question.isQuestion && /(?:как\s+ты\s+(?:ко|к)\s+мне\s+относишься|что\s+ты\s+(?:ко\s+мне\s+)?чувствуешь|кто\s+я\s+(?:для\s+)?тебя|я\s+тебе\s+(?:дорог|дорога|нравлюсь))/u.test(normalized)) intent = "ask_relationship";
   else if (semantic.asksCharacterView && semantic.focus && /как\s+ты\s+относишься/u.test(normalized)) intent = "ask_character_opinion";
   else if (question.isQuestion && semantic.subject === "character" && /(?:злишься|грустишь|обиделась|расстроилась|устала|скучала|переживаешь|тревожишься|в\s+порядке|нормально\s+ли)/u.test(normalized)) intent = "ask_character_state";
   else if (question.isQuestion && semantic.subject === "character" && intent !== "ask_relationship" && /(?:нравится|понравилось|любишь|хочешь|предпочитаешь|выбрала|выберешь)/u.test(normalized)) intent = "ask_character_preference";
@@ -640,6 +690,8 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   else if (semantic.asksCharacterView && /(?:обо\s+мне|про\s+меня|как\s+я\s+тебе)/u.test(normalized)) intent = "ask_character_opinion";
   else if (semantic.asksCharacterView && /(?:^|\s)ты\s+бы(?:\s|$)/u.test(normalized) && !/(?:что\s+бы\s+ты\s+(?:сделала|посоветовала)|как\s+бы\s+ты\s+поступила)/u.test(normalized)) intent = "ask_character_opinion";
   else if (semantic.asksCharacterView && semantic.subject === "character" && intent === "unknown") intent = "ask_character_opinion";
+  else if (((semantic.humor?.confidence ?? 0) >= 0.9 && ["unknown", "statement", "acknowledgement"].includes(intent)) ||
+    (semantic.humor?.kind === "irony" && (semantic.humor?.confidence ?? 0) >= 0.78 && ["short_yes", "acknowledgement", "statement", "unknown"].includes(intent))) intent = "joke";
 
   // Very short contextual phrases should keep their dedicated intent when possible.
   if (/^(?:а\s+)?ты[?.! ]*$/u.test(normalized)) intent = "ask_followup";
@@ -665,6 +717,8 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   // увольняться, что мне теперь делать?" from losing the emotional disclosure.
   if (top && top.definition.id !== intent && top.score >= 2.2 && !secondaryIntents.includes(top.definition.id))
     secondaryIntents.unshift(top.definition.id);
+  if ((semantic.humor?.confidence ?? 0) >= 0.62 && intent !== "joke" && !secondaryIntents.includes("joke"))
+    secondaryIntents.unshift("joke");
   const hintedSentiment = top?.definition.sentiment;
   const sentiment = hintedSentiment ?? detectSentiment(text, undefined, negation);
   const semanticTopic = semantic.correctionTo ? classifyTopic(semantic.correctionTo) : undefined;
@@ -707,7 +761,7 @@ function toneFromNLU(nlu: LocalNLUResult): PerceptionTone | undefined {
   if (nlu.intent === "user_sad" || nlu.intent === "user_lonely") return "sad";
   if (nlu.intent === "user_stressed") return "anxious";
   if (["compliment_character","affection_declaration","thanks","user_happy","user_excited"].includes(nlu.intent)) return "warm";
-  if (["tease_character","joke","flirt_character"].includes(nlu.intent)) return "playful";
+  if (["tease_character","joke","flirt_character"].includes(nlu.intent) || (nlu.semantic.humor?.confidence ?? 0) >= 0.62) return "playful";
   return undefined;
 }
 

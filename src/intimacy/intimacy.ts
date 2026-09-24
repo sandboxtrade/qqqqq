@@ -150,6 +150,7 @@ export const defaultIntimacyCoreProfile: IntimacyCoreProfile = {
     "emotional_closeness_matters",
     "privacy_matters",
     "reciprocity_matters",
+    "gradual_build_matters",
   ],
 };
 
@@ -230,13 +231,41 @@ export interface IntimacySignal {
   intimacyContext?: boolean;
 }
 
+export type IntimacyPace = "slow" | "responsive" | "bold";
+
+export interface IntimacyMindState {
+  active: boolean;
+  tenderness: number;
+  desire: number;
+  caution: number;
+  playfulness: number;
+  confidence: number;
+  conflicted: boolean;
+  preferredPace: IntimacyPace;
+  activePreferenceKeys: string[];
+  inwardArousal: boolean;
+  outwardArousal: boolean;
+  wantsCloseness: boolean;
+  wantsMore: boolean;
+  reflection: string;
+}
+
 export interface IntimacyTurnInput {
   character: CharacterCore;
   previous?: IntimacyState;
+  preferences?: IntimacyPreferencesDocument;
   signal: IntimacySignal;
   emotion: import("../emotions/emotions").EmotionalState;
   relationship: import("../relationship/relationship").RelationshipState;
   world: import("../world/world").WorldState;
+  now: number;
+}
+
+export interface IntimacyPreferenceLearningInput {
+  before: IntimacyState;
+  after: IntimacyState;
+  signal: IntimacySignal;
+  eventId: string;
   now: number;
 }
 
@@ -302,6 +331,191 @@ export function currentIntimacyState(
   }
   base.updatedAt = now;
   return base;
+}
+
+const CORE_INTIMACY_PREFERENCES: ReadonlyArray<{
+  topicKey: string;
+  stance: IntimacyPreferenceStance;
+  strength: number;
+  confidence: number;
+}> = [
+  { topicKey: "emotional_closeness_matters", stance: "like", strength: 0.9, confidence: 0.96 },
+  { topicKey: "privacy_matters", stance: "like", strength: 0.92, confidence: 0.98 },
+  { topicKey: "reciprocity_matters", stance: "like", strength: 0.94, confidence: 0.98 },
+  { topicKey: "gradual_build_matters", stance: "like", strength: 0.78, confidence: 0.9 },
+];
+
+function intimacyPreferenceWeight(
+  preferences: IntimacyPreferencesDocument | undefined,
+  topicKey: string,
+  fallback = 0,
+) {
+  const item = preferences?.items
+    .filter((entry) => entry.topicKey === topicKey && entry.validUntil === undefined)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  if (!item) return fallback;
+  const direction = item.stance === "like" ? 1 : item.stance === "dislike" ? -1 : 0;
+  return direction * clampIntimacy(item.strength) * clampIntimacy(item.confidence);
+}
+
+export function ensureCoreIntimacyPreferences(
+  document: IntimacyPreferencesDocument | undefined,
+  now = Date.now(),
+): { document: IntimacyPreferencesDocument; changed: boolean } {
+  const base = document ? { ...document, items: document.items.map((item) => ({ ...item, sourceEventIds: [...item.sourceEventIds] })) } : createInitialIntimacyPreferences(now);
+  const items = [...base.items];
+  let changed = false;
+  for (const core of CORE_INTIMACY_PREFERENCES) {
+    const active = items.find((item) => item.topicKey === core.topicKey && item.validUntil === undefined);
+    if (active) continue;
+    items.push({
+      id: `pref_core_${core.topicKey}`,
+      topicKey: core.topicKey,
+      stance: core.stance,
+      strength: core.strength,
+      confidence: core.confidence,
+      origin: "core",
+      sourceEventIds: ["core.intimacy_profile"],
+      createdAt: now,
+      updatedAt: now,
+      validFrom: now,
+    });
+    changed = true;
+  }
+  return {
+    document: changed ? { ...base, items, updatedAt: now } : base,
+    changed,
+  };
+}
+
+function reinforceLearnedPreference(
+  items: IntimacyPreference[],
+  topicKey: string,
+  strength: number,
+  eventId: string,
+  now: number,
+) {
+  const active = items.find((item) => item.topicKey === topicKey && item.validUntil === undefined);
+  if (!active) {
+    items.push({
+      id: `pref_${topicKey}_${now}`,
+      topicKey,
+      stance: "like",
+      strength: clampIntimacy(strength),
+      confidence: 0.34,
+      origin: "learned",
+      sourceEventIds: [eventId],
+      createdAt: now,
+      updatedAt: now,
+      validFrom: now,
+    });
+    return true;
+  }
+  if (active.origin === "core") return false;
+  const nextStrength = clampIntimacy(active.strength * 0.78 + strength * 0.22);
+  const nextConfidence = clampIntimacy(active.confidence + 0.075);
+  const sourceEventIds = [...new Set([...active.sourceEventIds, eventId])].slice(-10);
+  const changed = Math.abs(nextStrength - active.strength) > 0.001 || Math.abs(nextConfidence - active.confidence) > 0.001 || !active.sourceEventIds.includes(eventId);
+  if (!changed) return false;
+  active.strength = nextStrength;
+  active.confidence = nextConfidence;
+  active.sourceEventIds = sourceEventIds;
+  active.updatedAt = now;
+  return true;
+}
+
+export function evolveIntimacyPreferences(
+  document: IntimacyPreferencesDocument | undefined,
+  input: IntimacyPreferenceLearningInput,
+): { document: IntimacyPreferencesDocument; changed: boolean } {
+  if (!input.after.adultModeEnabled) {
+    return { document: document ?? createInitialIntimacyPreferences(input.now), changed: false };
+  }
+  const seeded = ensureCoreIntimacyPreferences(document, input.now);
+  const next: IntimacyPreferencesDocument = {
+    ...seeded.document,
+    items: seeded.document.items.map((item) => ({ ...item, sourceEventIds: [...item.sourceEventIds] })),
+  };
+  let changed = seeded.changed;
+  const positiveSafety = input.after.comfort >= 0.48 && input.after.interest >= 0.42 &&
+    !["paused", "stopped", "hesitant"].includes(input.after.interactionStatus);
+  if (positiveSafety && input.signal.kind === "flirt")
+    changed = reinforceLearnedPreference(next.items, "playful_teasing", Math.max(input.after.interest, input.after.arousal * 0.8), input.eventId, input.now) || changed;
+  if (positiveSafety && ["affection", "approach"].includes(input.signal.kind))
+    changed = reinforceLearnedPreference(next.items, "affectionate_closeness", Math.max(input.after.comfort, input.after.interest * 0.85), input.eventId, input.now) || changed;
+  if (positiveSafety && input.signal.kind === "consent" && input.after.arousal >= 0.58)
+    changed = reinforceLearnedPreference(next.items, "direct_desire", Math.max(input.after.arousal, input.after.interest), input.eventId, input.now) || changed;
+  if (input.signal.kind === "aftercare" && input.after.comfort >= 0.52)
+    changed = reinforceLearnedPreference(next.items, "aftercare_closeness", input.after.comfort, input.eventId, input.now) || changed;
+  if (changed) next.updatedAt = input.now;
+  return { document: next, changed };
+}
+
+export function buildIntimacyMind(input: {
+  state: IntimacyState;
+  preferences?: IntimacyPreferencesDocument;
+  signal?: IntimacySignal;
+  emotion: import("../emotions/emotions").EmotionalState;
+  relationship: import("../relationship/relationship").RelationshipState;
+  world: import("../world/world").WorldState;
+}): IntimacyMindState {
+  const { state, preferences, emotion, relationship, world } = input;
+  const active = state.adultModeEnabled && (
+    state.phase !== "normal" || state.interactionStatus !== "inactive" || Boolean(input.signal?.intimacyContext)
+  );
+  const reciprocal = Math.max(0, intimacyPreferenceWeight(preferences, "reciprocity_matters", 0.9));
+  const gradual = Math.max(0, intimacyPreferenceWeight(preferences, "gradual_build_matters", 0.72));
+  const playfulPreference = Math.max(0, intimacyPreferenceWeight(preferences, "playful_teasing", 0));
+  const closenessPreference = Math.max(0, intimacyPreferenceWeight(preferences, "affectionate_closeness", 0.2));
+  const directPreference = Math.max(0, intimacyPreferenceWeight(preferences, "direct_desire", 0));
+  const aftercarePreference = Math.max(0, intimacyPreferenceWeight(preferences, "aftercare_closeness", 0.2));
+  const tenderness = clampIntimacy(
+    emotion.affection * 0.46 + state.comfort * 0.34 + relationship.closeness * 0.14 + closenessPreference * 0.06 +
+    (state.phase === "aftercare" ? 0.12 + aftercarePreference * 0.08 : 0),
+  );
+  const desire = clampIntimacy(state.interest * 0.36 + state.arousal * 0.4 + emotion.romanticInterest * 0.18 + directPreference * 0.06);
+  const pressureRisk = input.signal?.kind === "hesitant" || ["paused", "stopped", "hesitant"].includes(state.interactionStatus) ? 0.72 : 0;
+  const privacyMismatch = !privateEnough(world) && intimacyPhaseRank(state.phase) >= intimacyPhaseRank("close")
+    ? Math.max(0, intimacyPreferenceWeight(preferences, "privacy_matters", 0.88)) * 0.35
+    : 0;
+  const caution = clampIntimacy(
+    relationship.unresolvedTension * 0.42 + emotion.anxiety * 0.2 + emotion.irritation * 0.18 + pressureRisk + privacyMismatch +
+    Math.max(0, desire - state.comfort) * 0.24,
+  );
+  const playfulness = clampIntimacy(
+    emotion.happiness * 0.2 + emotion.energy * 0.16 + state.interest * 0.28 + playfulPreference * 0.36,
+  );
+  const confidence = clampIntimacy(state.comfort * 0.48 + relationship.trust * 0.3 + reciprocal * 0.12 + (1 - caution) * 0.1);
+  const conflicted = active && desire >= 0.48 && caution >= 0.42;
+  const preferredPace: IntimacyPace = caution > 0.48 || gradual > 0.62
+    ? "slow"
+    : directPreference > 0.54 && confidence > 0.68
+      ? "bold"
+      : "responsive";
+  const inwardArousal = active && state.arousal >= 0.58;
+  const outwardArousal = active && state.phase === "high_intimacy" && state.arousal >= 0.78 && state.comfort >= 0.62;
+  const wantsCloseness = active && tenderness >= 0.52 && caution < 0.72;
+  const wantsMore = active && desire >= 0.62 && confidence >= 0.56 && caution < 0.46;
+  const activePreferenceKeys = (preferences?.items ?? [])
+    .filter((item) => item.validUntil === undefined && item.stance === "like" && item.confidence >= 0.4)
+    .sort((a, b) => b.confidence * b.strength - a.confidence * a.strength)
+    .slice(0, 6)
+    .map((item) => item.topicKey);
+  const reflection = !active
+    ? "Intimacy is not currently active in her attention."
+    : conflicted
+      ? "Desire is present, but caution and mutual comfort matter more than momentum."
+      : state.phase === "aftercare"
+        ? "Tenderness and emotional closeness are more important than escalation right now."
+        : wantsMore
+          ? "She wants more closeness and feels safe enough to show that desire without treating it as automatic consent."
+          : wantsCloseness
+            ? "She wants closeness, but prefers to let the interaction build rather than force a next step."
+            : "She notices the intimate context but is not trying to escalate it.";
+  return {
+    active, tenderness, desire, caution, playfulness, confidence, conflicted, preferredPace,
+    activePreferenceKeys, inwardArousal, outwardArousal, wantsCloseness, wantsMore, reflection,
+  };
 }
 
 function privateEnough(world: import("../world/world").WorldState) {
@@ -389,13 +603,21 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     input.relationship.unresolvedTension * 0.38 -
     input.emotion.irritation * 0.22,
   );
+  const emotionalClosenessPreference = Math.max(0, intimacyPreferenceWeight(input.preferences, "emotional_closeness_matters", 0.88));
+  const reciprocityPreference = Math.max(0, intimacyPreferenceWeight(input.preferences, "reciprocity_matters", 0.9));
+  const gradualPreference = Math.max(0, intimacyPreferenceWeight(input.preferences, "gradual_build_matters", 0.72));
+  const playfulPreference = Math.max(0, intimacyPreferenceWeight(input.preferences, "playful_teasing", 0));
+  const directPreference = Math.max(0, intimacyPreferenceWeight(input.preferences, "direct_desire", 0));
   const interestBase = clampIntimacy(
-    input.emotion.romanticInterest * 0.48 +
-    input.emotion.affection * 0.28 +
-    input.relationship.attachment * 0.16 +
-    input.emotion.energy * 0.08,
+    input.emotion.romanticInterest * 0.45 +
+    input.emotion.affection * 0.25 +
+    input.relationship.attachment * 0.14 +
+    input.emotion.energy * 0.06 +
+    emotionalClosenessPreference * 0.06 +
+    playfulPreference * 0.025 +
+    directPreference * 0.015,
   );
-  state.comfort = clampIntimacy(state.comfort * 0.68 + comfortBase * 0.32);
+  state.comfort = clampIntimacy(state.comfort * 0.68 + (comfortBase + emotionalClosenessPreference * 0.045 + reciprocityPreference * 0.025) * 0.32);
   state.interest = clampIntimacy(state.interest * 0.72 + interestBase * 0.28);
 
   if (signal.kind === "none") return finish();
@@ -463,7 +685,10 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     state.comfort = clampIntimacy(state.comfort + (signal.kind === "affection" ? 0.055 : 0.025) * strength);
     state.interest = clampIntimacy(state.interest + (signal.kind === "flirt" ? 0.085 : 0.055) * strength);
     state.arousal = clampIntimacy(state.arousal + (signal.kind === "flirt" ? 0.11 : 0.035) * strength * (0.65 + mutuality * 0.35));
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + (signal.kind === "flirt" ? 0.075 : 0.045) * strength * (0.55 + mutuality * 0.45));
+    const paceFactor = signal.kind === "flirt"
+      ? 0.82 + playfulPreference * 0.18
+      : 0.9 + emotionalClosenessPreference * 0.1;
+    state.initiativeDrive = clampIntimacy(state.initiativeDrive + (signal.kind === "flirt" ? 0.075 : 0.045) * strength * (0.55 + mutuality * 0.45) * paceFactor * (1 - gradualPreference * 0.12));
     state.lastInteractionAt = input.now;
     action = "warmth";
     return finish();
@@ -488,7 +713,8 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     state.comfort = clampIntimacy(state.comfort + (signal.kind === "consent" ? 0.035 : 0.05) * strength);
     state.interest = clampIntimacy(state.interest + 0.1 * strength);
     state.arousal = clampIntimacy(state.arousal + (signal.kind === "consent" ? 0.18 : 0.075) * strength * (0.68 + mutuality * 0.32));
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.085 * strength * (0.55 + mutuality * 0.45));
+    const desireFactor = signal.kind === "consent" ? 0.9 + directPreference * 0.14 : 0.9;
+    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.085 * strength * (0.55 + mutuality * 0.45) * desireFactor * (1 - gradualPreference * 0.1));
     state.lastInteractionAt = input.now;
     if (state.phase === "intimate" || state.phase === "high_intimacy")
       state.activeScene = neutralScene(state.phase, input.now);

@@ -2,12 +2,15 @@ import type { CharacterEvent } from "../events/event-types";
 import type { CompanionRepository } from "../storage/repositories/interfaces";
 import { MEMORY_PROCESSOR_VERSION } from "../storage/persistence-schema";
 import type {
+  CharacterMindContinuityPayload,
   KnowledgeFact,
   MemoryConsolidationReport,
   MemoryRecord,
 } from "./model";
 import { decayMemory } from "./model";
 import {
+  characterOpinionFactFromMind,
+  characterTensionFactFromMind,
   extractSemanticCandidates,
   factFromCandidate,
 } from "./semantic-extraction";
@@ -312,6 +315,34 @@ async function retireFactFromMemory(
   return false;
 }
 
+async function mergeCharacterFact(
+  repository: CompanionRepository,
+  candidate: KnowledgeFact,
+  report: MemoryConsolidationReport,
+  sourceMemory: MemoryRecord | null,
+) {
+  const candidateWithMemory: KnowledgeFact = sourceMemory
+    ? {
+        ...candidate,
+        sourceMemoryIds: [...new Set([...candidate.sourceMemoryIds, sourceMemory.id])],
+      }
+    : candidate;
+  const result = await repository.mergeKnowledgeFact(candidateWithMemory);
+  if (result.outcome === "confirmed") {
+    if (!report.factsConfirmed.includes(result.activeFact.id))
+      report.factsConfirmed.push(result.activeFact.id);
+  } else if (!report.factsCreated.includes(result.candidateFact.id)) {
+    report.factsCreated.push(result.candidateFact.id);
+  }
+  for (const previous of result.supersededFacts) {
+    if (!report.factsOutdated.includes(previous.id)) report.factsOutdated.push(previous.id);
+  }
+  // Character memory is autobiographical evidence. When an opinion changes we
+  // keep the earlier episode and only supersede the semantic fact, preserving
+  // the history of how her view evolved.
+  return result.activeFact;
+}
+
 async function mergeFact(
   repository: CompanionRepository,
   candidate: KnowledgeFact,
@@ -559,6 +590,16 @@ export async function consolidateEvents(
       if (thread && !currentThreads.some((t) => t.id === thread.id)) {
         await repository.saveOpenThread(thread);
         report.threadsCreated.push(thread.id);
+      }
+    }
+
+    if (event.type === "message" && event.source === "character") {
+      const mind = (event.payload as { mindContinuity?: CharacterMindContinuityPayload })?.mindContinuity;
+      if (mind) {
+        const opinion = characterOpinionFactFromMind(mind, event, event.timestamp);
+        if (opinion) await mergeCharacterFact(repository, opinion, report, memory);
+        const tension = characterTensionFactFromMind(mind, event, event.timestamp);
+        if (tension) await mergeCharacterFact(repository, tension, report, memory);
       }
     }
 

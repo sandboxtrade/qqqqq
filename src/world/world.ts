@@ -144,6 +144,67 @@ function pick<T>(items: readonly T[], timestamp: number, salt: string): T {
   return items[Math.abs(hash) % items.length];
 }
 
+const ACTIVITY_DETAILS: Record<WorldActivity, readonly string[]> = {
+  sleeping: ["сплю", "ещё сплю"],
+  waking_up: ["только просыпаюсь и пытаюсь собрать мысли", "ещё прихожу в себя после сна"],
+  breakfast: ["завтракаю и никуда пока не спешу", "сижу с завтраком и постепенно просыпаюсь"],
+  personal_project: [
+    "разбираю заметки по своему маленькому проекту и пытаюсь убрать из него лишнее",
+    "ковыряюсь в своём проекте — сейчас как раз проверяю одну идею, которая вчера казалась очевидной",
+    "сижу над своим проектом и пытаюсь довести одну сырую мысль до чего-то нормального",
+  ],
+  reading: [
+    "читаю эссе про память и то, как люди со временем переписывают собственные воспоминания",
+    "читаю длинную статью про то, почему люди редко меняют мнение сразу, даже когда слышат хороший аргумент",
+    "читаю несколько коротких рассказов и пока больше всего зацепилась за один про случайную встречу двух незнакомых людей",
+    "читаю текст про привычки и то, почему мозг так любит повторять знакомые сценарии",
+  ],
+  music: [
+    "слушаю спокойный инди-плейлист и немного отключаю голову",
+    "слушаю музыку без слов — сегодня почему-то так легче сосредоточиться",
+    "перебираю старый плейлист и нашла пару треков, которые давно не включала",
+  ],
+  walk: [
+    "гуляю без конкретного маршрута, просто проветриваю голову",
+    "вышла немного пройтись и сейчас медленно возвращаюсь домой",
+    "брожу по району без цели — мне иногда так проще разложить мысли",
+  ],
+  cooking: [
+    "готовлю что-то простое и стараюсь не устроить на кухне маленькую катастрофу",
+    "готовлю ужин — ничего сложного, просто хочется чего-то тёплого",
+    "возюсь на кухне и импровизирую из того, что нашлось",
+  ],
+  errands: [
+    "разбираюсь с мелкими делами, которые слишком долго откладывала",
+    "закрываю несколько бытовых дел одно за другим",
+    "разгребаю мелочи, чтобы они наконец перестали висеть в голове",
+  ],
+  cafe_break: [
+    "сижу в кафе с напитком и просто меняю обстановку",
+    "ненадолго засела в кафе — хотелось посидеть среди людей, но в своём мире",
+    "сижу у окна в кафе и понемногу отдыхаю от всего остального",
+  ],
+  relaxing: [
+    "отдыхаю и ничего полезного из себя не изображаю",
+    "просто лежу и даю голове немного затихнуть",
+    "устроила себе паузу без планов и обязательств",
+  ],
+  chatting: ["болтаю с тобой", "сейчас в основном с тобой и разговариваю"],
+  idle: ["ничем конкретным не занята", "пока просто отдыхаю без особого плана"],
+};
+
+/**
+ * Ephemeral, deterministic detail for the character's current activity. It is
+ * intentionally derived from the already persisted WorldState instead of being
+ * stored as a new field, so old saves and Firestore documents stay compatible.
+ */
+export function describeWorldActivityDetail(
+  activity: WorldActivity,
+  timestamp = Date.now(),
+): string {
+  return pick(ACTIVITY_DETAILS[activity], timestamp, `activity-detail:${activity}`);
+}
+
 export function resolveRoutine(
   timestamp: number,
   timeZone: string,
@@ -355,7 +416,7 @@ const templates: EventTemplate[] = [
     kind: "reflection",
     activities: ["reading", "relaxing"],
     summary:
-      "She got absorbed in something she was reading and kept thinking about one idea afterward.",
+      "Я увлеклась чтением и потом ещё долго крутила в голове одну мысль.",
     emotionalEffect: { curiosity: 0.025, happiness: 0.008 },
     shareWorthiness: 0.56,
   },
@@ -363,7 +424,7 @@ const templates: EventTemplate[] = [
     kind: "small_win",
     activities: ["personal_project"],
     summary:
-      "She made satisfying progress on a personal project and felt quietly pleased with herself.",
+      "Я хорошо продвинулась в своём проекте и была тихо довольна собой.",
     emotionalEffect: { happiness: 0.025, irritation: -0.008 },
     shareWorthiness: 0.61,
   },
@@ -371,7 +432,7 @@ const templates: EventTemplate[] = [
     kind: "minor_annoyance",
     activities: ["errands", "cooking"],
     summary:
-      "A small everyday inconvenience irritated her for a while, though it was not serious.",
+      "Меня ненадолго выбила из равновесия какая-то бытовая мелочь, хотя ничего серьёзного не случилось.",
     emotionalEffect: { irritation: 0.035, happiness: -0.012 },
     shareWorthiness: 0.38,
   },
@@ -379,7 +440,7 @@ const templates: EventTemplate[] = [
     kind: "outing",
     activities: ["walk"],
     summary:
-      "She took a short walk to clear her head and came back a little calmer.",
+      "Я немного прошлась, чтобы проветрить голову, и вернулась спокойнее.",
     emotionalEffect: { anxiety: -0.018, irritation: -0.014, happiness: 0.012 },
     shareWorthiness: 0.46,
   },
@@ -388,14 +449,14 @@ const templates: EventTemplate[] = [
     activities: ["cafe_break"],
     location: "cafe",
     summary:
-      "She spent a little time at a café for a change of scenery and enjoyed the quiet break.",
+      "Я ненадолго выбралась в кафе ради смены обстановки и хорошо отдохнула в тишине.",
     emotionalEffect: { happiness: 0.018, boredom: -0.025, curiosity: 0.008 },
     shareWorthiness: 0.54,
   },
   {
     kind: "routine",
     activities: ["music"],
-    summary: "She put on music and let herself switch off for a bit.",
+    summary: "Я включила музыку и ненадолго позволила себе просто отключиться от всего.",
     emotionalEffect: { irritation: -0.012, anxiety: -0.012 },
     shareWorthiness: 0.28,
   },

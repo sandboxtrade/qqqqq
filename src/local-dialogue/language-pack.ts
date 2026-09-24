@@ -23,7 +23,7 @@ const KNOWN_ACTS = new Set<DialogueAct>([
 ]);
 const ALLOWED_SLOTS = new Set([
   "user.name", "character.name", "character.age", "character.state", "character.angerAnswer", "character.sadnessAnswer", "relationship.description",
-  "memory.value", "memory.statement", "topic", "timeOfDay", "world.activity", "initiative.topic",
+  "memory.value", "memory.statement", "topic", "timeOfDay", "world.activity", "world.activityDetail", "initiative.topic",
   "semantic.summary", "semantic.continuation", "semantic.focus", "semantic.reason", "semantic.alternative",
 ]);
 

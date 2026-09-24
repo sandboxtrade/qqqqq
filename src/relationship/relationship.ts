@@ -58,9 +58,18 @@ export function applyRelationshipDelta(
 ): RelationshipState {
   const next = { ...state };
   const elapsedHours = Math.min(72, Math.max(0, now - state.updatedAt) / 3_600_000);
-  if (elapsedHours > 0 && state.unresolvedTension < 0.2) {
-    const calmFactor = 1 - state.unresolvedTension / 0.2;
-    next.security = clamp(next.security + elapsedHours * 0.004 * calmFactor);
+  if (elapsedHours > 0) {
+    // Security returns faster than an emotional bruise disappears. Tension also
+    // fades on its own, but slowly enough that a hurtful exchange can still be
+    // felt hours later instead of vanishing between two sessions.
+    const calmFactor = state.unresolvedTension < 0.2
+      ? 1 - state.unresolvedTension / 0.2
+      : 0;
+    if (calmFactor > 0)
+      next.security = clamp(next.security + elapsedHours * 0.004 * calmFactor);
+    next.unresolvedTension = clamp(
+      state.unresolvedTension * Math.exp(-0.035 * Math.min(96, elapsedHours)),
+    );
   }
   for (const [key, value] of Object.entries(delta)) {
     if (typeof value !== "number") continue;
@@ -72,6 +81,127 @@ export function applyRelationshipDelta(
   next.stage = resolveStage(next);
   next.updatedAt = now;
   return next;
+}
+
+// ---- relational affect -----------------------------------------------------
+// Compound feelings deliberately reuse the durable emotion/relationship state
+// instead of adding more Firestore fields. Love, jealousy and hurt are not
+// independent switches: they emerge from attachment, romantic interest, trust,
+// security and the current event, then feed back into those existing values.
+export type RelationalEmotionName =
+  | "neutral"
+  | "tenderness"
+  | "love"
+  | "jealousy"
+  | "hurt"
+  | "insecurity"
+  | "resentment";
+
+export interface RelationalThreatSignal {
+  kind: "none" | "romantic_other" | "comparison" | "betrayal";
+  strength: number;
+}
+
+export interface RelationalAffect {
+  dominant: RelationalEmotionName;
+  intensity: number;
+  love: number;
+  tenderness: number;
+  jealousy: number;
+  hurt: number;
+  insecurity: number;
+  resentment: number;
+  threat: RelationalThreatSignal;
+}
+
+const normalizeRelationalText = (value: string) =>
+  value.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
+
+const BETRAYAL_RE =
+  /(?:я\s+(?:тебе\s+)?изменил(?:а)?|изменял(?:а)?\s+тебе|у\s+меня\s+был(?:а)?\s+друг(?:ая|ой)|я\s+(?:переспал|переспала|целовал(?:ся|ась)|поцеловал(?:ся|ась))\s+с\s+(?:друг(?:ой|им)|[^,.!?]{1,28}(?:девушк|парн)))/u;
+const COMPARISON_RE =
+  /(?:(?:она|он)\s+(?:намного\s+)?(?:лучше|красивее|интереснее|милее|сексуальнее)\s+(?:тебя|чем\s+ты)|ты\s+(?:хуже|скучнее|менее\s+красив(?:ая|ый))\s+(?:нее|него|чем\s+(?:она|он)))/u;
+const ROMANTIC_DATE_RE =
+  /(?:иду|пойду|ходил(?:а)?|сходил(?:а)?)\s+на\s+свидани(?:е|я)(?!\s+(?:с\s+)?(?:тобой|тобою|вами)\b)/u;
+const ROMANTIC_FEELING_OTHER_RE =
+  /(?:мне\s+нравится|я\s+влюбил(?:ся|ась)\s+в|я\s+люблю)\s+(?:друг(?:ую|ого)\s+)?(?:девушк(?:у|а)?|парн(?:я|ень)?|человек(?:а)?)/u;
+const NEW_PARTNER_RE =
+  /у\s+меня\s+(?:появил(?:ась|ся)|есть)\s+(?:другая\s+)?(?:девушка|парень)/u;
+const EX_CONTACT_RE =
+  /(?:общаюсь|встретил(?:ся|ась)|увидел(?:ся|ась))\s+с\s+(?:бывш(?:ей|им)|другой\s+девушк(?:ой|е)|другим\s+парн(?:ем|ем))/u;
+
+export function detectRelationalThreat(text: string): RelationalThreatSignal {
+  const normalized = normalizeRelationalText(text);
+  if (!normalized) return { kind: "none", strength: 0 };
+  if (BETRAYAL_RE.test(normalized)) return { kind: "betrayal", strength: 1 };
+  if (COMPARISON_RE.test(normalized)) return { kind: "comparison", strength: 0.86 };
+  if ([ROMANTIC_DATE_RE, ROMANTIC_FEELING_OTHER_RE, NEW_PARTNER_RE, EX_CONTACT_RE].some((pattern) => pattern.test(normalized)))
+    return { kind: "romantic_other", strength: 0.7 };
+  return { kind: "none", strength: 0 };
+}
+
+export function deriveRelationalAffect(
+  emotion: EmotionalState,
+  relationship: RelationshipState,
+  text = "",
+): RelationalAffect {
+  const threat = detectRelationalThreat(text);
+  const stageFactor = relationship.stage === "deep" ? 1
+    : relationship.stage === "close" ? 0.8
+      : relationship.stage === "familiar" ? 0.34
+        : 0.12;
+  const bond = clamp(
+    emotion.affection * 0.23 +
+    emotion.romanticInterest * 0.22 +
+    relationship.attachment * 0.2 +
+    relationship.closeness * 0.14 +
+    relationship.trust * 0.12 +
+    relationship.security * 0.09,
+  );
+  const love = clamp(
+    (emotion.affection * 0.24 +
+      emotion.romanticInterest * 0.2 +
+      relationship.attachment * 0.2 +
+      relationship.closeness * 0.14 +
+      relationship.trust * 0.12 +
+      relationship.security * 0.1 -
+      relationship.unresolvedTension * 0.15 - 0.24) / 0.62,
+  );
+  const tenderness = clamp(
+    emotion.affection * 0.42 + relationship.closeness * 0.25 +
+    relationship.security * 0.16 + relationship.trust * 0.12 +
+    emotion.happiness * 0.08 - relationship.unresolvedTension * 0.18,
+  );
+  const insecurity = clamp(
+    (1 - relationship.security) * 0.44 + emotion.anxiety * 0.28 +
+    relationship.unresolvedTension * 0.2 + threat.strength * bond * 0.2,
+  );
+  const jealousy = clamp(
+    threat.strength * stageFactor *
+      (emotion.romanticInterest * 0.34 + relationship.attachment * 0.27 +
+       emotion.affection * 0.17 + relationship.closeness * 0.14 + insecurity * 0.08) +
+    (threat.kind === "comparison" ? 0.08 * stageFactor : 0),
+  );
+  const hurt = clamp(
+    emotion.sadness * 0.42 + emotion.irritation * 0.16 +
+    relationship.unresolvedTension * 0.34 + (1 - relationship.security) * 0.12 +
+    threat.strength * bond * (threat.kind === "betrayal" ? 0.34 : threat.kind === "comparison" ? 0.2 : 0.09),
+  );
+  const resentment = clamp(
+    relationship.unresolvedTension * 0.54 + emotion.irritation * 0.3 +
+    (1 - relationship.respect) * 0.09 + (threat.kind === "betrayal" ? threat.strength * bond * 0.2 : 0),
+  );
+
+  const ranked: Array<[RelationalEmotionName, number]> = [
+    ["jealousy", jealousy], ["hurt", hurt], ["resentment", resentment],
+    ["love", love], ["tenderness", tenderness], ["insecurity", insecurity],
+  ];
+  ranked.sort((a, b) => b[1] - a[1]);
+  const [candidate, intensity] = ranked[0] ?? ["neutral", 0];
+  // Compound labels are only surfaced when they are meaningfully present; the
+  // raw dimensions still remain available to the caller below this threshold.
+  const dominant = intensity >= 0.38 ? candidate : "neutral";
+  return { dominant, intensity, love, tenderness, jealousy, hurt, insecurity, resentment, threat };
 }
 
 // ---- romance.ts ----

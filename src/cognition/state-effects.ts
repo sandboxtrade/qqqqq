@@ -1,5 +1,5 @@
-import type { EmotionDelta } from "../emotions/emotions";
-import type { RelationshipDelta } from "../relationship/relationship";
+import type { EmotionDelta, EmotionalState } from "../emotions/emotions";
+import { deriveRelationalAffect, type RelationshipDelta, type RelationshipState } from "../relationship/relationship";
 import type { CharacterDecision, Perception } from "./cognition-types";
 import { isPersonalInsultDirectedAtCharacter } from "./local-cognition";
 
@@ -12,6 +12,8 @@ export function inferStateEffects(
   perception: Perception,
   decision: CharacterDecision,
   sourceIntent?: string,
+  currentEmotion?: EmotionalState,
+  currentRelationship?: RelationshipState,
 ): CognitionStateEffects {
   const emotion: EmotionDelta = { curiosity: 0.005 };
   const relationship: RelationshipDelta = {};
@@ -54,6 +56,37 @@ export function inferStateEffects(
     emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.004;
   }
 
+  // Jealousy is an appraisal of a valued bond being threatened, not a global
+  // personality toggle. A romantic reference to somebody else matters only if
+  // attachment/romantic interest have actually grown. It can make her insecure
+  // or hurt without automatically punishing trust or acting possessive.
+  if (currentEmotion && currentRelationship) {
+    const relational = deriveRelationalAffect(
+      currentEmotion,
+      currentRelationship,
+      perception.literalMeaning,
+    );
+    if (relational.threat.kind !== "none" && relational.jealousy >= 0.18) {
+      const jealousy = relational.jealousy;
+      const threat = relational.threat;
+      emotion.anxiety = (emotion.anxiety ?? 0) + 0.018 + jealousy * 0.055;
+      emotion.sadness = (emotion.sadness ?? 0) + jealousy *
+        (threat.kind === "betrayal" ? 0.085 : threat.kind === "comparison" ? 0.055 : 0.028);
+      emotion.happiness = (emotion.happiness ?? 0) - jealousy * 0.04;
+      relationship.security = (relationship.security ?? 0) -
+        jealousy * (threat.kind === "betrayal" ? 0.085 : 0.04);
+      relationship.unresolvedTension = (relationship.unresolvedTension ?? 0) +
+        jealousy * (threat.kind === "betrayal" ? 0.095 : threat.kind === "comparison" ? 0.052 : 0.022);
+      if (threat.kind === "comparison")
+        emotion.irritation = (emotion.irritation ?? 0) + jealousy * 0.035;
+      if (threat.kind === "betrayal") {
+        emotion.irritation = (emotion.irritation ?? 0) + jealousy * 0.075;
+        relationship.trust = (relationship.trust ?? 0) - jealousy * 0.06;
+        relationship.respect = (relationship.respect ?? 0) - jealousy * 0.025;
+      }
+    }
+  }
+
   if (perception.probableIntent === "apology") {
     // An apology helps, but it does not erase an emotional bruise in one turn.
     emotion.irritation = (emotion.irritation ?? 0) - 0.035;
@@ -92,6 +125,16 @@ export function inferStateEffects(
     relationship.respect = (relationship.respect ?? 0) - 0.024;
     relationship.security = (relationship.security ?? 0) - 0.03;
     relationship.unresolvedTension = (relationship.unresolvedTension ?? 0) + 0.08;
+    // Words from somebody she is attached to land harder than the same insult
+    // from a new acquaintance. The extra impact is sadness/security, not only anger.
+    if (currentRelationship) {
+      const bondSensitivity = Math.max(0, Math.min(1,
+        currentRelationship.attachment * 0.46 + currentRelationship.closeness * 0.34 + currentRelationship.trust * 0.2,
+      ));
+      emotion.sadness = (emotion.sadness ?? 0) + bondSensitivity * 0.045;
+      relationship.security = (relationship.security ?? 0) - bondSensitivity * 0.018;
+      relationship.unresolvedTension = (relationship.unresolvedTension ?? 0) + bondSensitivity * 0.025;
+    }
   }
 
   if (perception.probableIntent === "boundary") {
@@ -107,6 +150,18 @@ export function inferStateEffects(
     perception.tone !== "irritated"
   ) {
     emotion.curiosity = (emotion.curiosity ?? 0) + 0.01;
+  }
+
+  // Repair continues after the literal apology. Several calm/warm turns slowly
+  // rebuild security and let the emotional aftertaste fade instead of snapping
+  // instantly from "hurt" to "fine".
+  if (currentRelationship && currentRelationship.unresolvedTension > 0.04 &&
+      perception.tone === "warm" && perception.probableIntent !== "apology") {
+    const repairRoom = Math.min(1, currentRelationship.unresolvedTension * 2.4);
+    relationship.unresolvedTension = (relationship.unresolvedTension ?? 0) - 0.008 * repairRoom;
+    relationship.security = (relationship.security ?? 0) + 0.004 * repairRoom;
+    emotion.irritation = (emotion.irritation ?? 0) - 0.006 * repairRoom;
+    emotion.sadness = (emotion.sadness ?? 0) - 0.004 * repairRoom;
   }
 
   return { emotion, relationship };

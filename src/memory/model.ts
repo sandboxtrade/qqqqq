@@ -52,6 +52,88 @@ export interface KnowledgeFact {
   supersededByFactId?: string;
 }
 
+export type CharacterViewPosition =
+  | "positive"
+  | "negative"
+  | "mixed"
+  | "cautious"
+  | "curious";
+
+export type CharacterViewReason =
+  | "honesty"
+  | "reciprocity"
+  | "autonomy"
+  | "consistency"
+  | "comfort"
+  | "curiosity"
+  | "depth"
+  | "respect"
+  | "experience";
+
+export interface CharacterViewValue {
+  topic: string;
+  position: CharacterViewPosition;
+  reason: CharacterViewReason;
+}
+
+export function characterViewTopicKey(value: string) {
+  const stem = (token: string) => {
+    if (!/[а-я]/u.test(token) || token.length < 4) return token;
+    return token
+      .replace(/(?:иями|ями|ами|его|ого|ему|ому|ее|ие|ые|ое|ей|ий|ый|ой|ем|им|ым|ом|их|ых|ую|юю|ая|яя|ою|ею|ах|ях|ам|ям|ов|ев|ы|и|а|я|у|ю|е|о)$/u, "")
+      .replace(/[ьъ]$/u, "") || token;
+  };
+  return value
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .split(/[^\p{L}\p{N}]+/gu)
+    .filter(Boolean)
+    .map(stem)
+    .join("_")
+    .slice(0, 64);
+}
+
+/**
+ * Additive event payload produced by Local Brain when a thought is stable
+ * enough to survive the current turn. It is stored inside the existing event
+ * payload and later consolidated into ordinary KnowledgeFact records; no new
+ * Firestore collection or persistence schema is required.
+ */
+export interface CharacterMindContinuityPayload extends CharacterViewValue {
+  topicKey: string;
+  confidence: number;
+  persistence: number;
+  reconsideration?: string;
+  challengeDirection?: "positive" | "negative";
+  changedFrom?: CharacterViewPosition;
+}
+
+export function encodeCharacterViewValue(value: CharacterViewValue) {
+  return `v1|${value.position}|${value.reason}|${encodeURIComponent(value.topic.trim())}`;
+}
+
+export function decodeCharacterViewValue(value: string): CharacterViewValue | null {
+  const [version, position, reason, encodedTopic] = value.split("|");
+  const positions: CharacterViewPosition[] = ["positive", "negative", "mixed", "cautious", "curious"];
+  const reasons: CharacterViewReason[] = [
+    "honesty", "reciprocity", "autonomy", "consistency", "comfort",
+    "curiosity", "depth", "respect", "experience",
+  ];
+  if (version !== "v1" || !positions.includes(position as CharacterViewPosition) ||
+      !reasons.includes(reason as CharacterViewReason) || !encodedTopic) return null;
+  try {
+    const topic = decodeURIComponent(encodedTopic).trim();
+    if (!topic) return null;
+    return {
+      topic,
+      position: position as CharacterViewPosition,
+      reason: reason as CharacterViewReason,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type OpenThreadStatus = "open" | "resolved" | "dropped";
 
 export interface OpenThread {
