@@ -1,3 +1,6 @@
+import type { CharacterViewPosition, CharacterViewReason } from "../memory/model";
+import type { IntimacyMindState } from "../intimacy/intimacy";
+
 export type PerceptionIntent =
   | "question"
   | "statement"
@@ -53,6 +56,29 @@ export interface CharacterInterpretation {
   uncertainty: number;
 }
 
+export interface ThoughtStimulus {
+  userText: string;
+  /** Previous user turn, used only for short relationship follow-ups such as "ты ревнуешь?". */
+  previousUserText?: string;
+  topic?: string;
+  focus?: string;
+  semanticStance?: string;
+  reason?: string;
+  sentiment?: string;
+  asksCharacterView?: boolean;
+  negation?: boolean;
+  meaningfulTokens?: number;
+  intimacyMind?: IntimacyMindState;
+  /** Explicit cause/effect relation grounded in the current or recovered dialogue. */
+  causalCause?: string;
+  causalEffect?: string;
+  causalRelation?: "cause" | "consequence" | "condition" | "motivation" | "temporal_consequence";
+  causalConfidence?: number;
+  /** Older dialogue was re-read because the fast path could not ground the turn. */
+  retrospectiveEcho?: string;
+  retrospectiveRecovered?: boolean;
+}
+
 export interface InternalThought {
   observation: string;
   interpretation: string;
@@ -61,6 +87,43 @@ export interface InternalThought {
   concern?: string;
   stance: string;
   impulse: string;
+  /** Stable conversational subject used for long-lived self-continuity. */
+  topic?: string;
+  /** Firestore-safe logical suffix shared by opinion/tension knowledge facts. */
+  topicKey?: string;
+  position?: CharacterViewPosition;
+  positionReason?: CharacterViewReason;
+  positionConfidence: number;
+  /** How worth preserving this thought is. Ephemeral reactions stay below the persistence threshold. */
+  persistence: number;
+  /** A remembered prior view that influenced the current thought. */
+  memoryEcho?: string;
+  /** Why the prior view is being questioned instead of blindly reused. */
+  reconsideration?: string;
+  /** Direction of repeated counter-evidence; used to make opinion changes gradual. */
+  challengeDirection?: "positive" | "negative";
+  /** The prior position when a real opinion shift happened this turn. */
+  changedFrom?: CharacterViewPosition;
+  openQuestion?: string;
+  /** Current adult-intimacy cognition, when Adult Mode and context make it relevant. */
+  intimacyReflection?: string;
+  intimacyDesire?: number;
+  intimacyCaution?: number;
+  intimacyConflict?: boolean;
+  /** Compound relationship emotion derived from durable attachment/security + the current event. */
+  relationalEmotion?: "neutral" | "tenderness" | "love" | "jealousy" | "hurt" | "insecurity" | "resentment";
+  relationalIntensity?: number;
+  relationalReflection?: string;
+  relationalThreat?: "none" | "romantic_other" | "comparison" | "betrayal";
+  jealousy?: number;
+  love?: number;
+  hurt?: number;
+  causalCause?: string;
+  causalEffect?: string;
+  causalRelation?: "cause" | "consequence" | "condition" | "motivation" | "temporal_consequence";
+  causalConfidence?: number;
+  retrospectiveEcho?: string;
+  retrospectiveRecovered?: boolean;
 }
 
 export type DecisionAction =

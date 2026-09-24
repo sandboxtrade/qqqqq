@@ -1,8 +1,8 @@
 import type { CharacterCore } from "../character/character";
-import type { CharacterDecision, Perception, ResponsePlan } from "../cognition/cognition-types";
+import type { CharacterDecision, InternalThought, Perception, ResponsePlan } from "../cognition/cognition-types";
 import type { EmotionalState } from "../emotions/emotions";
 import type { CharacterInitiative } from "../initiative/initiative";
-import type { IntimacySignal, IntimacySignalKind, IntimacyState } from "../intimacy/intimacy";
+import type { IntimacyMindState, IntimacyPreferencesDocument, IntimacySignal, IntimacySignalKind, IntimacyState } from "../intimacy/intimacy";
 import type { MemoryContext } from "../memory/model";
 import type { RelationshipState } from "../relationship/relationship";
 import type { RomanceState } from "../relationship/relationship";
@@ -51,6 +51,13 @@ export type SemanticStance =
 export type LocalIntimacySignalKind = IntimacySignalKind;
 export type LocalIntimacySignal = IntimacySignal;
 
+export type LocalHumorKind = "none" | "laughter" | "explicit" | "irony" | "absurdity";
+
+export interface LocalHumorSignal {
+  kind: LocalHumorKind;
+  confidence: number;
+}
+
 export interface LocalSemanticFrame {
   subject: SemanticSubject;
   stance: SemanticStance;
@@ -69,6 +76,8 @@ export interface LocalSemanticFrame {
   asksCharacterView: boolean;
   reciprocal: boolean;
   meaningfulTokens: number;
+  /** Local conversational humor cue. It changes interpretation/tone, not factual meaning. */
+  humor?: LocalHumorSignal;
   /** Local-only relationship/intimacy cue. It is contextual evidence, never consent by itself. */
   intimacy: LocalIntimacySignal;
 }
@@ -167,7 +176,18 @@ export type SpontaneousBeatKind =
   | "conversation_pull"
   | "playful_pushback"
   | "situational_joke"
-  | "cadence_notice";
+  | "cadence_notice"
+  | "relationship_aftertaste";
+
+export type TopicDevelopmentAngle =
+  | "meaning"
+  | "cause"
+  | "tradeoff"
+  | "consequence"
+  | "future"
+  | "person"
+  | "evidence"
+  | "change";
 
 export interface SpontaneousBeat {
   kind: SpontaneousBeatKind;
@@ -179,6 +199,7 @@ export interface SpontaneousBeat {
   detail?: string;
   sourceId?: string;
   asksQuestion?: boolean;
+  developmentAngle?: TopicDevelopmentAngle;
 }
 
 export interface CharacterResponsePlan {
@@ -200,6 +221,32 @@ export interface CharacterResponsePlan {
   semanticPayload?: Record<string, string | number | boolean | null | undefined>;
   decision: CharacterDecision;
   responsePlan: ResponsePlan;
+}
+
+
+export type CausalRelationKind = "cause" | "consequence" | "condition" | "motivation" | "temporal_consequence";
+
+export interface CausalRelation {
+  cause: string;
+  effect: string;
+  kind: CausalRelationKind;
+  confidence: number;
+  sourceRole?: "user" | "character";
+  sourceTimestamp?: number;
+  sourceId?: string;
+}
+
+export interface RetrospectiveContext {
+  triggered: boolean;
+  recovered: boolean;
+  confidence: number;
+  resolution: "recent" | "history" | "causal" | "memory" | "none";
+  inferredTopic?: string;
+  inferredFocus?: string;
+  scannedLines: number;
+  evidence: DialogueHistoryLine[];
+  causalRelations: CausalRelation[];
+  summary?: string;
 }
 
 export interface DialogueFrame {
@@ -235,13 +282,18 @@ export interface DialogueContext {
   world: WorldState;
   romance?: RomanceState;
   intimacy?: IntimacyState;
+  intimacyMind?: IntimacyMindState;
+  intimacyPreferences?: IntimacyPreferencesDocument;
   memoryContext: MemoryContext;
   history: DialogueHistoryLine[];
   nlu: LocalNLUResult;
   perception: Perception;
+  thought?: InternalThought;
   decision: CharacterDecision;
   responsePlan: ResponsePlan;
   dialogueFrame: DialogueFrame;
+  retrospective?: RetrospectiveContext;
+  causalRelations?: CausalRelation[];
   initiative?: CharacterInitiative;
 }
 

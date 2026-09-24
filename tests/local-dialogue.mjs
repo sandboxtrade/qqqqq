@@ -27,17 +27,23 @@ const {
   applyLocalNLUToPerception,
   buildDialogueContext,
   buildDialogueFrame,
+  buildCausalRelations,
+  buildRetrospectiveContext,
+  applyRetrospectiveNLU,
+  extractCausalRelations,
+  shouldUseRetrospectivePass,
   localDialogueRenderer,
   planLocalDialogue,
   resolveContextualNLU,
 } = await import("../src/local-dialogue/index.ts");
 const { russianLanguagePack } = await import("../src/local-dialogue/language-pack.ts");
-const { localPerception, interpret, decide, planResponse } = await import("../src/cognition/local-cognition.ts");
+const { localPerception, interpret, buildThought, decide, planResponse } = await import("../src/cognition/local-cognition.ts");
 const { defaultCharacter } = await import("../src/character/character.ts");
 const { initialEmotionalState, deriveMood } = await import("../src/emotions/emotions.ts");
 const { initialRelationshipState } = await import("../src/relationship/relationship.ts");
 const { createInitialWorldState } = await import("../src/world/world.ts");
-const { createInitialIntimacyState } = await import("../src/intimacy/intimacy.ts");
+const { createInitialIntimacyState, createInitialIntimacyPreferences, ensureCoreIntimacyPreferences, buildIntimacyMind } = await import("../src/intimacy/intimacy.ts");
+const { encodeCharacterViewValue, characterViewTopicKey } = await import("../src/memory/model.ts");
 
 let count = 0;
 async function test(name, fn) {
@@ -84,6 +90,46 @@ function fact(key, value, statement = value) {
   };
 }
 
+function characterOpinionFact(topic, position = "positive", reason = "experience", evidenceCount = 2) {
+  const topicKey = characterViewTopicKey(topic);
+  return {
+    id: `fact_character_${topicKey}_${position}`,
+    subject: "character",
+    key: `character.opinion.${topicKey}`,
+    statement: `Yuzuki has a ${position} view on ${topic}.`,
+    value: encodeCharacterViewValue({ topic, position, reason }),
+    confidence: 0.72,
+    evidenceCount,
+    sourceEventIds: ["character_event_1"],
+    sourceMemoryIds: ["memory_character_event_1"],
+    createdAt: NOW - 4000,
+    updatedAt: NOW - 1000,
+    lastConfirmedAt: NOW - 1000,
+    validFrom: NOW - 4000,
+    status: "active",
+  };
+}
+
+function characterTensionFact(topic, direction = "negative", evidenceCount = 1) {
+  const topicKey = characterViewTopicKey(topic);
+  return {
+    id: `fact_character_tension_${topicKey}_${direction}`,
+    subject: "character",
+    key: `character.tension.${topicKey}`,
+    statement: `Yuzuki has a live counterargument on ${topic}.`,
+    value: `challenge|${direction}`,
+    confidence: 0.6,
+    evidenceCount,
+    sourceEventIds: ["character_event_tension"],
+    sourceMemoryIds: ["memory_character_event_tension"],
+    createdAt: NOW - 3000,
+    updatedAt: NOW - 800,
+    lastConfirmedAt: NOW - 800,
+    validFrom: NOW - 3000,
+    status: "active",
+  };
+}
+
 async function renderTurn({
   text,
   turnId = `turn_${Math.random().toString(16).slice(2)}`,
@@ -92,6 +138,10 @@ async function renderTurn({
   relationshipState = relationship("new"),
   emotionState = emotion(),
   intimacyState = undefined,
+  intimacyMind = undefined,
+  intimacyPreferences = undefined,
+  retrospective = undefined,
+  causalRelations = undefined,
 } = {}) {
   const initialNlu = analyzeLocalNLU(text);
   const frame = buildDialogueFrame(history, initialNlu);
@@ -102,7 +152,33 @@ async function renderTurn({
   );
   const world = createInitialWorldState(NOW, "Europe/Amsterdam");
   const interpretation = interpret(perception, memoryContext, emotionState, relationshipState);
-  const decision = decide(defaultCharacter, perception, interpretation, emotionState, relationshipState, world);
+  const previousNlu = frame.previousUserText ? analyzeLocalNLU(frame.previousUserText) : undefined;
+  const counterArgumentCue = nlu.isQuestion && /(?:разве|но\s+ведь|с\s+другой\s+стороны|а\s+если)/iu.test(text);
+  const continuityFocus = nlu.semantic.focus ?? (
+    ["ask_followup", "reference_previous_topic", "ask_character_opinion", "ask_character_preference", "ask_why"].includes(nlu.intent) || counterArgumentCue
+      ? previousNlu?.semantic.focus
+      : undefined
+  );
+  const thought = buildThought(defaultCharacter, perception, interpretation, emotionState, relationshipState, memoryContext, {
+    userText: text,
+    topic: nlu.topic ?? frame.previousTopic,
+    focus: continuityFocus,
+    semanticStance: nlu.semantic.stance,
+    reason: nlu.semantic.reason,
+    sentiment: nlu.sentiment,
+    asksCharacterView: nlu.semantic.asksCharacterView || ["ask_character_opinion", "ask_character_preference", "ask_for_opinion"].includes(nlu.intent),
+    negation: nlu.negation,
+    meaningfulTokens: nlu.semantic.meaningfulTokens,
+    previousUserText: frame.previousUserText,
+    intimacyMind,
+    causalCause: causalRelations?.[0]?.cause,
+    causalEffect: causalRelations?.[0]?.effect,
+    causalRelation: causalRelations?.[0]?.kind,
+    causalConfidence: causalRelations?.[0]?.confidence,
+    retrospectiveEcho: retrospective?.summary,
+    retrospectiveRecovered: retrospective?.recovered === true,
+  });
+  const decision = decide(defaultCharacter, perception, interpretation, emotionState, relationshipState, world, thought);
   const responsePlan = planResponse(defaultCharacter, perception, interpretation, decision, emotionState, world);
   const context = buildDialogueContext({
     userText: text,
@@ -113,16 +189,21 @@ async function renderTurn({
     relationship: relationshipState,
     world,
     intimacy: intimacyState,
+    intimacyMind,
+    intimacyPreferences,
     memoryContext,
     history,
     nlu,
     perception,
+    thought,
     decision,
     responsePlan,
+    retrospective,
+    causalRelations,
   });
   const plan = planLocalDialogue(context);
   const rendered = await localDialogueRenderer.render(plan, context);
-  return { nlu, perception, decision, responsePlan, context, plan, rendered };
+  return { nlu, perception, thought, decision, responsePlan, context, plan, rendered };
 }
 
 function assertSafeText(text, allowEmpty = false) {
@@ -557,6 +638,63 @@ await test("intimacy short yes/no resolves only from an intimate previous turn",
   assert.equal(aftercare.semantic.intimacy.intimacyContext, true);
 });
 
+await test("ordinary liking is not consent, while intimate continuity can make the same fresh cue meaningful", () => {
+  const ordinary = analyzeLocalNLU("Мне это нравится");
+  assert.equal(ordinary.semantic.intimacy.kind, "none");
+  assert.equal(ordinary.semantic.intimacy.intimacyContext, false);
+
+  const history = [
+    { role: "user", text: "Можно ближе?", timestamp: NOW - 2000 },
+    { role: "character", text: "Можно.", timestamp: NOW - 1000, dialogueActs: ["INTIMACY_APPROACH"] },
+  ];
+  const initial = analyzeLocalNLU("Мне это нравится");
+  const contextual = resolveContextualNLU(initial, buildDialogueFrame(history, initial), "Мне это нравится");
+  assert.equal(contextual.semantic.intimacy.kind, "consent");
+  assert.equal(contextual.semantic.intimacy.intimacyContext, true);
+});
+
+await test("short doubt inside intimacy becomes hesitation instead of accidental escalation", () => {
+  const history = [
+    { role: "user", text: "Иди ближе", timestamp: NOW - 2000 },
+    { role: "character", text: "Хорошо, но без спешки.", timestamp: NOW - 1000, dialogueActs: ["INTIMACY_APPROACH"] },
+  ];
+  const initial = analyzeLocalNLU("Не знаю...");
+  const contextual = resolveContextualNLU(initial, buildDialogueFrame(history, initial), "Не знаю...");
+  assert.equal(contextual.semantic.intimacy.kind, "hesitant");
+  assert.equal(contextual.semantic.intimacy.explicit, true);
+});
+
+await test("adult self-questions are answered from Yuzuki's actual intimacy mind and forming preferences", async () => {
+  const intimacyState = {
+    ...createInitialIntimacyState(NOW), adultModeEnabled: true, phase: "intimate", interactionStatus: "open",
+    comfort: 0.86, interest: 0.9, arousal: 0.7, initiativeDrive: 0.5,
+  };
+  const intimacyPreferences = ensureCoreIntimacyPreferences(createInitialIntimacyPreferences(NOW), NOW).document;
+  const relationshipState = relationship("deep");
+  const emotionState = emotion({ affection: 0.92, romanticInterest: 0.92, happiness: 0.72, energy: 0.7, anxiety: 0.06 });
+  const world = createInitialWorldState(NOW, "Europe/Amsterdam");
+  world.isAwake = true;
+  world.availability = "free";
+  world.currentLocation = "bedroom";
+  const intimacyMind = buildIntimacyMind({
+    state: intimacyState, preferences: intimacyPreferences,
+    signal: { kind: "none", strength: 0, explicit: false, intimacyContext: true },
+    emotion: emotionState, relationship: relationshipState, world,
+  });
+  const arousal = await renderTurn({
+    text: "Ты сейчас возбуждена?", turnId: "intimacy_self_arousal",
+    relationshipState, emotionState, intimacyState, intimacyMind, intimacyPreferences,
+  });
+  assert.match(arousal.rendered.text, /да|есть|тянет|напряж|нейтраль/iu);
+  assert.doesNotMatch(arousal.rendered.text, /не знаю, что ответить|не поняла/iu);
+
+  const preference = await renderTurn({
+    text: "Тебе нравится флирт?", turnId: "intimacy_pref_forming",
+    relationshipState, emotionState, intimacyState, intimacyMind, intimacyPreferences,
+  });
+  assert.match(preference.rendered.text, /не уверен|не хочу придумывать|нет честного устойчивого|теорию/iu);
+});
+
 await test("adult intimacy mode changes dialogue acts without replacing normal conversation", async () => {
   const active = {
     ...createInitialIntimacyState(NOW),
@@ -873,6 +1011,67 @@ await test("deep earned attachment can become an explicit love answer", async ()
   assert.match(result.rendered.templateId, /relationship-love\.deep/iu);
 });
 
+await test("jealousy appears as an earned vulnerable feeling instead of default possessiveness", async () => {
+  const deep = await renderTurn({
+    text: "Я завтра иду на свидание с другой девушкой",
+    turnId: "earned_jealousy_deep",
+    relationshipState: relationship("deep"),
+    emotionState: emotion({ affection: 0.92, romanticInterest: 0.84, happiness: 0.62, anxiety: 0.08, irritation: 0.03 }),
+  });
+  assert.ok((deep.thought.jealousy ?? 0) >= 0.34, JSON.stringify(deep.thought));
+  assert.ok(deep.plan.dialogueActs.includes("JEALOUSY"), JSON.stringify(deep.plan.dialogueActs));
+  assert.match(deep.rendered.text, /ревн|кольнул|важен|уязв|неприятн/iu);
+  assert.match(deep.rendered.text, /не\s+(?:хочу\s+)?(?:контрол|запрещ|превращ)|не\s+право|не\s+собствен|мо[её]\s+чувств|требован|провер/iu);
+
+  const familiar = await renderTurn({
+    text: "Я завтра иду на свидание с другой девушкой",
+    turnId: "earned_jealousy_familiar",
+    relationshipState: relationship("familiar"),
+    emotionState: emotion({ affection: 0.38, romanticInterest: 0.08, happiness: 0.55 }),
+  });
+  assert.ok((familiar.thought.jealousy ?? 0) < 0.34, JSON.stringify(familiar.thought));
+  assert.ok(!familiar.plan.dialogueActs.includes("JEALOUSY"), JSON.stringify(familiar.plan.dialogueActs));
+});
+
+await test("love and hurt can coexist after conflict instead of one emotion erasing the other", async () => {
+  const result = await renderTurn({
+    text: "Ты меня любишь?",
+    turnId: "love_while_hurt",
+    relationshipState: {
+      ...relationship("deep"),
+      security: 0.62,
+      unresolvedTension: 0.62,
+    },
+    emotionState: emotion({
+      affection: 0.94,
+      romanticInterest: 0.82,
+      happiness: 0.42,
+      sadness: 0.46,
+      irritation: 0.18,
+      anxiety: 0.22,
+    }),
+  });
+  assert.ok((result.thought.love ?? 0) > 0.55, JSON.stringify(result.thought));
+  assert.ok((result.thought.hurt ?? 0) >= 0.38, JSON.stringify(result.thought));
+  assert.match(result.rendered.text, /люблю/iu);
+  assert.match(result.rendered.text, /обид|задел|боль|не\s+(?:делать\s+вид|выключает|чинит)|время/iu);
+});
+
+await test("Yuzuki can report whether an old hurt is still present instead of resetting to fine", async () => {
+  const result = await renderTurn({
+    text: "Ты на меня обиделась?",
+    turnId: "hurt_self_awareness",
+    relationshipState: {
+      ...relationship("deep"),
+      security: 0.6,
+      unresolvedTension: 0.58,
+    },
+    emotionState: emotion({ affection: 0.84, romanticInterest: 0.68, sadness: 0.42, irritation: 0.19, happiness: 0.38 }),
+  });
+  assert.ok((result.thought.hurt ?? 0) >= 0.38, JSON.stringify(result.thought));
+  assert.match(result.rendered.text, /обиж|задева|осад|неприят|не\s+успел|не\s+прош/iu);
+});
+
 await test("a hurtful message can visibly hurt Yuzuki instead of producing a generic boundary", async () => {
   const result = await renderTurn({
     text: "Ты мне вообще не нравишься",
@@ -905,6 +1104,75 @@ await test("playful state can produce a situational joke instead of only acknowl
   assert.match(found.rendered.text, /работ|личное пространство|третьего участника|сценар|сюжет/iu);
 });
 
+await test("implicit irony is understood as humor without requiring 'это шутка'", async () => {
+  const nlu = analyzeLocalNLU("Ну да, конечно, просто идеально, работа опять сломалась как всегда вовремя");
+  assert.equal(nlu.semantic.humor?.kind, "irony");
+  assert.ok((nlu.semantic.humor?.confidence ?? 0) >= 0.75);
+  assert.ok(nlu.intent === "joke" || nlu.secondaryIntents.includes("joke"));
+
+  let found = null;
+  const history = [
+    { role: "user", text: "На работе сегодня всё через одно место", timestamp: NOW - 2000 },
+    { role: "character", text: "Похоже, день решил не упрощать тебе жизнь.", timestamp: NOW - 1000, templateId: "old.work" },
+  ];
+  for (let index = 0; index < 80 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Ну да, конечно, просто идеально, работа опять сломалась как всегда вовремя",
+      turnId: `irony_riff_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ happiness: 0.66, energy: 0.7, affection: 0.52, irritation: 0.08 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "situational_joke") found = result;
+  }
+  assert.ok(found, "expected Yuzuki to riff on recognized irony");
+  assert.match(found.rendered.text, /идеаль|реальност|нормальн.*момент|удобн|тайминг/iu);
+});
+
+await test("humor can become a short callback on the same topic instead of being forgotten next turn", async () => {
+  const history = [
+    { role: "user", text: "Работа решила официально стать моим личным антагонистом", timestamp: NOW - 3000 },
+    { role: "character", text: "У неё явно серьёзные карьерные планы.", timestamp: NOW - 2000, templateId: "old.joke", dialogueActs: ["JOKE"] },
+    { role: "user", text: "И опять вспоминаю про неё дома", timestamp: NOW - 1000 },
+  ];
+  let found = null;
+  for (let index = 0; index < 100 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Работа всё ещё не отпускает",
+      turnId: `humor_callback_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ happiness: 0.72, energy: 0.7, affection: 0.5, irritation: 0.06 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "situational_joke" && result.plan.spontaneousBeat.sourceId?.endsWith(":callback")) found = result;
+  }
+  assert.ok(found, "expected a humor callback from recent topic continuity");
+  assert.match(found.rendered.text, /внутренн.*мем|комедийн|не могу воспринимать.*серь/iu);
+});
+
+await test("topic development chooses a relevant angle instead of repeating one generic why-question", async () => {
+  const history = [
+    { role: "user", text: "Я думаю уйти с работы", timestamp: NOW - 5000 },
+    { role: "character", text: "Ты уже давно к этому идёшь?", timestamp: NOW - 4000, templateId: "old.one" },
+    { role: "user", text: "Да, работа выматывает", timestamp: NOW - 3000 },
+    { role: "character", text: "Тогда это уже не просто плохой день.", timestamp: NOW - 2000, templateId: "old.two" },
+  ];
+  let found = null;
+  for (let index = 0; index < 80 && !found; index += 1) {
+    const result = await renderTurn({
+      text: "Я хочу уйти с этой работы",
+      turnId: `topic_angle_${index}`,
+      history,
+      relationshipState: relationship("close"),
+      emotionState: emotion({ curiosity: 0.9, happiness: 0.46, energy: 0.7, affection: 0.46 }),
+    });
+    if (result.plan.spontaneousBeat?.kind === "conversation_pull") found = result;
+  }
+  assert.ok(found, "expected a topic development beat");
+  assert.ok(["future", "consequence", "change"].includes(found.plan.spontaneousBeat?.developmentAngle));
+  assert.match(found.rendered.text, /завтра|изменится|решени|следующ|дальше|важнее|сдвинул/iu);
+});
+
 await test("adult close flirting sounds reciprocal rather than clinical", async () => {
   const active = {
     ...createInitialIntimacyState(NOW),
@@ -925,6 +1193,305 @@ await test("adult close flirting sounds reciprocal rather than clinical", async 
   });
   assert.match(result.rendered.text, /действ|флирт|дразн|нейтраль|нравится|отвечать/iu);
   assert.doesNotMatch(result.rendered.text, /согласие|протокол|режим|состояние/iu);
+});
+
+await test("character opinion survives Russian case changes and reciprocal short follow-up", async () => {
+  const ownFact = characterOpinionFact("удаленной работе", "negative", "autonomy");
+  const memoryContext = { memories: [], facts: [ownFact], openThreads: [] };
+  const direct = await renderTurn({
+    text: "Ты передумала насчет удаленной работы?",
+    turnId: "mind_case_direct",
+    memoryContext,
+  });
+  assert.equal(direct.nlu.intent, "ask_character_opinion");
+  assert.equal(direct.thought.topicKey, characterViewTopicKey("удаленная работа"));
+  assert.equal(direct.thought.position, "negative");
+  assert.equal(direct.thought.changedFrom, undefined, "asking whether she changed her mind must not itself change it");
+  assert.match(direct.rendered.text, /(?:не за|позици|склонялась)/iu);
+
+  const history = [
+    { id: "mind_u1", role: "user", text: "Мне нравится удаленная работа, потому что свободы больше", timestamp: NOW - 2000 },
+    { id: "mind_c1", role: "character", text: "Понимаю, почему тебе это важно.", timestamp: NOW - 1000 },
+  ];
+  const reciprocal = await renderTurn({ text: "А ты?", turnId: "mind_reciprocal", history, memoryContext });
+  assert.equal(reciprocal.thought.position, "negative");
+  assert.equal(reciprocal.thought.memoryEcho !== undefined, true);
+  assert.match(reciprocal.rendered.text, /(?:не за|не поменялась|склонялась)/iu);
+});
+
+await test("character opinion changes gradually instead of flipping on one counterargument", async () => {
+  const opinion = characterOpinionFact("удаленная работа", "positive", "autonomy");
+  const history = [
+    { id: "arg_u1", role: "user", text: "Мне нравится удаленная работа, потому что свободы больше", timestamp: NOW - 2000 },
+    { id: "arg_c1", role: "character", text: "Я тут скорее за.", timestamp: NOW - 1000 },
+  ];
+  const first = await renderTurn({
+    text: "Но разве офис не лучше из-за общения?",
+    turnId: "mind_argument_first",
+    history,
+    memoryContext: { memories: [], facts: [opinion], openThreads: [] },
+  });
+  assert.equal(first.thought.position, "positive");
+  assert.equal(first.thought.changedFrom, undefined);
+  assert.ok(first.thought.reconsideration, "first real counterargument should create doubt");
+
+  const second = await renderTurn({
+    text: "Но ведь живое общение в офисе реально важно, разве нет?",
+    turnId: "mind_argument_second",
+    history,
+    memoryContext: {
+      memories: [],
+      facts: [opinion, characterTensionFact("удаленная работа", "negative", 1)],
+      openThreads: [],
+    },
+  });
+  assert.equal(second.thought.changedFrom, "positive");
+  assert.equal(second.thought.position, "mixed");
+  assert.match(second.rendered.text, /(?:сдвинулась|иначе|передумала|смешанное)/iu);
+});
+
+await test("character can explain the reason behind a remembered opinion on a short why follow-up", async () => {
+  const opinion = characterOpinionFact("удаленной работе", "positive", "autonomy");
+  const history = [
+    { id: "why_u1", role: "user", text: "Как ты относишься к удаленной работе?", timestamp: NOW - 2000 },
+    { id: "why_c1", role: "character", text: "Я тут скорее за.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const result = await renderTurn({
+    text: "Почему?",
+    turnId: "mind_reason_followup",
+    history,
+    memoryContext: { memories: [], facts: [opinion], openThreads: [] },
+  });
+  assert.equal(result.nlu.intent, "ask_why");
+  assert.equal(result.thought.position, "positive");
+  assert.ok(result.thought.memoryEcho);
+  assert.match(result.rendered.text, /(?:свобод|выбор|позици|мнение)/iu);
+  assert.doesNotMatch(result.rendered.text, /из твоей предыдущей фразы|оттолкнулась от твоей/u);
+});
+
+await test("character certainty follow-up reflects confidence instead of rerolling an opinion", async () => {
+  const opinion = characterOpinionFact("удаленной работе", "positive", "autonomy");
+  const history = [
+    { id: "sure_u1", role: "user", text: "Как ты относишься к удаленной работе?", timestamp: NOW - 2000 },
+    { id: "sure_c1", role: "character", text: "Я тут скорее за.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const result = await renderTurn({
+    text: "А ты уверена?",
+    turnId: "mind_certainty_followup",
+    history,
+    memoryContext: { memories: [], facts: [opinion], openThreads: [] },
+  });
+  assert.equal(result.nlu.intent, "ask_character_opinion");
+  assert.equal(result.nlu.semantic.asksCharacterView, true);
+  assert.equal(result.thought.position, "positive");
+  assert.match(result.rendered.text, /(?:уверен|процент|окончатель|передум|позици|мнение)/iu);
+});
+
+await test("character self-memory never leaks into user-memory slots", async () => {
+  const ownFact = characterOpinionFact("риске", "cautious", "autonomy");
+  const result = await renderTurn({
+    text: "Что ты помнишь обо мне?",
+    turnId: "mind_memory_separation",
+    memoryContext: { memories: [], facts: [ownFact], openThreads: [] },
+  });
+  assert.doesNotMatch(result.rendered.text, /риске|Yuzuki|осторож/iu);
+});
+
+
+await test("relationship question with punctuation does not collapse into generic character state", async () => {
+  const relationshipQuestion = await renderTurn({ text: "Как ты ко мне относишься?", turnId: "context_relationship_exact" });
+  assert.equal(relationshipQuestion.nlu.intent, "ask_relationship");
+  assert.match(relationshipQuestion.rendered.text, /приятел|отнош|тепло|интерес|близ|романтич/iu);
+  assert.doesNotMatch(relationshipQuestion.rendered.text, /я спокойная|всё нормально|настроение/iu);
+
+  const stateQuestion = await renderTurn({ text: "Как ты?", turnId: "context_state_short" });
+  assert.equal(stateQuestion.nlu.intent, "ask_character_state");
+});
+
+await test("old vague open-loop phrase is repaired by a short 'Какой?' follow-up", async () => {
+  const history = [
+    { role: "user", text: "Мне нравится эта идея", timestamp: NOW - 3000 },
+    { role: "character", text: "Мм, поняла тебя. Хм. Тут у меня сразу появился вопрос.", timestamp: NOW - 1000, dialogueActs: ["ACKNOWLEDGE", "CURIOSITY"] },
+  ];
+  const result = await renderTurn({ text: "Какой?", turnId: "context_open_loop_old", history });
+  assert.equal(result.nlu.intent, "ask_followup");
+  assert.ok(!result.plan.dialogueActs.includes("CLARIFY"));
+  assert.match(result.rendered.text, /идея|нравится|что.*главн|что именно/iu);
+  assert.doesNotMatch(result.rendered.text, /про что именно ты сейчас|потеряла|перефраз|скажи чуть/iu);
+});
+
+await test("reciprocal desire follow-up keeps the directed relationship context", async () => {
+  const history = [
+    { role: "user", text: "Я тебя хочу", timestamp: NOW - 3000 },
+    { role: "character", text: "Угу, поняла. О, а вот за это я хочу зацепиться.", timestamp: NOW - 1000, dialogueActs: ["ACKNOWLEDGE", "CURIOSITY"] },
+  ];
+  const result = await renderTurn({ text: "Тоже хочешь?", turnId: "context_reciprocal_desire_old", history });
+  assert.equal(result.nlu.intent, "ask_relationship");
+  assert.ok(!result.plan.dialogueActs.includes("CLARIFY"));
+  assert.match(result.rendered.text, /тянет|чувств|хочу|тепл|интерес|одно и то же|зеркал/iu);
+  assert.doesNotMatch(result.rendered.text, /скажи иначе|угадывать|потеряла|про что именно/iu);
+});
+
+await test("character remembers her own immediate activity when user asks for details", async () => {
+  const readingHistory = [
+    { role: "user", text: "Что делаешь?", timestamp: NOW - 3000 },
+    { role: "character", text: "Пока читаю.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const reading = await renderTurn({ text: "Что читаешь?", turnId: "context_own_reading_old", history: readingHistory });
+  assert.equal(reading.nlu.intent, "ask_character_activity");
+  assert.match(reading.rendered.text, /читаю|стать|эссе|текст|рассказ/iu);
+  assert.doesNotMatch(reading.rendered.text, /потеряла|перефраз|уже не читаю|скажи.*по-другому/iu);
+
+  const musicHistory = [
+    { role: "user", text: "Что делаешь?", timestamp: NOW - 3000 },
+    { role: "character", text: "Пока слушаю музыку.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const music = await renderTurn({ text: "Что слушаешь?", turnId: "context_own_music", history: musicHistory });
+  assert.equal(music.nlu.intent, "ask_character_activity");
+  assert.match(music.rendered.text, /музык|плейлист|трек|слушаю/iu);
+});
+
+await test("single-word contextual questions stay attached to Yuzuki's previous thought", async () => {
+  const cases = [
+    ["Где?", "Сегодня было странно.", "Я бы на твоём месте запомнила это место.", /мест|не называл/iu],
+    ["Когда?", "Хочу сделать это.", "Тогда важен момент.", /момент|время|дат/iu],
+    ["С кем?", "Думаю сходить куда-нибудь.", "Компания тут тоже многое меняет.", /человек|компан|кто/iu],
+    ["Как?", "Я хочу всё исправить.", "Это можно попробовать сделать аккуратно.", /шаг|аккурат|разлож/iu],
+  ];
+  for (let index = 0; index < cases.length; index += 1) {
+    const [text, userText, characterText, expected] = cases[index];
+    const history = [
+      { role: "user", text: userText, timestamp: NOW - 3000 },
+      { role: "character", text: characterText, timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+    ];
+    const result = await renderTurn({ text, turnId: `context_elliptical_${index}`, history });
+    assert.ok(["ask_followup", "ask_why"].includes(result.nlu.intent));
+    assert.ok(!result.plan.dialogueActs.includes("CLARIFY"));
+    assert.match(result.rendered.text, expected);
+    assert.doesNotMatch(result.rendered.text, /про что именно ты сейчас|потеряла|перефраз/iu);
+  }
+});
+
+await test("short 'Почему?' explains the actual reasoning instead of talking about context mechanics", async () => {
+  const history = [
+    { role: "user", text: "Мне кажется, это плохая идея", timestamp: NOW - 3000 },
+    { role: "character", text: "Я бы с этим не спешила.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  const result = await renderTurn({ text: "Почему?", turnId: "context_grounded_why", history });
+  assert.equal(result.nlu.intent, "ask_why");
+  assert.match(result.rendered.text, /сомнен|не уверен|напряга|решени/iu);
+  assert.doesNotMatch(result.rendered.text, /не из воздуха|связала твою предыдущую фразу|контекст разговора/iu);
+});
+
+await test("'А дальше?' after a listening cue asks for the missing event, not a rephrase", async () => {
+  const history = [
+    { role: "user", text: "Начальник вызвал меня поговорить", timestamp: NOW - 3000 },
+    { role: "character", text: "Я слушаю.", timestamp: NOW - 1000, dialogueActs: ["ACKNOWLEDGE"] },
+  ];
+  const result = await renderTurn({ text: "А дальше?", turnId: "context_and_then", history });
+  assert.equal(result.nlu.intent, "ask_followup");
+  assert.ok(!result.plan.dialogueActs.includes("CLARIFY"));
+  assert.doesNotMatch(result.rendered.text, /скажи чуть конкретнее|перефраз|потеряла/iu);
+});
+
+await test("causal reasoning extracts explicit cause, consequence and condition without inventing adjacency", () => {
+  const because = extractCausalRelations("Я хочу уйти с работы, потому что начальник постоянно срывается на меня");
+  assert.equal(because.length, 1);
+  assert.equal(because[0].cause, "начальник постоянно срывается на меня");
+  assert.equal(because[0].effect, "я хочу уйти с работы");
+  assert.equal(because[0].kind, "cause");
+
+  const therefore = extractCausalRelations("Начальник постоянно срывается на меня, поэтому я хочу уйти с работы");
+  assert.equal(therefore[0].kind, "consequence");
+  assert.equal(therefore[0].cause, "начальник постоянно срывается на меня");
+
+  const condition = extractCausalRelations("Если он опять сорвется, то я уволюсь");
+  assert.equal(condition[0].kind, "condition");
+  assert.equal(condition[0].effect, "я уволюсь");
+
+  const unrelated = buildCausalRelations([
+    { id: "a", role: "user", text: "Сегодня был дождь", timestamp: NOW - 2000 },
+    { id: "b", role: "user", text: "Потом я заказал кофе", timestamp: NOW - 1000 },
+  ]);
+  assert.equal(unrelated.length, 0, "mere sequence must not become fake causality");
+});
+
+await test("causal reasoning resolves a reason split across two user turns", () => {
+  const relations = buildCausalRelations([
+    { id: "a", role: "user", text: "Я взял выходной", timestamp: NOW - 2000 },
+    { id: "b", role: "character", text: "Поняла.", timestamp: NOW - 1500 },
+    { id: "c", role: "user", text: "Потому что совсем не спал", timestamp: NOW - 1000 },
+  ]);
+  assert.ok(relations.some((relation) => relation.cause.includes("совсем не спал") && relation.effect.includes("я взял выходной")));
+});
+
+await test("causal reasoning keeps explicit multi-hop chains instead of flattening them", () => {
+  const relations = extractCausalRelations(
+    "Я не выспался, поэтому опоздал, из-за этого начальник разозлился, так что я думаю уйти",
+  );
+  assert.ok(relations.some((relation) => relation.cause.includes("я не выспался") && relation.effect.includes("опоздал")));
+  assert.ok(relations.some((relation) => relation.cause.includes("опоздал") && relation.effect.includes("начальник разозлился")));
+  assert.ok(relations.some((relation) => relation.cause.includes("начальник разозлился") && relation.effect.includes("я думаю уйти")));
+});
+
+await test("why-question can reconstruct more than one causal hop", async () => {
+  const history = [
+    {
+      id: "chain-user",
+      role: "user",
+      text: "Я не выспался, поэтому опоздал, из-за этого начальник разозлился, так что я думаю уйти",
+      timestamp: NOW - 2000,
+    },
+    { id: "chain-character", role: "character", text: "Понимаю, почему это накопилось.", timestamp: NOW - 1000 },
+  ];
+  const relations = buildCausalRelations(history);
+  const result = await renderTurn({
+    text: "Почему я думаю уйти?",
+    history,
+    causalRelations: relations,
+  });
+  assert.match(result.rendered.text, /не выспал|опоздал/u);
+  assert.match(result.rendered.text, /начальник|разозлил/u);
+  assert.match(result.rendered.text, /уйти/u);
+});
+
+await test("retrospective pass can recover an old causal thread beyond the 24-line hot context", () => {
+  const history = [
+    { id: "old-user", role: "user", text: "Я хотел уйти с работы, потому что начальник постоянно срывался на меня", timestamp: NOW - 100_000 },
+    { id: "old-character", role: "character", text: "Похоже, тебя это реально выматывало.", timestamp: NOW - 99_000 },
+  ];
+  for (let index = 0; index < 36; index += 1) history.push({
+    id: `filler-${index}`,
+    role: index % 2 ? "character" : "user",
+    text: index % 2 ? "Поняла." : "Сегодня просто обычный день.",
+    timestamp: NOW - 90_000 + index * 1000,
+  });
+  const text = "Почему я тогда хотел уйти с работы?";
+  const initial = analyzeLocalNLU(text);
+  const recentFrame = buildDialogueFrame(history.slice(-24), initial);
+  const contextual = resolveContextualNLU(initial, recentFrame, text);
+  assert.equal(shouldUseRetrospectivePass(contextual, recentFrame, text), true);
+  const retrospective = buildRetrospectiveContext(history, contextual, recentFrame, text);
+  assert.equal(retrospective.recovered, true);
+  assert.equal(retrospective.resolution, "causal");
+  assert.equal(retrospective.inferredTopic, "work");
+  assert.ok(retrospective.scannedLines > 24);
+  assert.ok(retrospective.causalRelations.some((relation) => relation.cause.includes("начальник") && relation.effect.includes("уйти с работы")));
+  const recovered = applyRetrospectiveNLU(contextual, retrospective, text);
+  assert.equal(recovered.intent, "ask_why");
+  assert.equal(recovered.topic, "work");
+  assert.ok(recovered.confidence > contextual.confidence);
+});
+
+await test("causal answer uses recovered history instead of generic context talk", async () => {
+  const history = [
+    { id: "cause", role: "user", text: "Я хотел уйти с работы, потому что начальник постоянно срывался на меня", timestamp: NOW - 5000 },
+    { id: "reaction", role: "character", text: "Похоже, тебя это реально выматывало.", timestamp: NOW - 4000 },
+  ];
+  const relations = buildCausalRelations(history, "Почему?");
+  const result = await renderTurn({ text: "Почему?", history, causalRelations: relations });
+  assert.match(result.rendered.text, /начальник|срывал/u);
+  assert.doesNotMatch(result.rendered.text, /про что именно|контекст разговора|связь получилась натянутой/u);
 });
 
 await test("anti-repetition varies twenty identical tiredness turns", async () => {

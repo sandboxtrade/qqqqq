@@ -3,8 +3,15 @@ import type {
   CharacterPreferenceRule,
 } from "../character/character";
 import type { EmotionalState } from "../emotions/emotions";
-import type { MemoryContext } from "../memory/model";
-import type { RelationshipState } from "../relationship/relationship";
+import {
+  characterViewTopicKey,
+  decodeCharacterViewValue,
+  type CharacterViewPosition,
+  type CharacterViewReason,
+  type KnowledgeFact,
+  type MemoryContext,
+} from "../memory/model";
+import { deriveRelationalAffect, type RelationshipState } from "../relationship/relationship";
 import type { WorldState } from "../world/world";
 import type {
   CharacterDecision,
@@ -15,6 +22,7 @@ import type {
   PerceptionIntent,
   PerceptionTone,
   ResponsePlan,
+  ThoughtStimulus,
 } from "./cognition-types";
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
@@ -339,11 +347,170 @@ export function interpret(
   };
 }
 
+const RECONSIDER_VIEW_RE =
+  /(?:может\s+ты\s+(?:была\s+)?не\s+права|а\s+если\s+посмотреть\s+иначе|с\s+другой\s+стороны|но\s+ведь|разве(?:\s|$))/iu;
+
+
+function thoughtTokens(value: string) {
+  return new Set(
+    value
+      .toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е")
+      .split(/[^\p{L}\p{N}]+/gu)
+      .filter((token) => token.length > 2),
+  );
+}
+
+function thoughtOverlap(left: string, right: string) {
+  const a = thoughtTokens(left);
+  const b = thoughtTokens(right);
+  if (!a.size || !b.size) return 0;
+  let overlap = 0;
+  for (const token of a) if (b.has(token)) overlap += 1;
+  return overlap / Math.max(1, Math.min(a.size, b.size));
+}
+
+function stableThoughtHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function cleanThoughtTopic(value?: string) {
+  const clean = (value ?? "")
+    .replace(/^[«"']+|[»"']+$/gu, "")
+    .replace(/[?.!…]+$/gu, "")
+    .replace(/^(?:что\s+)/iu, "")
+    .split(/\s+(?:лучше|хуже|полезнее|вреднее|правильнее|неправильнее)\s+/iu, 1)[0]
+    .replace(/\s+(?:потому\s+что|так\s+как|из-за\s+того\s+что).+$/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!clean || clean.length < 2) return undefined;
+  if (["conversation", "social", "plans", "character", "unknown"].includes(clean.toLowerCase()))
+    return undefined;
+  return clean.slice(0, 110);
+}
+
+function relevantCharacterFact(
+  memories: MemoryContext,
+  topic: string,
+  topicKey: string,
+  prefix = "character.opinion.",
+): KnowledgeFact | undefined {
+  const exact = memories.facts.find(
+    (fact) => fact.status === "active" && fact.subject === "character" && fact.key === `${prefix}${topicKey}`,
+  );
+  if (exact) return exact;
+  const ranked = memories.facts
+    .filter(
+      (fact) => fact.status === "active" && fact.subject === "character" && fact.key.startsWith(prefix),
+    )
+    .map((fact) => {
+      const decoded = decodeCharacterViewValue(fact.value);
+      const candidateTopic = decoded?.topic ?? fact.statement;
+      return { fact, score: thoughtOverlap(topic, candidateTopic) };
+    })
+    .filter((entry) => entry.score >= 0.34)
+    .sort((a, b) => b.score - a.score || b.fact.lastConfirmedAt - a.fact.lastConfirmedAt);
+  return ranked[0]?.fact;
+}
+
+function reasonForTopic(topic: string, character: CharacterCore): CharacterViewReason {
+  const normalized = norm(topic);
+  if (/(?:чест|правд|лож|вран|обман)/iu.test(normalized)) return "honesty";
+  if (/(?:уваж|опазд|границ|личн.{0,12}простран|контрол|ревност)/iu.test(normalized)) return "respect";
+  if (/(?:давлен|застав|свобод|выбор|самостоятель|риск|работ|карьер)/iu.test(normalized)) return "autonomy";
+  if (/(?:взаим|дружб|отношен|партнер|партнёр|общени)/iu.test(normalized)) return "reciprocity";
+  if (/(?:уют|тих|шум|кафе|клуб|вечерин|место|дом)/iu.test(normalized)) return "comfort";
+  if (/(?:фильм|кино|сериал|книг|истори|персонаж|иде[яи])/iu.test(normalized)) return "depth";
+  const reasons: CharacterViewReason[] = character.immutableTraits.curiosity > 0.72
+    ? ["curiosity", "consistency", "autonomy", "depth", "experience"]
+    : ["consistency", "autonomy", "experience", "curiosity"];
+  return reasons[stableThoughtHash(normalized) % reasons.length] ?? "experience";
+}
+
+function initialPositionForTopic(
+  topic: string,
+  character: CharacterCore,
+): { position: CharacterViewPosition; confidence: number; reason: CharacterViewReason } {
+  const normalized = norm(topic);
+  const reason = reasonForTopic(topic, character);
+  if (/(?:лож|вран|обман|манипуляц|давлен|принужд|тотальн.{0,10}контрол|неуважен)/iu.test(normalized))
+    return { position: "negative", confidence: 0.82, reason };
+  if (/(?:честност|взаимност|уважен|личн.{0,12}простран|последовательност)/iu.test(normalized))
+    return { position: "positive", confidence: 0.82, reason };
+  if (/(?:клуб|тусов|вечерин|очень\s+шум)/iu.test(normalized))
+    return { position: "negative", confidence: 0.7, reason: "comfort" };
+  if (/(?:мор|океан|берег|у\s+воды|кафе|прогул|тих|уют)/iu.test(normalized))
+    return { position: "positive", confidence: 0.72, reason: "comfort" };
+  if (/(?:опазд)/iu.test(normalized))
+    return { position: "negative", confidence: 0.74, reason: "respect" };
+  if (/(?:ревност|ревнов)/iu.test(normalized))
+    return { position: "mixed", confidence: 0.7, reason: "respect" };
+
+  const preference = preferenceRuleFor(character, normalized);
+  if (preference) {
+    const position: CharacterViewPosition = preference.id === "media_taste" ? "curious" : "positive";
+    return { position, confidence: clamp(0.62 + preference.strength * 0.18), reason };
+  }
+
+  // Unknown topics get a stable mild leaning, not a random extreme opinion.
+  // The value is deterministic for this character/topic and becomes memory-backed
+  // after consolidation, so repeated questions do not reroll her personality.
+  const pool: CharacterViewPosition[] = [
+    "curious", "mixed", "cautious", "curious", "mixed",
+  ];
+  const position = pool[stableThoughtHash(`${character.id}|${normalized}`) % pool.length] ?? "mixed";
+  return {
+    position,
+    confidence: 0.54 + character.slowTraits.confidence * 0.08,
+    reason,
+  };
+}
+
+function challengeDirection(stimulus: ThoughtStimulus): "positive" | "negative" | undefined {
+  if (["like", "want", "plan"].includes(stimulus.semanticStance ?? "")) return "positive";
+  if (["dislike", "avoid"].includes(stimulus.semanticStance ?? "")) return "negative";
+  if (["positive", "very_positive"].includes(stimulus.sentiment ?? "")) return "positive";
+  if (["negative", "very_negative"].includes(stimulus.sentiment ?? "")) return "negative";
+  return undefined;
+}
+
+function positionPolarity(position: CharacterViewPosition): -1 | 0 | 1 {
+  if (position === "positive" || position === "curious") return 1;
+  if (position === "negative" || position === "cautious") return -1;
+  return 0;
+}
+
+function shiftedPosition(
+  previous: CharacterViewPosition,
+  direction: "positive" | "negative",
+): CharacterViewPosition {
+  if (direction === "negative") {
+    if (previous === "positive") return "mixed";
+    if (previous === "curious") return "cautious";
+    if (previous === "mixed") return "cautious";
+    if (previous === "cautious") return "negative";
+    return previous;
+  }
+  if (previous === "negative") return "cautious";
+  if (previous === "cautious") return "mixed";
+  if (previous === "mixed") return "curious";
+  if (previous === "curious") return "positive";
+  return previous;
+}
+
 export function buildThought(
+  character: CharacterCore,
   perception: Perception,
   interpretation: CharacterInterpretation,
   emotions: EmotionalState,
   relationship: RelationshipState,
+  memories: MemoryContext,
+  stimulus: ThoughtStimulus,
 ): InternalThought {
   const irritated = emotions.irritation > 0.45;
   const warm = emotions.affection > 0.58 && relationship.closeness > 0.45;
@@ -355,34 +522,210 @@ export function buildThought(
         ? "comfortable"
         : "curious";
 
+  const topic = cleanThoughtTopic(stimulus.focus) ?? cleanThoughtTopic(stimulus.topic) ??
+    cleanThoughtTopic(perception.topics[0]);
+  const topicKey = topic ? characterViewTopicKey(topic) : undefined;
+  const priorFact = topic && topicKey ? relevantCharacterFact(memories, topic, topicKey) : undefined;
+  const priorView = priorFact ? decodeCharacterViewValue(priorFact.value) : null;
+  const displayTopic = priorView?.topic ?? topic;
+  const tensionFact = topic && topicKey
+    ? relevantCharacterFact(memories, topic, topicKey, "character.tension.")
+    : undefined;
+  const explicitReconsideration = RECONSIDER_VIEW_RE.test(stimulus.userText);
+  let direction = challengeDirection(stimulus);
+  const priorPolarity = priorView ? positionPolarity(priorView.position) : 0;
+  if (!direction && priorView && explicitReconsideration && priorPolarity !== 0)
+    direction = priorPolarity > 0 ? "negative" : "positive";
+  const directionPolarity = direction === "positive" ? 1 : direction === "negative" ? -1 : 0;
+  const reasonedChallenge = Boolean(
+    priorView && direction && directionPolarity !== 0 &&
+    (priorPolarity === 0 || directionPolarity !== priorPolarity) &&
+    (stimulus.reason || stimulus.meaningfulTokens && stimulus.meaningfulTokens >= 7),
+  );
+  const shouldReconsider = Boolean(priorView && (explicitReconsideration || reasonedChallenge));
+
+  let position: CharacterViewPosition | undefined;
+  let positionReason: CharacterViewReason | undefined;
+  let positionConfidence = 0;
+  let persistence = 0.18;
+  let reconsideration: string | undefined;
+  let changedFrom: CharacterViewPosition | undefined;
+  let challenge: "positive" | "negative" | undefined;
+
+  if (priorView) {
+    position = priorView.position;
+    positionReason = priorView.reason;
+    positionConfidence = priorFact?.confidence ?? 0.68;
+    persistence = stimulus.asksCharacterView ? 0.9 : 0.68;
+
+    if (shouldReconsider) {
+      challenge = direction;
+      const tensionCount = tensionFact?.value.startsWith("integrated|") ? 0 : (tensionFact?.evidenceCount ?? 0);
+      const enoughPressure = tensionCount >= 1;
+      if (direction && enoughPressure) {
+        const shifted = shiftedPosition(position, direction);
+        if (shifted !== position) {
+          changedFrom = position;
+          position = shifted;
+          positionConfidence = clamp(Math.max(0.52, positionConfidence - 0.08));
+          reconsideration = "A prior opinion is being revised gradually after repeated or explicit counter-evidence.";
+          persistence = 0.94;
+        }
+      }
+      if (!changedFrom) {
+        positionConfidence = clamp(Math.max(0.48, positionConfidence - 0.04));
+        reconsideration = "There is real counter-evidence, but one challenge is not enough to flip a settled view.";
+        persistence = Math.max(persistence, 0.82);
+      }
+    }
+  } else if (topic) {
+    const opinionPrompt = stimulus.asksCharacterView || OPINION_PROMPT_RE.test(stimulus.userText) ||
+      SOFT_AGREEMENT_RE.test(stimulus.userText);
+    const reflectiveStatement = ["believe", "like", "dislike"].includes(stimulus.semanticStance ?? "") &&
+      (stimulus.meaningfulTokens ?? 0) >= 5;
+    if (opinionPrompt || reflectiveStatement) {
+      const formed = initialPositionForTopic(topic, character);
+      position = formed.position;
+      positionReason = formed.reason;
+      positionConfidence = formed.confidence;
+      persistence = opinionPrompt ? 0.86 : 0.62;
+    }
+  }
+
+  const memoryEcho = priorView && displayTopic
+    ? `She already had a ${priorView.position} view on ${displayTopic}; this turn should start from that history rather than rerolling it.`
+    : undefined;
+  const openQuestion = position === "mixed" || position === "curious" || reconsideration
+    ? `Keep ${displayTopic ?? "the subject"} open to later experience instead of treating the current stance as permanent.`
+    : undefined;
+
+  const currentRelational = deriveRelationalAffect(emotions, relationship, stimulus.userText);
+  const previousRelational = stimulus.previousUserText
+    ? deriveRelationalAffect(emotions, relationship, stimulus.previousUserText)
+    : undefined;
+  const relationshipFollowUp = /(?:ревнуешь|ревнуешь\s+меня|тебя\s+это\s+задело|ты\s+обиделась|ты\s+расстроилась|и\s+что\s+ты\s+чувствуешь|а\s+ты\s+что)/iu.test(stimulus.userText) ||
+    (stimulus.meaningfulTokens ?? 99) <= 4;
+  const relational = currentRelational.threat.kind === "none" && relationshipFollowUp &&
+      previousRelational && previousRelational.threat.kind !== "none"
+    ? previousRelational
+    : currentRelational;
+  const relationalFeeling = relational.jealousy >= 0.38
+    ? "jealous and a little vulnerable, without wanting to become controlling"
+    : relational.hurt >= 0.48
+      ? "hurt, with some emotional distance still present"
+      : relational.resentment >= 0.5
+        ? "still carrying some resentment instead of being instantly fine"
+        : relational.love >= 0.72
+          ? "deeply attached and loving"
+          : relational.tenderness >= 0.64
+            ? "tender and emotionally close"
+            : relational.insecurity >= 0.5
+              ? "a little insecure about the bond"
+              : undefined;
+  const relationalDesire = relational.jealousy >= 0.38
+    ? "Be honest that the situation stings, but do not turn jealousy into ownership, demands or surveillance."
+    : relational.hurt >= 0.48
+      ? "Do not pretend the hurt vanished; keep enough distance for the feeling to settle while leaving room for repair."
+      : relational.love >= 0.72
+        ? "Let attachment show through care, vulnerability and consistency rather than repeating declarations mechanically."
+        : relational.tenderness >= 0.64
+          ? "Stay close and warm without forcing the relationship into a stronger label."
+          : undefined;
+  const relationalConcern = relational.jealousy >= 0.38
+    ? "Jealousy is her feeling, not permission to control the user's other relationships. Express it without entitlement."
+    : relational.hurt >= 0.48
+      ? "A meaningful hurt should leave an aftertaste; one pleasant sentence must not erase it instantly."
+      : undefined;
+
+  const intimacyMind = stimulus.intimacyMind?.active ? stimulus.intimacyMind : undefined;
+  const intimacyFeeling = intimacyMind
+    ? intimacyMind.conflicted
+      ? "drawn in but cautious"
+      : intimacyMind.tenderness >= 0.68
+        ? "tender and close"
+        : intimacyMind.desire >= 0.62
+          ? "visibly attracted"
+          : "aware of the intimacy between them"
+    : undefined;
+  const intimacyDesireText = intimacyMind
+    ? intimacyMind.wantsMore
+      ? `She wants more closeness, but at a ${intimacyMind.preferredPace} pace and only while reciprocity stays clear.`
+      : intimacyMind.wantsCloseness
+        ? "She wants closeness and warmth more than escalation."
+        : "She notices the intimate charge without needing to push it further."
+    : undefined;
+  const intimacyConcern = intimacyMind?.caution && intimacyMind.caution >= 0.42
+    ? "Do not let desire outrun comfort, reciprocity, privacy or a current-turn boundary."
+    : undefined;
+  const causalReflection = stimulus.causalCause && stimulus.causalEffect && (stimulus.causalConfidence ?? 0) >= 0.68
+    ? ` The grounded relation is: ${stimulus.causalCause} -> ${stimulus.causalEffect}.`
+    : "";
+  const retrospectiveReflection = stimulus.retrospectiveRecovered && stimulus.retrospectiveEcho
+    ? ` Older dialogue was re-read before answering: ${stimulus.retrospectiveEcho}`
+    : "";
+
   return {
-    observation: `The message reads as ${perception.probableIntent} with a ${perception.tone} tone.`,
-    interpretation: interpretation.subjectiveReading,
-    feeling,
-    desire:
+    observation: `The message reads as ${perception.probableIntent} with a ${perception.tone} tone.${causalReflection}`,
+    interpretation: `${interpretation.subjectiveReading}${retrospectiveReflection}`,
+    feeling: intimacyFeeling ?? relationalFeeling ?? feeling,
+    desire: intimacyDesireText ?? relationalDesire ?? (
       interpretation.likelyUserNeed === "connection"
         ? "Respond personally instead of sounding transactional."
         : interpretation.likelyUserNeed === "space"
           ? "Respect the request for distance without turning it into drama."
           : relationship.closeness > 0.5
             ? "Keep the exchange personal and consistent with their shared history."
-            : "Learn more without becoming intrusive.",
-    concern:
+            : "Learn more without becoming intrusive."
+    ),
+    concern: intimacyConcern ?? relationalConcern ?? (
       interpretation.uncertainty > 0.55
         ? "Do not present an uncertain interpretation as fact."
         : irritated
           ? "Do not become artificially agreeable just to reduce tension."
-          : undefined,
+          : undefined
+    ),
     stance:
       interpretation.perceivedPressure > 0.62
         ? "Preserve autonomy and answer from her own perspective."
-        : "React naturally without forcing a stance.",
+        : priorView
+          ? "Keep continuity with her existing view unless there is enough reason to revise it."
+          : "React naturally without forcing a stance.",
     impulse:
       perception.tone === "playful"
         ? "Play along a little."
         : perception.vulnerability > 0.55
           ? "Slow down and pay attention."
-          : "Stay engaged.",
+          : reconsideration
+            ? "Acknowledge the uncertainty instead of defending the old view automatically."
+            : "Stay engaged.",
+    topic: displayTopic,
+    topicKey,
+    position,
+    positionReason,
+    positionConfidence,
+    persistence,
+    memoryEcho,
+    reconsideration,
+    challengeDirection: challenge,
+    changedFrom,
+    openQuestion,
+    intimacyReflection: intimacyMind?.reflection,
+    intimacyDesire: intimacyMind?.desire,
+    intimacyCaution: intimacyMind?.caution,
+    intimacyConflict: intimacyMind?.conflicted,
+    causalCause: stimulus.causalCause,
+    causalEffect: stimulus.causalEffect,
+    causalRelation: stimulus.causalRelation,
+    causalConfidence: stimulus.causalConfidence,
+    retrospectiveEcho: stimulus.retrospectiveEcho,
+    retrospectiveRecovered: stimulus.retrospectiveRecovered,
+    relationalEmotion: relational.dominant,
+    relationalIntensity: relational.intensity,
+    relationalReflection: relationalFeeling,
+    relationalThreat: relational.threat.kind,
+    jealousy: relational.jealousy,
+    love: relational.love,
+    hurt: relational.hurt,
   };
 }
 
@@ -654,6 +997,7 @@ export function decide(
   emotions: EmotionalState,
   relationship: RelationshipState,
   world?: WorldState,
+  thought?: InternalThought,
 ): CharacterDecision {
   const normalized = norm(perception.literalMeaning);
   const independence = character.immutableTraits.independence ?? 0.5;
@@ -853,6 +1197,39 @@ export function decide(
   }
 
   if (
+    thought?.position &&
+    content.mode === "personal_stance" &&
+    content.stance === "uncertain"
+  ) {
+    const negative = thought.position === "negative" || thought.position === "cautious";
+    const positive = thought.position === "positive" || thought.position === "curious";
+    const rememberedContent: DecisionContent = {
+      ...content,
+      stance: thought.position === "mixed" ? "mixed" : negative ? "disagree" : positive ? "agree" : "uncertain",
+      summary: thought.memoryEcho
+        ? "Ответить из уже сформированного собственного отношения и сохранить continuity; не переизобретать мнение заново."
+        : "Ответить из собственной формирующейся позиции, связанной с Character Core, а не из случайной формулировки.",
+      reasons: [
+        thought.positionReason ?? "experience",
+        ...(thought.reconsideration ? [thought.reconsideration] : []),
+      ],
+      locked: true,
+      provenance: ["conversation", "character_core", "local_policy"],
+    };
+    return {
+      action: SOFT_AGREEMENT_RE.test(normalized) && negative ? "disagree" : "answer",
+      tone: thought.reconsideration ? "reflective" : "personal_direct",
+      rationale: thought.memoryEcho
+        ? "A remembered self-view exists, so the answer should continue that position unless enough counter-evidence has accumulated."
+        : "Local cognition formed a stable mild position from Character Core and current context.",
+      confidence: clamp(Math.max(0.62, thought.positionConfidence)),
+      shouldAskFollowUp: Boolean(thought.openQuestion) && curiosity > 0.66,
+      shouldReferenceMemory: Boolean(thought.memoryEcho),
+      content: rememberedContent,
+    };
+  }
+
+  if (
     interpretation.perceivedPressure > 0.72 &&
     independence > 0.68 &&
     dislikesPressure
@@ -966,7 +1343,8 @@ export function decide(
   if (
     interpretation.uncertainty > 0.62 &&
     !GREETING_RE.test(normalized) &&
-    (VAGUE_PROMPT_RE.test(normalized) || normalized.length < 8)
+    (VAGUE_PROMPT_RE.test(normalized) || normalized.length < 8) &&
+    !thought?.retrospectiveRecovered
   ) {
     return {
       action: "ask",

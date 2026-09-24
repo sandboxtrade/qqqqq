@@ -119,9 +119,10 @@ const { extractSemanticCandidates } = await import(
 const { consolidateEvents, recoverMemory } = await import(
   "../src/memory/memory-consolidation.ts"
 );
+const { decodeCharacterViewValue, characterViewTopicKey } = await import("../src/memory/model.ts");
 const { rankFacts, rankMemories } = await import("../src/memory/retrieval.ts");
 const { retrieveMemoryContext } = await import("../src/memory/retrieval.ts");
-const { refreshInitiatives } = await import("../src/initiative/initiative.ts");
+const { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } = await import("../src/initiative/initiative.ts");
 const { createInitialWorldState, simulateWorld, markUserInteraction } = await import(
   "../src/world/world.ts"
 );
@@ -134,7 +135,12 @@ const {
 const { initialEmotionalState, deriveMood, decayEmotions } = await import(
   "../src/emotions/emotions.ts"
 );
-const { initialRelationshipState, applyRelationshipDelta } = await import(
+const {
+  initialRelationshipState,
+  applyRelationshipDelta,
+  detectRelationalThreat,
+  deriveRelationalAffect,
+} = await import(
   "../src/relationship/relationship.ts"
 );
 const { inferStateEffects } = await import("../src/cognition/state-effects.ts");
@@ -164,6 +170,9 @@ const {
   createInitialIntimacyState,
   createInitialIntimacyPreferences,
   evaluateIntimacyHardGate,
+  ensureCoreIntimacyPreferences,
+  evolveIntimacyPreferences,
+  buildIntimacyMind,
   isNeutralIntimacySceneId,
   planIntimacyTurn,
   currentIntimacyState,
@@ -217,6 +226,15 @@ const replyEv = (id, text, inReplyTo, t = now) =>
     payload: { text, inReplyTo },
     importance: 0.35,
   });
+const mindReplyEv = (id, text, mindContinuity, t = now) =>
+  createEvent({
+    id,
+    type: "message",
+    source: "character",
+    timestamp: t,
+    payload: { text, mindContinuity },
+    importance: 0.35,
+  });
 const emptyMemoryContext = { memories: [], facts: [], openThreads: [] };
 function cognitionFor(text, emotion = initialEmotionalState, relationship = initialRelationshipState) {
   const perception = localPerception(text);
@@ -226,13 +244,14 @@ function cognitionFor(text, emotion = initialEmotionalState, relationship = init
     emotion,
     relationship,
   );
+  const generalWorld = { ...createInitialWorldState(now), isAwake: true, availability: "available" };
   const decision = decide(
     defaultCharacter,
     perception,
     interpretation,
     emotion,
     relationship,
-    createInitialWorldState(now),
+    generalWorld,
   );
   const plan = planResponse(
     defaultCharacter,
@@ -384,6 +403,88 @@ await test("character replies become memories; consolidation retry is idempotent
   await consolidateEvents([e], r);
   assert.equal((await r.listMemories()).length, 1);
 });
+await test("character mind continuity becomes semantic self-memory without changing persistence schema", async () => {
+  const r = new InMemoryCompanionRepository();
+  const topic = "удаленной работе";
+  const topicKey = characterViewTopicKey(topic);
+  const baseMind = {
+    topic,
+    topicKey,
+    position: "positive",
+    reason: "autonomy",
+    confidence: 0.72,
+    persistence: 0.88,
+  };
+  await consolidateEvents([
+    mindReplyEv("mind-opinion-1", "Я тут скорее за.", baseMind, now - 20_000),
+    mindReplyEv("mind-opinion-2", "Позиция у меня не поменялась.", baseMind, now - 10_000),
+  ], r);
+  const facts = await r.listKnowledgeFacts({ key: `character.opinion.${topicKey}`, statuses: ["active"], limit: 4 });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].subject, "character");
+  assert.equal(facts[0].evidenceCount, 2);
+  assert.deepEqual(decodeCharacterViewValue(facts[0].value), {
+    topic,
+    position: "positive",
+    reason: "autonomy",
+  });
+});
+
+await test("character opinion supersession preserves autobiographical episodes", async () => {
+  const r = new InMemoryCompanionRepository();
+  const topic = "риске";
+  const topicKey = characterViewTopicKey(topic);
+  await consolidateEvents([
+    mindReplyEv("mind-old-view", "Раньше я была скорее за.", {
+      topic, topicKey, position: "positive", reason: "autonomy", confidence: 0.7, persistence: 0.9,
+    }, now - 30_000),
+  ], r);
+  await consolidateEvents([
+    mindReplyEv("mind-new-view", "Сейчас я осторожнее.", {
+      topic, topicKey, position: "mixed", reason: "autonomy", confidence: 0.64, persistence: 0.94,
+      reconsideration: "Repeated counter-evidence changed the view gradually.",
+      challengeDirection: "negative",
+      changedFrom: "positive",
+    }, now - 10_000),
+  ], r);
+  const facts = await r.listKnowledgeFacts({ key: `character.opinion.${topicKey}`, limit: 10 });
+  assert.equal(facts.filter((fact) => fact.status === "active").length, 1);
+  assert.equal(decodeCharacterViewValue(facts.find((fact) => fact.status === "active").value).position, "mixed");
+  assert.ok(facts.some((fact) => fact.status === "outdated"));
+  assert.equal((await r.getMemory("memory_mind-old-view")).status, "active", "old self episode should remain part of personal history");
+});
+
+await test("formed self-view can return later as Yuzuki's own initiative", async () => {
+  const r = new InMemoryCompanionRepository();
+  const topic = "риске";
+  const topicKey = characterViewTopicKey(topic);
+  await consolidateEvents([
+    mindReplyEv("mind-initiative-view", "Я к этому отношусь осторожно.", {
+      topic, topicKey, position: "cautious", reason: "autonomy", confidence: 0.72, persistence: 0.9,
+    }, now - 5 * 3_600_000),
+  ], r);
+  const world = {
+    ...createInitialWorldState(now - 8 * 3_600_000, "Europe/Amsterdam"),
+    lastUserInteractionAt: now - 8 * 3_600_000,
+    recentEvents: [],
+    availability: "available",
+    currentActivity: "idle",
+  };
+  const initiatives = await refreshInitiatives(
+    r,
+    defaultCharacter,
+    { ...initialEmotionalState, curiosity: 0.4 },
+    { ...initialRelationshipState, closeness: 0.5, stage: "familiar" },
+    world,
+    now,
+  );
+  const mindInitiative = initiatives.find((item) => item.sourceIds.includes("fact_mind-initiative-view_character_opinion_risk"));
+  assert.ok(mindInitiative ?? initiatives.find((item) => item.dedupeKey.includes("mind:")), "stored self-view should be eligible to resurface");
+  const selected = mindInitiative ?? initiatives.find((item) => item.dedupeKey.includes("mind:"));
+  assert.equal(selected.kind, "share_thought");
+  assert.doesNotMatch(selected.topic, /A previously|character\.opinion|internal/iu);
+});
+
 await test("memory processor upgrade does not reset reinforcement metadata", async () => {
   const r = new InMemoryCompanionRepository();
   const e = ev("reinforced", "Я люблю старые фильмы.", now - 50_000);
@@ -821,6 +922,49 @@ await test("completed turn clears its pending-turn recovery marker", async () =>
   const pending = await repository.listPendingTurns();
   assert.equal(pending.some((event) => event.id === "turn1"), false);
 });
+await test("runtime rereads older conversation before clarifying a recovered causal question", async () => {
+  const previousRepository = repository;
+  const r = new InMemoryCompanionRepository();
+  repository = r;
+  const baseTime = now - 1_000_000;
+  const oldUser = ev(
+    "retro-old-user",
+    "Я хотел уйти с работы, потому что начальник постоянно срывался на меня",
+    baseTime,
+  );
+  await r.appendEvent(oldUser);
+  await r.appendEvent(replyEv(
+    "retro-old-reply",
+    "Похоже, это тебя сильно выматывало.",
+    oldUser.id,
+    baseTime + 1,
+  ));
+  for (let index = 0; index < 70; index += 1) {
+    const userId = `retro-filler-user-${index}`;
+    const at = baseTime + 10_000 + index * 2_000;
+    await r.appendEvent(ev(userId, `Сегодня был обычный день ${index}.`, at));
+    await r.appendEvent(replyEv(
+      `retro-filler-reply-${index}`,
+      `Поняла, день ${index}.`,
+      userId,
+      at + 1,
+    ));
+  }
+  const c = new AbortController();
+  const boot = await bootstrapRuntime("A", c.signal, now);
+  assert.equal(boot.recentConversation.some((line) => line.id === oldUser.id), false);
+  const result = await handleUserMessage(
+    { id: "retro-runtime-question", text: "Почему я тогда хотел уйти с работы?", timestamp: now + 20 },
+    boot.state,
+    { uid: "A", signal: c.signal, history: boot.recentConversation.slice(-24) },
+  );
+  assert.equal(result.trace?.reasoning?.retrospective, true);
+  assert.equal(result.trace?.reasoning?.recovered, true);
+  assert.ok((result.trace?.reasoning?.scannedLines ?? 0) > 80);
+  assert.match(result.reply, /начальник|срывал/u);
+  assert.doesNotMatch(result.reply, /про что именно|скажи чуть по-другому|не поняла/u);
+  repository = previousRepository;
+});
 await test("bootstrap recovers an older unanswered turn after newer completed chat", async () => {
   const previousRepository = repository;
   const r = new InMemoryCompanionRepository();
@@ -1060,7 +1204,7 @@ await test("Firestore event id collision is rejected even outside commit", async
   );
   assert.equal((await r.getEvent("collision")).payload.text, "Оригинал");
 });
-await test("Firestore rejects a detected state/world revision mismatch", async () => {
+await test("Firestore repairs a detected state/world revision mismatch on load", async () => {
   const r = new FirestoreCompanionRepository("corrupt_v1", "A");
   const state = {
     emotion: initialEmotionalState,
@@ -1076,7 +1220,11 @@ await test("Firestore rejects a detected state/world revision mismatch", async (
     0,
   );
   db.get("users/A/characters/corrupt_v1/world/current").revision = 7;
-  await assert.rejects(r.loadRuntimeState(), /state-world-conflict/);
+  const repaired = await r.loadRuntimeState();
+  assert.equal(repaired.snapshot.revision, 7);
+  assert.equal(repaired.world.revision, undefined);
+  assert.equal(db.get("users/A/characters/corrupt_v1/state/current").revision, 7);
+  assert.equal(db.get("users/A/characters/corrupt_v1/world/current").revision, 7);
 });
 await test("runtime state/world revisions stay paired", async () => {
   const r = new InMemoryCompanionRepository();
@@ -1289,6 +1437,26 @@ await test("relationship starts as familiar friendship without preloaded romance
   assert.ok((explicitFlirtEffects.emotion.romanticInterest ?? 0) > (complimentEffects.emotion.romanticInterest ?? 0));
 });
 
+
+await test("direct hurt raises sadness and relationship tension, while apology repairs gradually", () => {
+  const insultPerception = localPerception("Ты тупая");
+  const insultInterpretation = interpret(insultPerception, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
+  const insultDecision = decide(defaultCharacter, insultPerception, insultInterpretation, initialEmotionalState, initialRelationshipState, createInitialWorldState(now));
+  const hurt = inferStateEffects(insultPerception, insultDecision, "insult_character");
+  assert.ok((hurt.emotion.sadness ?? 0) > 0);
+  assert.ok((hurt.emotion.irritation ?? 0) > 0);
+  assert.ok((hurt.relationship.unresolvedTension ?? 0) > 0);
+  assert.ok((hurt.relationship.security ?? 0) < 0);
+
+  const apologyPerception = localPerception("Извини");
+  const apologyInterpretation = interpret(apologyPerception, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
+  const apologyDecision = decide(defaultCharacter, apologyPerception, apologyInterpretation, initialEmotionalState, initialRelationshipState, createInitialWorldState(now));
+  const repair = inferStateEffects(apologyPerception, apologyDecision, "apology");
+  assert.ok((repair.relationship.unresolvedTension ?? 0) < 0);
+  assert.ok((repair.relationship.security ?? 0) > 0);
+  assert.ok(Math.abs(repair.relationship.unresolvedTension ?? 0) < (hurt.relationship.unresolvedTension ?? 0));
+});
+
 await test("relationship attachment can grow and security can recover", () => {
   const warm = cognitionFor("Я люблю тебя");
   const warmEffects = inferStateEffects(warm.perception, warm.decision);
@@ -1313,6 +1481,101 @@ await test("relationship attachment can grow and security can recover", () => {
   };
   const recovered = applyRelationshipDelta(calm, {}, now);
   assert.ok(recovered.security > calm.security);
+});
+
+await test("relational feelings emerge from an earned bond instead of acting like global toggles", () => {
+  const deepEmotionBase = {
+    ...initialEmotionalState,
+    happiness: 0.72,
+    affection: 0.92,
+    romanticInterest: 0.82,
+    sadness: 0.04,
+    irritation: 0.03,
+    anxiety: 0.05,
+    updatedAt: now,
+  };
+  const deepEmotion = { ...deepEmotionBase, mood: deriveMood(deepEmotionBase) };
+  const deepRelationship = {
+    ...initialRelationshipState,
+    trust: 0.9,
+    closeness: 0.92,
+    attachment: 0.9,
+    security: 0.86,
+    respect: 0.9,
+    unresolvedTension: 0,
+    stage: "deep",
+    updatedAt: now,
+  };
+  const familiarAffect = deriveRelationalAffect(initialEmotionalState, initialRelationshipState, "Я завтра иду на свидание с другой девушкой");
+  const deepAffect = deriveRelationalAffect(deepEmotion, deepRelationship, "Я завтра иду на свидание с другой девушкой");
+  assert.equal(deepAffect.threat.kind, "romantic_other");
+  assert.ok(deepAffect.jealousy > familiarAffect.jealousy + 0.25);
+  assert.ok(deepAffect.love >= 0.7);
+  assert.ok(familiarAffect.love < 0.45);
+
+  const ordinaryFriend = deriveRelationalAffect(deepEmotion, deepRelationship, "Сегодня долго говорил с коллегой о работе");
+  assert.equal(ordinaryFriend.threat.kind, "none");
+  assert.equal(ordinaryFriend.jealousy, 0);
+});
+
+await test("relationship threat detection distinguishes jealousy from betrayal and harmless social contact", () => {
+  assert.equal(detectRelationalThreat("Я иду на свидание с другой девушкой").kind, "romantic_other");
+  assert.equal(detectRelationalThreat("Я завтра иду на свидание с Катей").kind, "romantic_other");
+  assert.equal(detectRelationalThreat("Я хочу пойти на свидание с тобой").kind, "none");
+  assert.equal(detectRelationalThreat("Она намного интереснее тебя").kind, "comparison");
+  assert.equal(detectRelationalThreat("Я тебе изменил").kind, "betrayal");
+  assert.equal(detectRelationalThreat("Сегодня встретился с коллегой и обсудил проект").kind, "none");
+});
+
+await test("hurt leaves an emotional aftertaste that fades with time instead of resetting instantly", () => {
+  const hurtRelationship = {
+    ...initialRelationshipState,
+    trust: 0.82,
+    closeness: 0.84,
+    attachment: 0.8,
+    security: 0.58,
+    unresolvedTension: 0.62,
+    stage: "deep",
+    updatedAt: now,
+  };
+  const afterSixHours = applyRelationshipDelta(hurtRelationship, {}, now + 6 * 60 * 60_000);
+  const afterTwoDays = applyRelationshipDelta(afterSixHours, {}, now + 48 * 60 * 60_000);
+  assert.ok(afterSixHours.unresolvedTension < hurtRelationship.unresolvedTension);
+  assert.ok(afterSixHours.unresolvedTension > 0.4, `too much instant forgiveness: ${afterSixHours.unresolvedTension}`);
+  assert.ok(afterTwoDays.unresolvedTension < afterSixHours.unresolvedTension);
+  assert.ok(afterTwoDays.unresolvedTension > 0, "history should fade rather than flip to an exact zero");
+});
+
+await test("jealousy can shake security without treating ordinary jealousy as betrayal", () => {
+  const emotionBase = {
+    ...initialEmotionalState,
+    affection: 0.92,
+    romanticInterest: 0.84,
+    anxiety: 0.08,
+    sadness: 0.04,
+    updatedAt: now,
+  };
+  const bondedEmotion = { ...emotionBase, mood: deriveMood(emotionBase) };
+  const bondedRelationship = {
+    ...initialRelationshipState,
+    trust: 0.9,
+    closeness: 0.9,
+    attachment: 0.88,
+    security: 0.86,
+    respect: 0.9,
+    stage: "deep",
+    updatedAt: now,
+  };
+  const date = cognitionFor("Я завтра иду на свидание с другой девушкой", bondedEmotion, bondedRelationship);
+  const dateEffects = inferStateEffects(date.perception, date.decision, "statement", bondedEmotion, bondedRelationship);
+  assert.ok((dateEffects.relationship.security ?? 0) < 0);
+  assert.ok((dateEffects.emotion.anxiety ?? 0) > 0);
+  assert.ok((dateEffects.relationship.trust ?? 0) >= 0, "jealousy alone must not punish trust");
+
+  const betrayal = cognitionFor("Я тебе изменил", bondedEmotion, bondedRelationship);
+  const betrayalEffects = inferStateEffects(betrayal.perception, betrayal.decision, "statement", bondedEmotion, bondedRelationship);
+  assert.ok((betrayalEffects.relationship.trust ?? 0) < 0);
+  assert.ok((betrayalEffects.relationship.unresolvedTension ?? 0) > (dateEffects.relationship.unresolvedTension ?? 0));
 });
 
 await test("runtime publishes only the final local reply", async () => {
@@ -1532,6 +1795,71 @@ await test("user activity can suppress a ready initiative without aborting maint
   assert.equal(await r.getEvent("proactive_initiative_suppressed"), null);
   repository = previousRepository;
 });
+
+await test("legacy internal autonomy text is never shown to the user", () => {
+  assert.equal(
+    sanitizeProactiveDialogueText("Bring up a small thought or question of her own instead of waiting to be prompted."),
+    "У меня внезапно появилась одна мысль, и я решила не ждать повода, чтобы написать тебе.",
+  );
+  assert.equal(
+    sanitizeProactiveDialogueText("Небольшой внезапный вброс из моего дня: She made satisfying progress on a personal project and felt quietly pleased with herself."),
+    "У меня сегодня неожиданно хорошо пошло одно моё дело, и я до сих пор тихо этому радуюсь.",
+  );
+});
+
+await test("autonomy waits for the user after one proactive message", async () => {
+  const previousRepository = repository;
+  const r = new InMemoryCompanionRepository();
+  repository = r;
+  const wallNow = Date.now();
+  const zones = [
+    "UTC", "Pacific/Honolulu", "America/Los_Angeles", "America/New_York",
+    "Europe/London", "Europe/Moscow", "Asia/Dubai", "Asia/Kolkata",
+    "Asia/Tokyo", "Australia/Sydney",
+  ];
+  const zone = zones.find((candidate) => resolveRoutine(wallNow, candidate).isAwake) ?? "UTC";
+  const world = { ...createInitialWorldState(wallNow, zone), lastUserInteractionAt: wallNow - 12 * 3_600_000 };
+  const state = {
+    revision: 0,
+    romance: initialRomance(wallNow),
+    emotion: { ...initialEmotionalState, curiosity: 0.8, updatedAt: wallNow },
+    relationship: { ...initialRelationshipState, closeness: 0.5, updatedAt: wallNow },
+    world,
+  };
+  await r.saveInitiative({
+    id: "initiative_first_proactive",
+    kind: "share_thought",
+    topic: "У меня есть одна мысль.",
+    reason: "internal reason",
+    priority: 1,
+    createdAt: wallNow - 1000,
+    notBefore: wallNow - 1000,
+    expiresAt: wallNow + 12 * 3_600_000,
+    status: "pending",
+    dedupeKey: "proactive:first",
+    sourceIds: [],
+  });
+  const first = await maintainRuntime("A", new AbortController().signal, state, true);
+  assert.ok(first.message?.proactive);
+  await r.saveInitiative({
+    id: "initiative_second_proactive",
+    kind: "share_thought",
+    topic: "А вот ещё одна мысль.",
+    reason: "internal reason",
+    priority: 1,
+    createdAt: wallNow,
+    notBefore: wallNow,
+    expiresAt: wallNow + 12 * 3_600_000,
+    status: "pending",
+    dedupeKey: "proactive:second",
+    sourceIds: [],
+  });
+  const second = await maintainRuntime("A", new AbortController().signal, state, true);
+  assert.equal(second.message, null);
+  assert.equal(await r.getEvent("proactive_initiative_second_proactive"), null);
+  repository = previousRepository;
+});
+
 await test("store separates memory maintenance from initiative cancellation and retries online", () => {
   const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
   const sendStart = storeSource.indexOf("async function sendTurn");
@@ -1544,7 +1872,7 @@ await test("store separates memory maintenance from initiative cancellation and 
   assert.match(appSource, /addEventListener\("online", onOnline\)/);
   assert.match(appSource, /setInterval[\s\S]*reconcileWorld\(false\)/);
 });
-await test("sleeping availability can keep a casual message silent but important contact can wake her", () => {
+await test("sleeping availability gives a visible sleepy reply while important contact can still wake her", () => {
   const sleeping = createInitialWorldState(Date.UTC(2026, 0, 1, 2), "UTC");
   const casual = localPerception("Привет");
   const casualInterpretation = interpret(casual, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
@@ -1556,7 +1884,9 @@ await test("sleeping availability can keep a casual message silent but important
     initialRelationshipState,
     sleeping,
   );
-  assert.equal(casualDecision.action, "stay_silent");
+  assert.equal(casualDecision.action, "acknowledge");
+  assert.equal(casualDecision.content.locked, true);
+  assert.match(casualDecision.content.fallbackText ?? "", /сонн|сплю/u);
 
   const urgent = { ...localPerception("Мне очень плохо"), urgency: 0.95, vulnerability: 0.9 };
   const urgentInterpretation = interpret(urgent, emptyMemoryContext, initialEmotionalState, initialRelationshipState);
@@ -1581,6 +1911,16 @@ await test("world interaction preserves sleep or occupied activity when the char
   const brief = markUserInteraction(occupied, occupied.updatedAt + 1_000, { engaged: true });
   assert.equal(brief.currentActivity, occupied.currentActivity);
   assert.equal(brief.availability, "occupied");
+});
+await test("character stage uses one full-scene media pack and ignores the old overlay pack", () => {
+  const assetSceneSource = readFileSync(new URL("../src/avatar/AssetScene.tsx", import.meta.url), "utf8");
+  const avatarSource = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(assetSceneSource, /asset-scene-background|main-bedroom/);
+  assert.match(avatarSource, /assets\/character\/scenes\/neutral\.1\.1\.jpg/);
+  assert.match(avatarSource, /mp4\|webm\|mov/);
+  assert.match(avatarSource, /png\|jpg\|jpeg\|webp/);
+  assert.match(avatarSource, /placeholder-avatar\.png/);
+  assert.doesNotMatch(avatarSource, /builtInEmotionImageModules|assets\/character\/emotions\/\*\.png/);
 });
 await test("avatar visual cue derives from emotion and respects sleep", () => {
   const baseNow = Date.UTC(2026, 0, 1, 14, 0, 0);
@@ -1688,6 +2028,12 @@ await test("new sends are not globally blocked by unrelated failed messages", ()
   const source = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
   assert.match(source, /if \(!value \|\| get\(\)\.busy\) return;/);
   assert.doesNotMatch(source, /get\(\)\.failedMessageId(?!s)/);
+});
+await test("conversation reset stays available while a send is stuck", () => {
+  const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(storeSource, /state\.busy \|\| state\.resettingData/);
+  assert.match(appSource, /resetDisabled=\{!ready \|\| resettingData\}/);
 });
 await test("store allows a new send after a storage-failed turn and keeps failure per message", async () => {
   const previousRepository = repository;
@@ -1823,6 +2169,96 @@ await test("intimacy preferences are versioned evidence records", () => {
     /повторяющийся preference id/,
   );
 });
+await test("intimacy preference learning is adult-gated, evidence-based and gradual", () => {
+  const empty = createInitialIntimacyPreferences(now);
+  const disabledState = createInitialIntimacyState(now);
+  const disabled = evolveIntimacyPreferences(empty, {
+    before: disabledState,
+    after: disabledState,
+    signal: { kind: "flirt", strength: 1, explicit: false, intimacyContext: true },
+    eventId: "evt_disabled",
+    now,
+  });
+  assert.equal(disabled.changed, false);
+  assert.equal(disabled.document.items.length, 0);
+
+  const before = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    phase: "romantic",
+    interactionStatus: "open",
+    comfort: 0.7,
+    interest: 0.72,
+    arousal: 0.42,
+  };
+  const after = { ...before, phase: "close", comfort: 0.78, interest: 0.8, arousal: 0.5 };
+  const first = evolveIntimacyPreferences(empty, {
+    before, after,
+    signal: { kind: "flirt", strength: 0.8, explicit: false, intimacyContext: true },
+    eventId: "evt_flirt_1",
+    now: now + 1,
+  });
+  assert.equal(first.changed, true);
+  for (const key of defaultIntimacyCoreProfile.stablePreferenceKeys)
+    assert.ok(first.document.items.some((item) => item.topicKey === key && item.origin === "core"));
+  const learnedFirst = first.document.items.find((item) => item.topicKey === "playful_teasing");
+  assert.ok(learnedFirst);
+  assert.equal(learnedFirst.origin, "learned");
+  assert.ok(learnedFirst.confidence < 0.5, "one interaction must not become a fully formed preference");
+
+  const second = evolveIntimacyPreferences(first.document, {
+    before: after, after: { ...after, interest: 0.84, arousal: 0.54 },
+    signal: { kind: "flirt", strength: 0.86, explicit: false, intimacyContext: true },
+    eventId: "evt_flirt_2",
+    now: now + 2,
+  });
+  const learnedSecond = second.document.items.find((item) => item.topicKey === "playful_teasing");
+  assert.ok(learnedSecond.confidence > learnedFirst.confidence);
+  assert.deepEqual(learnedSecond.sourceEventIds, ["evt_flirt_1", "evt_flirt_2"]);
+});
+
+await test("intimacy mind separates inward desire, outward expression and caution", () => {
+  const preferences = ensureCoreIntimacyPreferences(createInitialIntimacyPreferences(now), now).document;
+  const world = {
+    ...createInitialWorldState(now, "UTC"),
+    isAwake: true,
+    availability: "free",
+    currentLocation: "bedroom",
+    updatedAt: now,
+  };
+  const relationship = {
+    ...initialRelationshipState,
+    trust: 0.9, closeness: 0.88, attachment: 0.82, security: 0.88, unresolvedTension: 0, stage: "deep", updatedAt: now,
+  };
+  const emotion = {
+    ...initialEmotionalState,
+    affection: 0.9, romanticInterest: 0.9, happiness: 0.68, energy: 0.72, anxiety: 0.08, irritation: 0.02, updatedAt: now,
+  };
+  const intimate = buildIntimacyMind({
+    state: {
+      ...createInitialIntimacyState(now), adultModeEnabled: true, phase: "intimate", interactionStatus: "open",
+      comfort: 0.82, interest: 0.86, arousal: 0.68, initiativeDrive: 0.5,
+    },
+    preferences, signal: { kind: "consent", strength: 0.9, explicit: true, intimacyContext: true },
+    emotion, relationship, world,
+  });
+  assert.equal(intimate.inwardArousal, true);
+  assert.equal(intimate.outwardArousal, false, "internal arousal must not automatically become outward horny behavior");
+  assert.equal(intimate.active, true);
+
+  const hesitant = buildIntimacyMind({
+    state: {
+      ...createInitialIntimacyState(now), adultModeEnabled: true, phase: "intimate", interactionStatus: "hesitant",
+      comfort: 0.62, interest: 0.82, arousal: 0.7, initiativeDrive: 0.25,
+    },
+    preferences, signal: { kind: "hesitant", strength: 0.84, explicit: true, intimacyContext: true },
+    emotion, relationship, world,
+  });
+  assert.equal(hesitant.conflicted, true);
+  assert.ok(hesitant.caution > intimate.caution);
+  assert.equal(hesitant.wantsMore, false);
+});
+
 await test("intimacy persistence uses optimistic revisions without touching chat state", async () => {
   const r = new InMemoryCompanionRepository();
   const initial = createInitialIntimacyState(now);
@@ -1904,6 +2340,35 @@ const intimacyTurnInput = (signal, previous = {
   },
   now,
 });
+
+await test("intimacy mutuality increases comfort and attraction without skipping phases", () => {
+  const previous = {
+    ...intimacyTurnInput({ kind: "flirt", strength: 1, explicit: false }).previous,
+    phase: "romantic",
+    interactionStatus: "open",
+    comfort: 0.72,
+    interest: 0.7,
+    arousal: 0.34,
+    initiativeDrive: 0.24,
+  };
+  const flirted = planIntimacyTurn(intimacyTurnInput({ kind: "flirt", strength: 1, explicit: false, intimacyContext: true }, previous));
+  assert.equal(flirted.state.phase, "close");
+  assert.ok(flirted.state.comfort > previous.comfort);
+  assert.ok(flirted.state.interest > previous.interest);
+  assert.ok(flirted.state.arousal > previous.arousal);
+  assert.ok(flirted.state.initiativeDrive > previous.initiativeDrive);
+
+  const cared = planIntimacyTurn(intimacyTurnInput({ kind: "aftercare", strength: 1, explicit: true, intimacyContext: true }, {
+    ...flirted.state,
+    phase: "high_intimacy",
+    interactionStatus: "open",
+    arousal: 0.9,
+  }));
+  assert.equal(cared.state.phase, "aftercare");
+  assert.ok(cared.state.comfort > flirted.state.comfort);
+  assert.ok(cared.state.arousal < 0.4);
+});
+
 await test("intimacy engine requires a current-turn cue and never escalates from old consent alone", () => {
   const previous = {
     ...createInitialIntimacyState(now),
@@ -2163,10 +2628,16 @@ const visualAssets = [baseAsset,
 ];
 const visualRuntime = () => { const a = romanticInput(""); return { revision: 0, emotion: a.emotion, relationship: a.relationship, world: a.world,
   romance: { ...initialRomance(now), phase: "playful" }, appearance: { version: 1, assetId: baseAsset.id, selectedAt: now - 20_000, outfitChangedAt: now - 20_000 } }; };
+await test("full-scene catalog keeps the neutral photo as a stable still-image fallback", () => {
+  assert.equal(characterAssets[0]?.id, "scene.neutral.1.1");
+  assert.equal(characterAssets[0]?.mediaType, "image");
+  assert.match(characterAssets[0]?.src ?? "", /neutral\.1\.1\.jpg/u);
+  assert.notEqual(characterAssets[0]?.id, "placeholder.neutral");
+});
 await test("appearance chooses available expression without a user command", () => {
   const r = visualRuntime();
   assert.equal(selectAppearance(r, "playful", now, visualAssets).assetId, "smile");
-  assert.equal(selectAppearance(r, "playful", now).assetId, baseAsset.id);
+  assert.notEqual(selectAppearance(r, "playful", now).assetId, "placeholder.neutral");
 });
 await test("appearance holds recent images and changes outfit only after cooldown", () => {
   const r = visualRuntime();
@@ -2188,9 +2659,9 @@ await test("appearance location and pause override stale romantic imagery", () =
 });
 await test("appearance deleted ids recover and private fade preserves current image", () => {
   const r = visualRuntime(); r.appearance.assetId = "deleted";
-  assert.equal(selectAppearance(r, "neutral", now).assetId, baseAsset.id);
+  assert.notEqual(selectAppearance(r, "neutral", now).assetId, "placeholder.neutral");
   r.appearance.assetId = "smile"; r.romance.phase = "private";
-  assert.equal(selectAppearance(r, "neutral", now, visualAssets).assetId, "smile");
+  assert.equal(selectAppearance(r, "neutral", now, visualAssets).assetId, baseAsset.id);
 });
 await test("asset calibration and transitions do not reuse eye masks for other photos", () => {
   assert.throws(() => validateAssetCatalog([baseAsset, { ...visualAssets[1], motion: "reference_live_photo" }]));
@@ -2206,12 +2677,65 @@ await test("snapshot codec roundtrips selected appearance with romance", () => {
   assert.deepEqual(decoded.appearance, r.appearance);
 });
 
-await test("visual emotion filenames use the fixed vocabulary and keep horny/hornys distinct", () => {
-  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.jpg"), { emotion: "happy", intensity: 5, variant: 2, extension: "jpg" });
-  assert.deepEqual(parseVisualEmotionFilename("horny.7.1.png"), { emotion: "horny", intensity: 7, variant: 1, extension: "png" });
-  assert.deepEqual(parseVisualEmotionFilename("hornys.7.1.webp"), { emotion: "hornys", intensity: 7, variant: 1, extension: "webp" });
-  assert.equal(parseVisualEmotionFilename("joy.5.1.png"), null);
-  assert.equal(parseVisualEmotionFilename("happy.11.1.png"), null);
+await test("visual emotion filenames use one vocabulary for photos and videos and keep horny/hornys distinct", () => {
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.png"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.jpg"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.webp"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.mp4"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.webm"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("happy.5.2.mov"), { emotion: "happy", intensity: 5, variant: 2 });
+  assert.deepEqual(parseVisualEmotionFilename("horny.7.1.mp4"), { emotion: "horny", intensity: 7, variant: 1 });
+  assert.deepEqual(parseVisualEmotionFilename("hornys.7.1.png"), { emotion: "hornys", intensity: 7, variant: 1 });
+  assert.equal(parseVisualEmotionFilename("joy.5.1.mp4"), null);
+  assert.equal(parseVisualEmotionFilename("happy.11.1.mp4"), null);
+});
+await test("appearance automatically prefers a matching emotion video while photo-only packs keep working", () => {
+  const r = visualRuntime();
+  r.appearance = { version: 1, assetId: baseAsset.id, selectedAt: now - 120_000, outfitChangedAt: now - 120_000 };
+  const happyPhoto = {
+    ...baseAsset,
+    id: "scene.happy.5.1",
+    src: "assets/character/happy.5.1.jpg",
+    expression: "happy",
+    mediaType: "image",
+    motion: "still",
+    visualEmotion: { emotion: "happy", intensity: 5, variant: 1 },
+  };
+  const happyVideo = {
+    ...baseAsset,
+    id: "scene.happy.5.1.video",
+    src: "assets/character/happy.5.1.mp4",
+    expression: "happy",
+    mediaType: "video",
+    motion: "loop_video",
+    visualEmotion: { emotion: "happy", intensity: 5, variant: 1 },
+  };
+  validateAssetCatalog([baseAsset, happyPhoto, happyVideo], baseAsset.id);
+  const withVideo = selectAppearance(r, { emotion: "happy", intensity: 5, confidence: 0.9, changeStrength: 0.95 }, now, {
+    assets: [baseAsset, happyPhoto, happyVideo],
+    seed: "prefer-video",
+  });
+  assert.equal(withVideo.assetId, happyVideo.id);
+
+  const photoOnly = selectAppearance(r, { emotion: "happy", intensity: 5, confidence: 0.9, changeStrength: 0.95 }, now, {
+    assets: [baseAsset, happyPhoto],
+    seed: "photo-compatible",
+  });
+  assert.equal(photoOnly.assetId, happyPhoto.id);
+});
+await test("video assets require looping video metadata and do not weaken image validation", () => {
+  const validVideo = {
+    ...baseAsset,
+    id: "scene.sad.4.1.video",
+    src: "assets/character/sad.4.1.webm",
+    expression: "sad",
+    mediaType: "video",
+    motion: "loop_video",
+    visualEmotion: { emotion: "sad", intensity: 4, variant: 1 },
+  };
+  assert.doesNotThrow(() => validateAssetCatalog([baseAsset, validVideo], baseAsset.id));
+  assert.throws(() => validateAssetCatalog([baseAsset, { ...validVideo, motion: "still" }], baseAsset.id), /loop_video/u);
+  assert.throws(() => validateAssetCatalog([baseAsset, { ...validVideo, id: "bad-image-loop", mediaType: "image" }], baseAsset.id), /Image asset/u);
 });
 await test("mature visual emotions stay gated when adult intimacy mode is off", () => {
   const base = romanticInput("");
@@ -2280,6 +2804,24 @@ await test("horny and hornys are reachable as distinct internal versus outward s
   assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: [] }).emotion, "horny");
   assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: ["INTIMACY_RECIPROCATE"] }).emotion, "hornys");
 });
+await test("earned jealousy is exposed to the visual emotion resolver", () => {
+  const base = romanticInput("");
+  const runtime = {
+    revision: 0,
+    emotion: { ...base.emotion, affection: 0.92, romanticInterest: 0.84, happiness: 0.48, irritation: 0.12, sadness: 0.18, anxiety: 0.28 },
+    relationship: { ...base.relationship, trust: 0.9, closeness: 0.92, attachment: 0.9, security: 0.7, stage: "deep" },
+    world: base.world,
+    romance: { ...initialRomance(now), phase: "romantic" },
+  };
+  const context = {
+    decision: { ...base.decision, confidence: 0.85 },
+    responsePlan: base.plan,
+    dialogueActs: ["JEALOUSY"],
+    sourceIntent: "statement",
+    eventIntensity: 0.8,
+  };
+  assert.equal(resolveVisualEmotionState(runtime, context).emotion, "jealous");
+});
 await test("visual emotion resolver picks nearest available level and avoids a recent variant", () => {
   const r = visualRuntime();
   r.appearance = { version: 1, assetId: baseAsset.id, selectedAt: now - 120_000, outfitChangedAt: now - 120_000 };
@@ -2324,6 +2866,54 @@ await test("internal arousal never falls back to the outward hornys image", () =
   ];
   assert.equal(resolveAvailableVisualEmotion("horny", emotionAssets, r), "neutral");
   assert.equal(resolveAvailableVisualEmotion("hornys", emotionAssets, r), "hornys");
+});
+
+await test("semantic visual fallback chooses the nearest supplied emotion across the vocabulary", () => {
+  const r = visualRuntime();
+  const emotionAssets = [
+    baseAsset,
+    { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } },
+    { ...baseAsset, id: "emotion.sad.4.1", src: "assets/character/sad.4.1.png", expression: "sad", motion: "still", visualEmotion: { emotion: "sad", intensity: 4, variant: 1 } },
+    { ...baseAsset, id: "emotion.loving.4.1", src: "assets/character/loving.4.1.png", expression: "loving", motion: "still", visualEmotion: { emotion: "loving", intensity: 4, variant: 1 } },
+    { ...baseAsset, id: "emotion.angry.4.1", src: "assets/character/angry.4.1.png", expression: "angry", motion: "still", visualEmotion: { emotion: "angry", intensity: 4, variant: 1 } },
+  ];
+  assert.equal(resolveAvailableVisualEmotion("hurt", emotionAssets, r), "sad");
+  assert.equal(resolveAvailableVisualEmotion("missing_you", emotionAssets, r), "loving");
+});
+
+await test("missing requested emotion changes away from an unrelated fresh photo immediately", () => {
+  const r = visualRuntime();
+  const emotionAssets = [
+    { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } },
+    { ...baseAsset, id: "emotion.loving.4.1", src: "assets/character/loving.4.1.png", expression: "loving", motion: "still", visualEmotion: { emotion: "loving", intensity: 4, variant: 1 } },
+    { ...baseAsset, id: "emotion.sad.4.1", src: "assets/character/sad.4.1.png", expression: "sad", motion: "still", visualEmotion: { emotion: "sad", intensity: 4, variant: 1 } },
+  ];
+  r.appearance = { version: 1, assetId: "emotion.loving.4.1", selectedAt: now - 1000, outfitChangedAt: now - 1000 };
+  const selected = selectAppearance(r, { emotion: "hurt", intensity: 5, confidence: .74, changeStrength: .48 }, now, { assets: emotionAssets, fallbackId: "emotion.neutral.1.1" });
+  assert.equal(selected.assetId, "emotion.sad.4.1");
+});
+
+await test("stable emotion rotates variants after a short visual hold instead of staying static", () => {
+  const r = visualRuntime();
+  const emotionAssets = [
+    { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } },
+    { ...baseAsset, id: "emotion.happy.5.1", src: "assets/character/happy.5.1.png", expression: "happy", motion: "still", visualEmotion: { emotion: "happy", intensity: 5, variant: 1 } },
+    { ...baseAsset, id: "emotion.happy.5.2", src: "assets/character/happy.5.2.png", expression: "happy", motion: "still", visualEmotion: { emotion: "happy", intensity: 5, variant: 2 } },
+  ];
+  r.appearance = { version: 1, assetId: "emotion.happy.5.1", selectedAt: now - 40_000, outfitChangedAt: now - 40_000 };
+  const selected = selectAppearance(r, { emotion: "happy", intensity: 5, confidence: .76, changeStrength: .52 }, now, {
+    assets: emotionAssets,
+    fallbackId: "emotion.neutral.1.1",
+    recentAssetIds: ["emotion.happy.5.1"],
+    seed: "rotate-stable-happy",
+  });
+  assert.equal(selected.assetId, "emotion.happy.5.2");
+});
+
+await test("scene fallback resolves placeholder ids to the visible neutral asset when one exists", () => {
+  const placeholder = { ...baseAsset, id: "placeholder.neutral", src: "assets/character/placeholder-avatar.png", expression: "neutral", motion: "still" };
+  const neutral = { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } };
+  assert.equal(selectAppearance(visualRuntime(), { emotion: "sad", intensity: 4, confidence: .7, changeStrength: .7 }, now, { assets: [placeholder, neutral], fallbackId: neutral.id }).assetId, neutral.id);
 });
 await test("visual emotion hysteresis keeps a nearly unchanged image", () => {
   const r = visualRuntime();
