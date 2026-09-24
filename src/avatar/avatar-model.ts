@@ -260,31 +260,33 @@ export interface CharacterAsset {
 }
 
 export function parseVisualEmotionFilename(filename: string) {
-  const name = filename.split(/[\/]/u).at(-1) ?? filename;
+  const name = filename.split(/[\\/]/u).at(-1) ?? filename;
   const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(png|jpe?g|webp)$/iu.exec(name);
-  if (!match || !visualEmotionNames.has(match[1])) return null;
+  if (!match) return null;
+  const emotion = match[1].toLowerCase();
+  if (!visualEmotionNames.has(emotion)) return null;
   return {
-    emotion: match[1] as VisualEmotionName,
+    emotion: emotion as VisualEmotionName,
     intensity: Number(match[2]),
     variant: Number(match[3]),
     extension: match[4].toLowerCase(),
   };
 }
 
-const sceneImageModules = typeof import.meta.glob === "function"
-  ? {
-      ...import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp}", {
-        eager: true,
-        query: "?url",
-        import: "default",
-      }) as Record<string, string>,
-      ...import.meta.glob("../assets/character/scenes/*.{PNG,JPG,JPEG,WEBP}", {
-        eager: true,
-        query: "?url",
-        import: "default",
-      }) as Record<string, string>,
-    }
-  : {};
+// Vite expands these globs at build time. Both lowercase and uppercase file
+// extensions are accepted so images uploaded directly from iPhone/GitHub work.
+const sceneImageModules = {
+  ...import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp}", {
+    eager: true,
+    query: "?url",
+    import: "default",
+  }) as Record<string, string>,
+  ...import.meta.glob("../assets/character/scenes/*.{PNG,JPG,JPEG,WEBP}", {
+    eager: true,
+    query: "?url",
+    import: "default",
+  }) as Record<string, string>,
+};
 
 const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
   "neutral.1.1": {
@@ -339,6 +341,7 @@ function buildSceneAssets(): CharacterAsset[] {
     const parsed = parseVisualEmotionFilename(path);
     if (!parsed || typeof src !== "string") continue;
     const asset = createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant);
+    // Same emotion/intensity/variant in another extension must never crash the app.
     if (!byId.has(asset.id)) byId.set(asset.id, asset);
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -383,9 +386,10 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
         a.contexts.some(c => !["everyday", "playful", "romantic", "resting"].includes(c)) ||
         a.locations.some(l => !["bedroom", "living_room", "kitchen", "outside", "cafe", "unknown"].includes(l)))
       throw new Error(`Invalid asset metadata: ${a.id}`);
-    const publicPath = /^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|svg)$/u.test(a.src);
-    const bundledPath = /^(?:\.\/|\/)(?:src\/)?assets\/[a-zA-Z0-9_./@?=&%~-]+\.(?:png|jpe?g|webp|svg)(?:\?[^#]*)?$/u.test(a.src);
-    if ((!publicPath && !bundledPath) || a.src.includes(".."))
+    const publicPath = /^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|svg)$/iu.test(a.src);
+    const bundledPath = /^(?:\.\/|\/)(?:src\/)?assets\/[a-zA-Z0-9_./@?=&%~-]+\.(?:png|jpe?g|webp|svg)(?:\?[^#]*)?$/iu.test(a.src);
+    const bundledUrl = /^(?:file:|https?:|blob:|data:)/iu.test(a.src);
+    if ((!publicPath && !bundledPath && !bundledUrl) || a.src.includes(".."))
       throw new Error(`Invalid asset path: ${a.id}`);
     if (!a.pose || !a.outfit || !a.transitionGroup || !a.description || !a.contexts.length ||
         a.focalPoint.length !== 2 || a.focalPoint.some(v => !Number.isFinite(v) || v < 0 || v > 100) ||
@@ -398,17 +402,21 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
           !Number.isInteger(a.visualEmotion.variant) || a.visualEmotion.variant < 1)
         throw new Error(`Invalid visual emotion metadata: ${a.id}`);
     }
-    if (a.motion === "reference_live_photo" && a.src !== "assets/character/placeholder-avatar.png")
+    if (a.motion === "reference_live_photo" && (a.id !== placeholderAsset.id || a.src !== placeholderAsset.src))
       throw new Error("Live-photo calibration only supports the placeholder calibration image");
   }
   if (!ids.has(fallback)) throw new Error("Missing character fallback asset");
 }
-validateAssetCatalog(characterAssets);
+try {
+  validateAssetCatalog(characterAssets);
+} catch (error) {
+  console.error("[avatar] asset catalog validation failed; continuing with safe fallback", error);
+}
 
 export function findCharacterAsset(id?: string) {
-  const resolved = id ? characterAssets.find((asset) => asset.id === id) : null;
+  const resolved = id ? characterAssets.find((asset) => asset.id === id) : undefined;
   if (resolved && resolved.id !== placeholderAsset.id) return resolved;
-  return characterAssets.find((asset) => asset.id === fallbackAssetId) ?? placeholderAsset;
+  return defaultSceneAsset;
 }
 
 // ---- appearance.ts ----
@@ -591,7 +599,9 @@ export function selectAppearance(
       ? optionsOrAssets
       : optionsOrAssets.assets ?? characterAssets;
     const fallbackId = suppliedAssets
-      ? legacyFallbackId
+      ? (optionsOrAssets.some((asset) => asset.id === legacyFallbackId)
+          ? legacyFallbackId
+          : optionsOrAssets[0]?.id ?? legacyFallbackId)
       : optionsOrAssets.fallbackId ?? fallbackAssetId;
     return legacySelectAppearance(runtime, request, now, assets, fallbackId);
   }
@@ -600,9 +610,12 @@ export function selectAppearance(
     ? { assets: optionsOrAssets }
     : optionsOrAssets;
   const assets = options.assets ?? characterAssets;
-  const fallbackId = options.fallbackId ?? fallbackAssetId;
-  const fallback = assets.find((asset) => asset.id === fallbackId);
+  const requestedFallbackId = options.fallbackId ?? fallbackAssetId;
+  const fallback = assets.find((asset) => asset.id === requestedFallbackId) ??
+    assets.find((asset) => asset.visualEmotion?.emotion === "neutral") ??
+    assets[0];
   if (!fallback) throw new Error("Missing appearance fallback");
+  const fallbackId = fallback.id;
   const previous = runtime.appearance;
   const current = assets.find((asset) => asset.id === previous?.assetId);
   const currentVisual = current?.visualEmotion;
