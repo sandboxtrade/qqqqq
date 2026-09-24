@@ -386,10 +386,10 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
         a.contexts.some(c => !["everyday", "playful", "romantic", "resting"].includes(c)) ||
         a.locations.some(l => !["bedroom", "living_room", "kitchen", "outside", "cafe", "unknown"].includes(l)))
       throw new Error(`Invalid asset metadata: ${a.id}`);
-    const publicPath = /^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|svg)$/iu.test(a.src);
-    const bundledPath = /^(?:\.\/|\/)(?:src\/)?assets\/[a-zA-Z0-9_./@?=&%~-]+\.(?:png|jpe?g|webp|svg)(?:\?[^#]*)?$/iu.test(a.src);
-    const bundledUrl = /^(?:file:|https?:|blob:|data:)/iu.test(a.src);
-    if ((!publicPath && !bundledPath && !bundledUrl) || a.src.includes(".."))
+    // Vite may rewrite imported assets to relative, root-relative, blob/data,
+    // or absolute URLs depending on the production base. Do not validate the
+    // generated URL shape here; only reject empty or executable protocols.
+    if (typeof a.src !== "string" || !a.src.trim() || /^(?:javascript|vbscript):/iu.test(a.src.trim()))
       throw new Error(`Invalid asset path: ${a.id}`);
     if (!a.pose || !a.outfit || !a.transitionGroup || !a.description || !a.contexts.length ||
         a.focalPoint.length !== 2 || a.focalPoint.some(v => !Number.isFinite(v) || v < 0 || v > 100) ||
@@ -416,7 +416,7 @@ try {
 export function findCharacterAsset(id?: string) {
   const resolved = id ? characterAssets.find((asset) => asset.id === id) : undefined;
   if (resolved && resolved.id !== placeholderAsset.id) return resolved;
-  return defaultSceneAsset;
+  return characterAssets.find((asset) => asset.id === fallbackAssetId) ?? bundledFallbackScene;
 }
 
 // ---- appearance.ts ----
