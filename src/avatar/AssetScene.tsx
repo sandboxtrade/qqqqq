@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import defaultStageBackgroundSrc from "../assets/character/backgrounds/main-bedroom.png";
 import { LivePhoto } from "./LivePhoto";
 import { findCharacterAsset, type CharacterAsset } from "./avatar-model";
 import { transitionKind } from "./avatar-model";
@@ -90,7 +89,6 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
   }, [requested.id, retry]);
   return <>
     <div className={`asset-scene ${scene.previous ? `asset-transition ${scene.kind}` : ""}`} data-asset-id={scene.current.id}>
-      <img className="asset-scene-background" src={defaultStageBackgroundSrc} alt="" aria-hidden="true" />
       <div key={`current-${scene.current.id}-${renderRevision}`} className="asset-layer asset-current">
         <ImageLayer asset={scene.current} visualState={visualState} animate={!scene.previous} />
       </div>

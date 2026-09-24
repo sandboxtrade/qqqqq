@@ -5,6 +5,7 @@
 import type { CharacterDecision, ResponsePlan } from "../cognition/cognition-types";
 import type { RuntimeState } from "../engine/runtime";
 import type { WorldLocation } from "../world/world";
+import baseNeutralSceneSrc from "../assets/character/scenes/neutral.1.1.png";
 
 // ---- visual-state.ts ----
 export type AvatarVisualCue = ResponsePlan["visualCue"];
@@ -259,20 +260,17 @@ export interface CharacterAsset {
 }
 
 export function parseVisualEmotionFilename(filename: string) {
-  const name = filename.split(/[\\/]/u).at(-1) ?? filename;
-  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(?:png|jpe?g|webp)$/u.exec(name);
+  const name = filename.split(/[\/]/u).at(-1) ?? filename;
+  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(png|jpe?g|webp)$/u.exec(name);
   if (!match || !visualEmotionNames.has(match[1])) return null;
   return {
     emotion: match[1] as VisualEmotionName,
     intensity: Number(match[2]),
     variant: Number(match[3]),
+    extension: match[4],
   };
 }
 
-// Full-scene images only. The old transparent emotion overlays are retained
-// in the repository only for compatibility/history and are not rendered.
-// Add future images to src/assets/character/scenes using
-// emotion.intensity.variant.(png|jpg|jpeg|webp).
 const sceneImageModules = typeof import.meta.glob === "function"
   ? import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp}", {
       eager: true,
@@ -281,79 +279,75 @@ const sceneImageModules = typeof import.meta.glob === "function"
     }) as Record<string, string>
   : {};
 
-const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {};
+const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
+  "neutral.1.1": {
+    sceneFit: "contain",
+    sceneScale: 0.98,
+    scenePosition: [50, 50],
+    pose: "bedroom-sitting",
+    description: "Yuzuki sitting on the bed in her room",
+  },
+};
 
-function buildSceneEmotionAssets(): CharacterAsset[] {
+function createSceneAsset(src: string, emotion: VisualEmotionName, intensity: number, variant: number): CharacterAsset {
+  const presetKey = `${emotion}.${intensity}.${variant}`;
+  const preset = scenePresets[presetKey] ?? {
+    sceneFit: "contain" as const,
+    sceneScale: 0.98,
+    scenePosition: [50, 50] as [number, number],
+    pose: `scene-${variant}`,
+    description: `Yuzuki: ${emotion}, intensity ${intensity}, variant ${variant}`,
+  };
+  return {
+    id: `scene.${emotion}.${intensity}.${variant}`,
+    src,
+    description: preset.description,
+    pose: preset.pose,
+    outfit: "scene-set",
+    expression: emotion,
+    contexts: ["everyday", "playful", "romantic", "resting"] as VisualContext[],
+    locations: [],
+    transitionGroup: "scene-photo",
+    focalPoint: [50, 50],
+    motion: "still",
+    visualEmotion: { emotion, intensity, variant },
+    sceneFit: preset.sceneFit,
+    sceneScale: preset.sceneScale,
+    scenePosition: preset.scenePosition,
+  };
+}
+
+function buildSceneAssets(): CharacterAsset[] {
   return Object.entries(sceneImageModules).flatMap(([path, src]) => {
     const parsed = parseVisualEmotionFilename(path);
     if (!parsed || typeof src !== "string") return [];
-    const { emotion, intensity, variant } = parsed;
-    const key = `${emotion}.${intensity}.${variant}`;
-    const preset = scenePresets[key] ?? {
-      sceneFit: "cover" as const,
-      sceneScale: 1,
-      scenePosition: [50, 50] as [number, number],
-      pose: `scene-${variant}`,
-      description: `Yuzuki: ${emotion}, intensity ${intensity}, variant ${variant}`,
-    };
-    return [{
-      id: `scene.${emotion}.${intensity}.${variant}`,
-      src,
-      description: preset.description,
-      pose: preset.pose,
-      outfit: "full-scene",
-      expression: emotion,
-      contexts: ["everyday", "playful", "romantic", "resting"] as VisualContext[],
-      locations: [],
-      transitionGroup: "full-scene",
-      focalPoint: [50, 50] as [number, number],
-      motion: "still" as const,
-      visualEmotion: { emotion, intensity, variant },
-      sceneFit: preset.sceneFit,
-      sceneScale: preset.sceneScale,
-      scenePosition: preset.scenePosition,
-    }];
+    return [createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant)];
   }).sort((a, b) => a.id.localeCompare(b.id));
 }
-
-const defaultSceneAsset: CharacterAsset = {
-  id: "scene.default.live",
-  src: "assets/character/scenes/default-live-room.jpg",
-  description: "Yuzuki sitting on the bed in her room",
-  pose: "bedroom-sitting",
-  outfit: "default-live-scene",
-  expression: "neutral",
-  contexts: ["everyday", "playful", "romantic", "resting"],
-  locations: [],
-  transitionGroup: "full-scene",
-  focalPoint: [50, 50],
-  motion: "still",
-  sceneFit: "cover",
-  sceneScale: 1,
-  scenePosition: [50, 50],
-};
 
 const placeholderAsset: CharacterAsset = {
   id: "placeholder.neutral",
   src: "assets/character/placeholder-avatar.png",
-  description: "Yuzuki placeholder",
+  description: "Yuzuki placeholder silhouette",
   pose: "placeholder",
   outfit: "placeholder",
   expression: "neutral",
   contexts: ["everyday"],
   locations: [],
-  transitionGroup: "full-scene",
+  transitionGroup: "scene-photo",
   focalPoint: [50, 50],
   motion: "still",
-  sceneFit: "cover",
+  sceneFit: "contain",
   sceneScale: 1,
   scenePosition: [50, 50],
 };
 
-const sceneEmotionAssets = buildSceneEmotionAssets();
-export const characterAssets: readonly CharacterAsset[] = [defaultSceneAsset, ...sceneEmotionAssets, placeholderAsset];
-export const fallbackAssetId = defaultSceneAsset.id;
-export const renderFallbackAssetId = defaultSceneAsset.id;
+const bundledFallbackScene = createSceneAsset(baseNeutralSceneSrc, "neutral", 1, 1);
+const discoveredSceneAssets = buildSceneAssets().filter((asset) => asset.src !== bundledFallbackScene.src);
+export const characterAssets: readonly CharacterAsset[] = discoveredSceneAssets.length
+  ? [bundledFallbackScene, ...discoveredSceneAssets, placeholderAsset]
+  : [bundledFallbackScene, placeholderAsset];
+export const fallbackAssetId = bundledFallbackScene.id;
 
 const legacyExpressions = new Set<AvatarVisualCue>([
   "neutral", "warm", "soft_smile", "curious", "annoyed_soft", "guarded", "sad_soft", "playful",
@@ -372,8 +366,7 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
       throw new Error(`Invalid asset metadata: ${a.id}`);
     const publicPath = /^assets\/[a-zA-Z0-9_./-]+\.(?:png|jpe?g|webp|svg)$/u.test(a.src);
     const bundledPath = /^(?:\.\/|\/)(?:src\/)?assets\/[a-zA-Z0-9_./@?=&%~-]+\.(?:png|jpe?g|webp|svg)(?:\?[^#]*)?$/u.test(a.src);
-    const bundledUrl = /^(?:file:|https?:|blob:|data:)/u.test(a.src);
-    if ((!publicPath && !bundledPath && !bundledUrl) || a.src.includes(".."))
+    if ((!publicPath && !bundledPath) || a.src.includes(".."))
       throw new Error(`Invalid asset path: ${a.id}`);
     if (!a.pose || !a.outfit || !a.transitionGroup || !a.description || !a.contexts.length ||
         a.focalPoint.length !== 2 || a.focalPoint.some(v => !Number.isFinite(v) || v < 0 || v > 100) ||
@@ -386,7 +379,7 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
           !Number.isInteger(a.visualEmotion.variant) || a.visualEmotion.variant < 1)
         throw new Error(`Invalid visual emotion metadata: ${a.id}`);
     }
-    if (a.motion === "reference_live_photo" && (a.id !== placeholderAsset.id || a.src !== placeholderAsset.src))
+    if (a.motion === "reference_live_photo" && a.src !== "assets/character/placeholder-avatar.png")
       throw new Error("Live-photo calibration only supports the placeholder calibration image");
   }
   if (!ids.has(fallback)) throw new Error("Missing character fallback asset");
@@ -394,9 +387,9 @@ export function validateAssetCatalog(assets: readonly CharacterAsset[], fallback
 validateAssetCatalog(characterAssets);
 
 export function findCharacterAsset(id?: string) {
-  const resolved = id ? characterAssets.find((asset) => asset.id === id) : undefined;
+  const resolved = id ? characterAssets.find((asset) => asset.id === id) : null;
   if (resolved && resolved.id !== placeholderAsset.id) return resolved;
-  return defaultSceneAsset;
+  return characterAssets.find((asset) => asset.id === fallbackAssetId) ?? placeholderAsset;
 }
 
 // ---- appearance.ts ----
@@ -579,9 +572,7 @@ export function selectAppearance(
       ? optionsOrAssets
       : optionsOrAssets.assets ?? characterAssets;
     const fallbackId = suppliedAssets
-      ? (optionsOrAssets.some((asset) => asset.id === legacyFallbackId)
-          ? legacyFallbackId
-          : optionsOrAssets[0]?.id ?? legacyFallbackId)
+      ? legacyFallbackId
       : optionsOrAssets.fallbackId ?? fallbackAssetId;
     return legacySelectAppearance(runtime, request, now, assets, fallbackId);
   }
@@ -590,12 +581,9 @@ export function selectAppearance(
     ? { assets: optionsOrAssets }
     : optionsOrAssets;
   const assets = options.assets ?? characterAssets;
-  const requestedFallbackId = options.fallbackId ?? fallbackAssetId;
-  const fallback = assets.find((asset) => asset.id === requestedFallbackId) ??
-    assets.find((asset) => asset.visualEmotion?.emotion === "neutral") ??
-    assets[0];
+  const fallbackId = options.fallbackId ?? fallbackAssetId;
+  const fallback = assets.find((asset) => asset.id === fallbackId);
   if (!fallback) throw new Error("Missing appearance fallback");
-  const fallbackId = fallback.id;
   const previous = runtime.appearance;
   const current = assets.find((asset) => asset.id === previous?.assetId);
   const currentVisual = current?.visualEmotion;
