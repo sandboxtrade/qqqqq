@@ -474,7 +474,7 @@ export function findRenderFallbackAsset(requested: CharacterAsset) {
     })[0];
     if (semanticImage) return semanticImage;
   }
-  return technicalNeutralAsset;
+  return baseNeutralSceneAsset;
 }
 
 // ---- appearance.ts ----
