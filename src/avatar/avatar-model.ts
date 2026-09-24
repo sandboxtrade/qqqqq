@@ -261,22 +261,29 @@ export interface CharacterAsset {
 
 export function parseVisualEmotionFilename(filename: string) {
   const name = filename.split(/[\/]/u).at(-1) ?? filename;
-  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(png|jpe?g|webp)$/u.exec(name);
+  const match = /^([a-z_]+)\.(10|[1-9])\.([1-9]\d*)\.(png|jpe?g|webp)$/iu.exec(name);
   if (!match || !visualEmotionNames.has(match[1])) return null;
   return {
     emotion: match[1] as VisualEmotionName,
     intensity: Number(match[2]),
     variant: Number(match[3]),
-    extension: match[4],
+    extension: match[4].toLowerCase(),
   };
 }
 
 const sceneImageModules = typeof import.meta.glob === "function"
-  ? import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp}", {
-      eager: true,
-      query: "?url",
-      import: "default",
-    }) as Record<string, string>
+  ? {
+      ...import.meta.glob("../assets/character/scenes/*.{png,jpg,jpeg,webp}", {
+        eager: true,
+        query: "?url",
+        import: "default",
+      }) as Record<string, string>,
+      ...import.meta.glob("../assets/character/scenes/*.{PNG,JPG,JPEG,WEBP}", {
+        eager: true,
+        query: "?url",
+        import: "default",
+      }) as Record<string, string>,
+    }
   : {};
 
 const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale" | "scenePosition" | "pose" | "description">> = {
@@ -318,11 +325,23 @@ function createSceneAsset(src: string, emotion: VisualEmotionName, intensity: nu
 }
 
 function buildSceneAssets(): CharacterAsset[] {
-  return Object.entries(sceneImageModules).flatMap(([path, src]) => {
+  const byId = new Map<string, CharacterAsset>();
+  const extensionPriority = (path: string) => {
+    const lower = path.toLowerCase();
+    if (lower.endsWith(".png")) return 0;
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return 1;
+    return 2;
+  };
+  const entries = Object.entries(sceneImageModules).sort((a, b) =>
+    extensionPriority(a[0]) - extensionPriority(b[0]) || a[0].localeCompare(b[0]),
+  );
+  for (const [path, src] of entries) {
     const parsed = parseVisualEmotionFilename(path);
-    if (!parsed || typeof src !== "string") return [];
-    return [createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant)];
-  }).sort((a, b) => a.id.localeCompare(b.id));
+    if (!parsed || typeof src !== "string") continue;
+    const asset = createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant);
+    if (!byId.has(asset.id)) byId.set(asset.id, asset);
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 const placeholderAsset: CharacterAsset = {
@@ -343,7 +362,7 @@ const placeholderAsset: CharacterAsset = {
 };
 
 const bundledFallbackScene = createSceneAsset(baseNeutralSceneSrc, "neutral", 1, 1);
-const discoveredSceneAssets = buildSceneAssets().filter((asset) => asset.src !== bundledFallbackScene.src);
+const discoveredSceneAssets = buildSceneAssets().filter((asset) => asset.id !== bundledFallbackScene.id);
 export const characterAssets: readonly CharacterAsset[] = discoveredSceneAssets.length
   ? [bundledFallbackScene, ...discoveredSceneAssets, placeholderAsset]
   : [bundledFallbackScene, placeholderAsset];
