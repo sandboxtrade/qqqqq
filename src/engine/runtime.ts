@@ -762,6 +762,40 @@ export async function handleUserMessage(
       goal: localPlan.goal,
       tone: responsePlan.tone,
       length: responsePlan.length,
+      semantic: {
+        topic: nlu.topic,
+        focus: nlu.semantic.focus,
+        subject: nlu.semantic.subject,
+        stance: nlu.semantic.stance,
+        questionType: nlu.questionType,
+        isQuestion: nlu.isQuestion,
+        reciprocal: nlu.semantic.reciprocal,
+        asksCharacterView: nlu.semantic.asksCharacterView,
+        wantsAdvice: nlu.semantic.wantsAdvice,
+        wantsListening: nlu.semantic.wantsListening,
+        confidence: nlu.confidence,
+      },
+      decision: {
+        action: decision.action,
+        mode: decision.content.mode,
+        stance: decision.content.stance,
+        summary: decision.content.summary,
+        locked: decision.content.locked,
+        shouldAskFollowUp: decision.shouldAskFollowUp,
+        shouldReferenceMemory: decision.shouldReferenceMemory,
+      },
+      continuity: {
+        currentTopic: dialogueFrame.currentTopic,
+        previousTopic: dialogueFrame.previousTopic,
+        pendingQuestion: dialogueFrame.pendingQuestion,
+        previousUserText: dialogueFrame.previousUserText,
+        previousUserTextBeforeLast: dialogueFrame.previousUserTextBeforeLast,
+        previousCharacterText: dialogueFrame.previousCharacterText,
+        previousCharacterTextBeforeLast: dialogueFrame.previousCharacterTextBeforeLast,
+        lastUserIntent: dialogueFrame.lastUserIntent,
+        lastCharacterIntent: dialogueFrame.lastCharacterIntent,
+        turnsOnTopic: dialogueFrame.turnsOnTopic,
+      },
       relationship: {
         stage: relationship.stage,
         trust: relationship.trust,
@@ -801,7 +835,14 @@ export async function handleUserMessage(
         relationalReflection: thought.relationalReflection,
         retrospectiveEcho: thought.retrospectiveEcho,
       },
-      recentHistory: historyForDialogue.slice(-4).map((line) => ({
+      // The language layer needs enough immediate surface context to resolve
+      // "Точно?", "А ты?", "Почему?", pronouns and other elliptical turns.
+      // This history is stateless request context only; it is not model memory.
+      recentHistory: historyForDialogue.slice(-8).map((line) => ({
+        role: line.role,
+        text: line.text,
+      })),
+      recoveredHistory: retrospective?.evidence.slice(-3).map((line) => ({
         role: line.role,
         text: line.text,
       })),

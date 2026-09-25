@@ -313,6 +313,37 @@ function characterThoughtAnswer(context: DialogueContext) {
   ]);
 }
 
+const CONFIRM_PREVIOUS_REPLY_RE = /^(?:(?:а|ну)\s+)?(?:(?:ты\s+)?(?:(?:прям|точно|вообще)\s+)?уверена(?:\s+в\s+этом)?|точно|правда|серьезно|реально)[?.! ]*$/u;
+
+function capitalizeDialogue(value: string) {
+  const clean = value.trim();
+  return clean ? clean[0].toLocaleUpperCase("ru-RU") + clean.slice(1) : clean;
+}
+
+function confirmPreviousCharacterReply(context: DialogueContext, currentRaw: string) {
+  const current = normalizeDialogueForMatching(currentRaw);
+  if (!CONFIRM_PREVIOUS_REPLY_RE.test(current)) return undefined;
+  const previous = compactQuote(context.dialogueFrame.previousCharacterText, 150)?.trim();
+  if (!previous) return undefined;
+
+  // Reuse the immediately preceding claim rather than generating a new opinion
+  // about it. This makes the local fallback coherent even when cloud is down.
+  const core = previous
+    .replace(/^(?:да|нет)\s*[,.:;!—-]?\s*/iu, "")
+    .replace(/[.!?…]+$/u, "")
+    .trim();
+
+  if (!core) return "Да, точно. Я именно это и имела в виду.";
+  if (/^(?:не\s+знаю|не\s+уверена|скорее|возможно|может\s+быть|пока\s+не)/iu.test(core))
+    return `Да. Я именно это и имела в виду: ${core}.`;
+
+  const statement = capitalizeDialogue(core);
+  return semanticPick(context, `confirm-previous:${previous}`, [
+    `Да, точно. ${statement}.`,
+    `Точно. ${statement}.`,
+  ]);
+}
+
 function characterThoughtCertainty(context: DialogueContext) {
   const thought = context.thought;
   if (!thought?.position) return undefined;
@@ -1117,7 +1148,12 @@ function contextualAnswer(context: DialogueContext): string | undefined {
     ]);
   }
 
-  if (context.nlu.intent === "ask_character_opinion" && /^(?:(?:а|ну)\s+)?(?:ты\s+)?(?:(?:прям|точно|вообще)\s+)?уверена(?:\s+в\s+этом)?[?.! ]*$/u.test(current)) {
+  if (context.nlu.intent === "ask_followup" && CONFIRM_PREVIOUS_REPLY_RE.test(current)) {
+    const previousReply = confirmPreviousCharacterReply(context, current);
+    if (previousReply) return previousReply;
+  }
+
+  if (context.nlu.intent === "ask_character_opinion" && CONFIRM_PREVIOUS_REPLY_RE.test(current)) {
     const certainty = characterThoughtCertainty(context);
     if (certainty) return certainty;
   }

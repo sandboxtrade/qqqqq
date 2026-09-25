@@ -425,7 +425,7 @@ export function hasResolvableReference(nlu: LocalNLUResult, frame: DialogueFrame
   );
 }
 
-const CHARACTER_CERTAINTY_FOLLOWUP_RE = /^(?:(?:а|ну)\s+)?(?:ты\s+)?(?:(?:прям|точно|вообще)\s+)?уверена(?:\s+в\s+этом)?[?.! ]*$/u;
+const CHARACTER_CERTAINTY_FOLLOWUP_RE = /^(?:(?:а|ну)\s+)?(?:(?:ты\s+)?(?:(?:прям|точно|вообще)\s+)?уверена(?:\s+в\s+этом)?|точно|правда|серьезно|реально)[?.! ]*$/u;
 
 function resolveCharacterCertaintyFollowup(
   nlu: LocalNLUResult,
@@ -435,18 +435,29 @@ function resolveCharacterCertaintyFollowup(
   if (!currentText || !frame.previousCharacterText) return nlu;
   const normalized = normalizeDialogueForMatching(currentText);
   if (!CHARACTER_CERTAINTY_FOLLOWUP_RE.test(normalized)) return nlu;
+  const previousWasOpinion = [
+    "ask_character_opinion",
+    "ask_character_preference",
+    "ask_for_opinion",
+  ].includes(frame.lastUserIntent ?? "");
   return {
     ...nlu,
-    intent: "ask_character_opinion",
+    // Confirm the immediately preceding reply. If that reply followed an
+    // opinion question, preserve the durable-opinion path; otherwise keep this
+    // as a surface follow-up so a tiny "Точно?" cannot create a new stance.
+    intent: previousWasOpinion ? "ask_character_opinion" : "ask_followup",
     topic: frame.previousTopic ?? frame.currentTopic ?? nlu.topic ?? "conversation",
     isQuestion: true,
     questionType: "yes_no",
-    confidence: Math.max(nlu.confidence, 0.92),
+    confidence: Math.max(nlu.confidence, 0.94),
     semantic: {
       ...nlu.semantic,
       subject: "character",
-      stance: "ask_opinion",
-      asksCharacterView: true,
+      stance: previousWasOpinion ? "ask_opinion" : "ask_fact",
+      focus: previousWasOpinion
+        ? nlu.semantic.focus
+        : nlu.semantic.focus ?? frame.previousCharacterText,
+      asksCharacterView: previousWasOpinion,
       reciprocal: true,
     },
   };

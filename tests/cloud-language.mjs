@@ -105,12 +105,47 @@ const base = {
   goal: "answer",
   tone: "warm",
   length: "short",
+  semantic: {
+    topic: "conversation",
+    focus: "вчерашний разговор",
+    subject: "shared",
+    stance: "ask_opinion",
+    questionType: "what",
+    isQuestion: true,
+    reciprocal: false,
+    asksCharacterView: true,
+    wantsAdvice: false,
+    wantsListening: false,
+    confidence: 0.92,
+  },
+  decision: {
+    action: "answer",
+    mode: "personal_stance",
+    stance: "mixed",
+    summary: "Ответить по существу, сохраняя уже сформированное отношение.",
+    locked: true,
+    shouldAskFollowUp: false,
+    shouldReferenceMemory: true,
+  },
+  continuity: {
+    currentTopic: "conversation",
+    previousTopic: "conversation",
+    previousUserText: "Вчера мы об этом уже говорили.",
+    previousCharacterText: "Я бы не делала из этого быстрый вывод.",
+    lastUserIntent: "statement",
+    lastCharacterIntent: "ANSWER",
+    turnsOnTopic: 3,
+  },
   relationship: { stage: "close", trust: 0.7, closeness: 0.7, attachment: 0.6, security: 0.7, unresolvedTension: 0.1 },
   emotion: { mood: 0.6, happiness: 0.5, sadness: 0.1, irritation: 0.1, anxiety: 0.1, affection: 0.7, curiosity: 0.6, romanticInterest: 0.4 },
   romancePhase: "neutral",
   intimacy: { enabled: false, phase: "normal", comfort: 0, interest: 0, arousal: 0 },
   thought: { interpretation: "Пользователь возвращается к важной теме.", stance: "Не торопиться с выводом." },
-  recentHistory: [{ role: "user", text: "Вчера мы об этом уже говорили." }],
+  recentHistory: [
+    { role: "user", text: "Вчера мы об этом уже говорили." },
+    { role: "character", text: "Я бы не делала из этого быстрый вывод." },
+  ],
+  recoveredHistory: [],
   memories: ["Вчерашний разговор был важен пользователю."],
   facts: [],
   openThreads: [],
@@ -120,7 +155,20 @@ const base = {
 };
 
 assert.equal(shouldUseCloudLanguage(base), true);
-assert.equal(shouldUseCloudLanguage({ ...base, intent: "greeting", userText: "Привет" }), false);
+assert.equal(shouldUseCloudLanguage({
+  ...base,
+  intent: "greeting",
+  userText: "Привет",
+  semantic: { ...base.semantic, isQuestion: false, reciprocal: false },
+  continuity: { ...base.continuity, pendingQuestion: undefined },
+}), false);
+assert.equal(shouldUseCloudLanguage({
+  ...base,
+  intent: "short_yes",
+  userText: "Точно?",
+  semantic: { ...base.semantic, isQuestion: true, reciprocal: true, questionType: "yes_no" },
+  continuity: { ...base.continuity, previousCharacterText: "Нет, я сейчас не злюсь." },
+}), true);
 assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), true);
 assert.equal(shouldUseCloudLanguage({ ...base, intimacy: { enabled: true, phase: "high_intimacy", comfort: 1, interest: 1, arousal: 1 } }), false);
 
@@ -153,7 +201,13 @@ assert.equal(skipped.reason, "server-budget");
 assert.equal(skipped.budget?.estimatedMaxCostUsd, 0.0005);
 
 const callsBeforeLocal = fetchCalls.length;
-const localOnly = await renderCloudLanguage({ ...base, intent: "greeting", userText: "Привет" });
+const localOnly = await renderCloudLanguage({
+  ...base,
+  intent: "greeting",
+  userText: "Привет",
+  semantic: { ...base.semantic, isQuestion: false, reciprocal: false },
+  continuity: { ...base.continuity, pendingQuestion: undefined },
+});
 assert.equal(localOnly.attempted, false);
 assert.equal(localOnly.reason, "local-route");
 assert.equal(fetchCalls.length, callsBeforeLocal);

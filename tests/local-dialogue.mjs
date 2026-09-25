@@ -328,6 +328,21 @@ await test("short tomorrow-plan questions are understood as requests for ideas",
   }
 });
 
+await test("short certainty follow-ups stay anchored to Yuzuki's immediately previous reply", async () => {
+  const history = [
+    { role: "user", text: "Ты злая", timestamp: NOW - 2000 },
+    { role: "character", text: "Нет, я сейчас не злюсь.", timestamp: NOW - 1000, dialogueActs: ["ANSWER"] },
+  ];
+  for (const text of ["Точно?", "Правда?", "Серьезно?", "Реально?", "Ты уверена?"]) {
+    const result = await renderTurn({ text, turnId: `certainty_${text}`, history });
+    assert.equal(result.nlu.intent, "ask_followup", text);
+    assert.equal(result.nlu.semantic.focus, "Нет, я сейчас не злюсь.", text);
+    assert.equal(result.decision.action, "answer", text);
+    assert.match(result.rendered.text, /злюсь|злост|злая|именно это/iu, text);
+    assert.doesNotMatch(result.rendered.text, /ага,? поняла|мнение у меня|первого впечатления/iu, text);
+  }
+});
+
 await test("screenshot regressions no longer turn clear short messages into clarification", async () => {
   const stateQuestions = ["Ты как?", "Ну как настроение?", "настроние как?"];
   for (const text of stateQuestions) {

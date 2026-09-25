@@ -16,6 +16,40 @@ export interface CloudLanguageInput {
   goal: string;
   tone: string;
   length: string;
+  semantic: {
+    topic?: string;
+    focus?: string;
+    subject: string;
+    stance: string;
+    questionType?: string;
+    isQuestion: boolean;
+    reciprocal: boolean;
+    asksCharacterView: boolean;
+    wantsAdvice: boolean;
+    wantsListening: boolean;
+    confidence: number;
+  };
+  decision: {
+    action: string;
+    mode: string;
+    stance: string;
+    summary: string;
+    locked: boolean;
+    shouldAskFollowUp: boolean;
+    shouldReferenceMemory: boolean;
+  };
+  continuity: {
+    currentTopic?: string;
+    previousTopic?: string;
+    pendingQuestion?: string;
+    previousUserText?: string;
+    previousUserTextBeforeLast?: string;
+    previousCharacterText?: string;
+    previousCharacterTextBeforeLast?: string;
+    lastUserIntent?: string;
+    lastCharacterIntent?: string;
+    turnsOnTopic: number;
+  };
   relationship: {
     stage: string;
     trust: number;
@@ -56,6 +90,7 @@ export interface CloudLanguageInput {
     retrospectiveEcho?: string;
   };
   recentHistory: Array<{ role: CloudLanguageRole; text: string }>;
+  recoveredHistory?: Array<{ role: CloudLanguageRole; text: string }>;
   memories: string[];
   facts: string[];
   openThreads: string[];
@@ -127,6 +162,26 @@ const SIMPLE_LOCAL_INTENTS = new Set([
   "short_no",
 ]);
 
+const CONTEXTUAL_CLOUD_INTENTS = new Set([
+  "ask_why",
+  "ask_followup",
+  "clarification_request",
+  "reference_previous_topic",
+  "ask_character_opinion",
+  "ask_character_preference",
+]);
+
+function isContextDependentTurn(input: CloudLanguageInput) {
+  return Boolean(
+    input.semantic.isQuestion ||
+    input.semantic.reciprocal ||
+    CONTEXTUAL_CLOUD_INTENTS.has(input.intent) ||
+    input.continuity.pendingQuestion ||
+    (/^(?:а\s+|ну\s+)?(?:точно|правда|серьезно|серьёзно|реально|почему|зачем|и|а\s+ты)[?.! ]*$/iu.test(input.userText.trim()) &&
+      input.continuity.previousCharacterText)
+  );
+}
+
 let unavailableUntil = 0;
 
 function asNumber(value: unknown) {
@@ -189,8 +244,11 @@ function bindAbort(source: AbortSignal | undefined, target: AbortController) {
 export function shouldUseCloudLanguage(input: CloudLanguageInput) {
   if (input.silent) return false;
   if (!input.userText.trim() || !input.localDraft.trim()) return false;
-  if (SIMPLE_LOCAL_INTENTS.has(input.intent) && input.userText.trim().length < 80)
-    return false;
+  if (
+    SIMPLE_LOCAL_INTENTS.has(input.intent) &&
+    input.userText.trim().length < 80 &&
+    !isContextDependentTurn(input)
+  ) return false;
   // Very private/high-intimacy turns stay fully local. Besides preserving the
   // character's existing intimacy rules, this prevents a cloud wording layer
   // from becoming a dependency for Adult Mode.
