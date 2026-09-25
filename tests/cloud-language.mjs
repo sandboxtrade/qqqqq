@@ -121,7 +121,7 @@ const base = {
 
 assert.equal(shouldUseCloudLanguage(base), true);
 assert.equal(shouldUseCloudLanguage({ ...base, intent: "greeting", userText: "Привет" }), false);
-assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), false);
+assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), true);
 assert.equal(shouldUseCloudLanguage({ ...base, intimacy: { enabled: true, phase: "high_intimacy", comfort: 1, interest: 1, arousal: 1 } }), false);
 
 const result = await renderCloudLanguage(base);

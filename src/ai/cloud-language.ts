@@ -187,7 +187,7 @@ function bindAbort(source: AbortSignal | undefined, target: AbortController) {
 }
 
 export function shouldUseCloudLanguage(input: CloudLanguageInput) {
-  if (input.silent || input.locked) return false;
+  if (input.silent) return false;
   if (!input.userText.trim() || !input.localDraft.trim()) return false;
   if (SIMPLE_LOCAL_INTENTS.has(input.intent) && input.userText.trim().length < 80)
     return false;
