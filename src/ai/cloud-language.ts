@@ -65,25 +65,52 @@ export interface CloudLanguageInput {
     closeness: number;
     attachment: number;
     security: number;
+    respect: number;
     unresolvedTension: number;
   };
   emotion: {
     mood: number;
+    energy: number;
     happiness: number;
     sadness: number;
     irritation: number;
     anxiety: number;
-    affection: number;
     curiosity: number;
+    boredom: number;
+    affection: number;
     romanticInterest: number;
   };
   romancePhase?: string;
   intimacy?: {
     enabled: boolean;
     phase: string;
+    interactionStatus: string;
     comfort: number;
     interest: number;
     arousal: number;
+    initiativeDrive: number;
+    signal: {
+      kind: string;
+      strength: number;
+      explicit: boolean;
+      intimacyContext: boolean;
+    };
+    mind: {
+      active: boolean;
+      tenderness: number;
+      desire: number;
+      caution: number;
+      playfulness: number;
+      confidence: number;
+      conflicted: boolean;
+      preferredPace: string;
+      inwardArousal: boolean;
+      outwardArousal: boolean;
+      wantsCloseness: boolean;
+      wantsMore: boolean;
+      activePreferenceKeys: string[];
+      reflection: string;
+    };
   };
   thought?: {
     observation?: string;
@@ -102,9 +129,23 @@ export interface CloudLanguageInput {
   recentHistory: Array<{ role: CloudLanguageRole; text: string }>;
   /** Older lines selected by the local retrospective/retrieval pass. */
   recoveredHistory?: Array<{ role: CloudLanguageRole; text: string }>;
-  memories: string[];
-  facts: string[];
-  openThreads: string[];
+  memories: Array<{
+    summary: string;
+    kind: string;
+    importance: number;
+    emotionalWeight: number;
+    confidence: number;
+    retrievalStrength: number;
+  }>;
+  facts: Array<{
+    statement: string;
+    subject: string;
+    confidence: number;
+  }>;
+  openThreads: Array<{
+    summary: string;
+    priority: number;
+  }>;
   retrospective?: string;
   causal: string[];
   locked: boolean;
@@ -138,12 +179,17 @@ export interface CloudLanguageSignals {
   userTone?: string;
   relationshipEvent?: string;
   memoryCandidate?: string;
+  memoryUsed?: boolean;
+  emotionTone?: string;
 }
 
 export interface CloudLanguageResult {
   attempted: boolean;
   used: boolean;
+  /** Combined text for guards/debug/backward compatibility. */
   text?: string;
+  /** One to three separate chat bubbles chosen by the model. */
+  messages?: string[];
   model?: string;
   usage?: CloudLanguageUsage;
   budget?: CloudLanguageBudget;
@@ -154,6 +200,7 @@ export interface CloudLanguageResult {
 
 interface WorkerReply {
   text?: unknown;
+  messages?: unknown;
   model?: unknown;
   skipped?: unknown;
   reason?: unknown;
@@ -167,6 +214,8 @@ interface WorkerReply {
     userTone?: unknown;
     relationshipEvent?: unknown;
     memoryCandidate?: unknown;
+    memoryUsed?: unknown;
+    emotionTone?: unknown;
   };
   usage?: {
     inputTokens?: unknown;
@@ -252,7 +301,23 @@ function parseSignals(raw: WorkerReply["signals"]): CloudLanguageSignals | undef
     userTone: asOptionalString(raw.userTone, 32),
     relationshipEvent: asOptionalString(raw.relationshipEvent, 32),
     memoryCandidate: asOptionalString(raw.memoryCandidate, 220),
+    memoryUsed: typeof raw.memoryUsed === "boolean" ? raw.memoryUsed : undefined,
+    emotionTone: asOptionalString(raw.emotionTone, 32),
   };
+}
+
+
+function parseMessages(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const text = item.replace(/\s+/gu, " ").trim();
+    if (!text || text.length > 700) continue;
+    result.push(text);
+    if (result.length >= 3) break;
+  }
+  return result;
 }
 
 function responseReason(data: WorkerReply, status: number) {
@@ -353,7 +418,9 @@ export async function renderCloudLanguage(
       };
     }
 
-    const text = typeof data.text === "string" ? data.text.trim() : "";
+    const messages = parseMessages(data.messages);
+    const legacyText = typeof data.text === "string" ? data.text.trim() : "";
+    const text = messages.length ? messages.join("\n") : legacyText;
     if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
       return {
         attempted: true,
@@ -371,6 +438,7 @@ export async function renderCloudLanguage(
       attempted: true,
       used: true,
       text,
+      messages: messages.length ? messages : [text],
       model,
       usage,
       budget,

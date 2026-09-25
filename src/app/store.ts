@@ -530,8 +530,20 @@ async function sendTurn(message: ChatMessage) {
     }
     if (version !== epoch || controller.signal.aborted) return;
     useAppStore.setState((state) => {
+      const replyMessages = result.replyMessages?.length
+        ? result.replyMessages
+        : [{
+            id: result.replyId,
+            role: "character" as const,
+            text: result.reply,
+            timestamp: result.replyTimestamp,
+            templateId: result.renderMeta?.templateId,
+            dialogueActs: result.renderMeta?.dialogueActs,
+            appearanceAssetId: result.appearanceAssetId,
+          }];
+      const replyIds = new Set(replyMessages.map((item) => item.id));
       const savedMessages = state.messages
-        .filter((m) => m.id !== result.replyId)
+        .filter((m) => !replyIds.has(m.id))
         .map((m) =>
           m.id === message.id ? { ...m, delivery: "saved" as const } : m,
         );
@@ -545,18 +557,12 @@ async function sendTurn(message: ChatMessage) {
         failedMessageIds: state.failedMessageIds.filter((id) => id !== message.id),
         messages: result.silent
           ? savedMessages
-          : mergeChatMessages(savedMessages, [
-              {
-                id: result.replyId,
-                role: "character" as const,
-                text: result.reply,
-                timestamp: result.replyTimestamp,
-                templateId: result.renderMeta?.templateId,
-                dialogueActs: result.renderMeta?.dialogueActs,
-                appearanceAssetId: result.appearanceAssetId,
-                delivery: "saved" as const,
-              },
-            ]),
+          : mergeChatMessages(
+              savedMessages,
+              replyMessages
+                .filter((item) => !item.silent && item.text.trim())
+                .map((item) => ({ ...item, delivery: "saved" as const })),
+            ),
       };
     });
   } catch (error) {

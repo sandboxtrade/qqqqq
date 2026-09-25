@@ -2394,6 +2394,81 @@ await test("intimacy mutuality increases comfort and attraction without skipping
   assert.ok(cared.state.arousal < 0.4);
 });
 
+await test("suggestive flirting raises arousal mainly after real relational closeness", () => {
+  const closePrevious = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    phase: "romantic",
+    interactionStatus: "open",
+    comfort: 0.66,
+    interest: 0.6,
+    arousal: 0.12,
+    initiativeDrive: 0.18,
+  };
+  const closeInput = intimacyTurnInput(
+    { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true },
+    closePrevious,
+  );
+  const closeResult = planIntimacyTurn(closeInput);
+
+  const distantPrevious = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    phase: "normal",
+    interactionStatus: "inactive",
+    comfort: 0.28,
+    interest: 0.22,
+    arousal: 0.12,
+    initiativeDrive: 0.05,
+  };
+  const distantInput = intimacyTurnInput(
+    { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true },
+    distantPrevious,
+  );
+  distantInput.relationship = {
+    ...initialRelationshipState,
+    trust: 0.42,
+    closeness: 0.34,
+    attachment: 0.22,
+    security: 0.46,
+    stage: "familiar",
+    updatedAt: now,
+  };
+  distantInput.emotion = {
+    ...initialEmotionalState,
+    affection: 0.36,
+    romanticInterest: 0.12,
+    energy: 0.7,
+    updatedAt: now,
+  };
+  const distantResult = planIntimacyTurn(distantInput);
+
+  const closeGain = closeResult.state.arousal - closePrevious.arousal;
+  const distantGain = distantResult.state.arousal - distantPrevious.arousal;
+  assert.ok(closeGain > distantGain * 2, `expected bond-gated arousal: ${closeGain} vs ${distantGain}`);
+  assert.ok(closeResult.state.interest > closePrevious.interest);
+  assert.ok(distantResult.state.interest > distantPrevious.interest, "flirt can still build attraction before arousal is strong");
+});
+
+await test("adult mode remains a hard gate for flirt-driven arousal", () => {
+  const previous = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: false,
+    comfort: 0.8,
+    interest: 0.8,
+    arousal: 0,
+  };
+  const result = planIntimacyTurn(
+    intimacyTurnInput(
+      { kind: "flirt", strength: 1, explicit: false, intimacyContext: true },
+      previous,
+    ),
+  );
+  assert.equal(result.action, "gated");
+  assert.equal(result.state.arousal, 0);
+  assert.equal(result.state.phase, "normal");
+});
+
 await test("intimacy engine requires a current-turn cue and never escalates from old consent alone", () => {
   const previous = {
     ...createInitialIntimacyState(now),
@@ -3269,6 +3344,46 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(workerSource, /slice\(-12\)/);
   assert.doesNotMatch(workerSource, /high-intimacy-local/);
   assert.match(clientSource, /return Boolean\(input\.userText\.trim\(\)\)/);
+});
+
+await test("close adult flirting carries intimacy mind and bond-gated arousal into GPT", () => {
+  const nluSource = readFileSync(new URL("../src/local-dialogue/nlu.ts", import.meta.url), "utf8");
+  const intimacySource = readFileSync(new URL("../src/intimacy/intimacy.ts", import.meta.url), "utf8");
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  assert.match(nluSource, /suggestiveCompliment/);
+  assert.match(nluSource, /strength:\s*0\.9/);
+  assert.match(intimacySource, /closeEnoughForArousal/);
+  assert.match(intimacySource, /inwardArousal = active/);
+  assert.match(intimacySource, /outwardArousal = active/);
+  assert.match(runtimeSource, /inwardArousal:\s*intimacyMind\.inwardArousal/);
+  assert.match(runtimeSource, /outwardArousal:\s*intimacyMind\.outwardArousal/);
+  assert.match(runtimeSource, /kind:\s*nlu\.semantic\.intimacy\.kind/);
+  assert.match(workerSource, /Флирт, комплименты и влечение:/);
+  assert.match(workerSource, /intimacy\.mind\.inwardArousal=true/);
+  assert.match(workerSource, /intimacy\.mind\.outwardArousal=true/);
+  assert.match(workerSource, /raw\.intimacy\?\.mind\?\.inwardArousal/);
+  assert.match(workerSource, /raw\.intimacy\?\.signal\?\.kind/);
+});
+
+await test("GPT-first chat can use weighted memory, visible affect and several saved bubbles", () => {
+  const clientSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
+  const memorySource = readFileSync(new URL("../src/memory/memory-consolidation.ts", import.meta.url), "utf8");
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  assert.match(clientSource, /emotionalWeight:\s*number/);
+  assert.match(clientSource, /memoryUsed\?: boolean/);
+  assert.match(workerSource, /function memoryItems/);
+  assert.match(workerSource, /function deriveAffectProfile/);
+  assert.match(workerSource, /\["memoryEcho", rawThought\.memoryEcho/);
+  assert.match(workerSource, /messages:\s*\{[\s\S]*maxItems:\s*3/);
+  assert.match(runtimeSource, /const memoryQuery = input\.text\.trim\(\)\.split/);
+  assert.match(runtimeSource, /const characterEvents = \(silent \? \[""\] : replyParts\)/);
+  assert.match(runtimeSource, /messagePart:\s*\{ index: index \+ 1, count: all\.length \}/);
+  assert.match(storeSource, /result\.replyMessages\?\.length/);
+  assert.match(memorySource, /payload\.messagePart\?\.index/);
+  assert.match(memorySource, /payload\.memoryText/);
 });
 
 console.log(

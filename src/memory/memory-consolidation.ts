@@ -25,6 +25,20 @@ function eventText(event: CharacterEvent) {
   return String((event.payload as { text?: string })?.text ?? "").trim();
 }
 
+function eventMemoryText(event: CharacterEvent) {
+  const payload = event.payload as {
+    text?: string;
+    memoryText?: string;
+    messagePart?: { index?: number; count?: number };
+  };
+  if (event.type === "message" && event.source === "character") {
+    if ((payload.messagePart?.index ?? 1) > 1) return "";
+    const combined = String(payload.memoryText ?? "").trim();
+    if (combined) return combined;
+  }
+  return eventText(event);
+}
+
 function topicsFrom(text: string) {
   return [
     ...new Set(
@@ -127,7 +141,7 @@ function memoryFromEvent(
       : "";
   const text =
     event.type === "message" || event.type === "character_action"
-      ? eventText(event)
+      ? eventMemoryText(event)
       : worldSummary;
   if (!text || text.length < 3) return null;
   if (

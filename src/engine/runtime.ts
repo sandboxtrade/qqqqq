@@ -459,8 +459,27 @@ export async function handleUserMessage(
       localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
       appearanceAssetId?: string;
     };
+    const recoveredReplies = boot.recentConversation
+      .filter((line) =>
+        line.role === "character" &&
+        (line.id === replyId || line.id.startsWith(`${replyId}_`)),
+      )
+      .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+    const replyMessages = recoveredReplies.length
+      ? recoveredReplies
+      : [{
+          id: replyId,
+          role: "character" as const,
+          text: String(payload.text ?? ""),
+          timestamp: existing.timestamp,
+          silent: payload.silent === true,
+          templateId: payload.localDialogue?.templateId,
+          dialogueActs: payload.localDialogue?.dialogueActs,
+          appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
+        }];
     return {
-      reply: String(payload.text ?? ""),
+      reply: replyMessages.map((line) => line.text).join("\n"),
+      replyMessages,
       silent: payload.silent === true,
       replyId,
       replyTimestamp: existing.timestamp,
@@ -503,9 +522,17 @@ export async function handleUserMessage(
   });
   options.onPhase?.("Вспоминаем разговор…");
   const contextStarted = performance.now();
+  // Short follow-ups rarely contain enough words to retrieve the right durable
+  // memory on their own ("точно?", "а он?", "почему?"). Use the two most
+  // recent surface turns as retrieval context without treating them as new facts.
+  const memoryQuery = input.text.trim().split(/\s+/u).filter(Boolean).length <= 8
+    ? [...options.history.slice(-2).map((line) => line.text), input.text]
+        .filter(Boolean)
+        .join("\n")
+    : input.text;
   const [, memoryContext, history] = await Promise.all([
     repository.appendEvent(userEvent),
-    retrieveMemoryContext(input.text, repository, now),
+    retrieveMemoryContext(memoryQuery, repository, now),
     base.revision !== current.revision
       ? repository.listConversationEvents({ limit: 80 }).then(page => conversationFrom(page.events))
       : Promise.resolve(options.history),
@@ -752,6 +779,7 @@ export async function handleUserMessage(
   checkSignal(signal);
   const localGuarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
   let guarded = localGuarded;
+  let replyParts = localGuarded.text ? [localGuarded.text] : [];
   let cloudLanguage: CloudLanguageResult = { attempted: false, used: false, reason: "local-only" };
   if (!silent) {
     cloudLanguage = await renderCloudLanguage({
@@ -810,25 +838,52 @@ export async function handleUserMessage(
         closeness: relationship.closeness,
         attachment: relationship.attachment,
         security: relationship.security,
+        respect: relationship.respect,
         unresolvedTension: relationship.unresolvedTension,
       },
       emotion: {
         mood: emotion.mood,
+        energy: emotion.energy,
         happiness: emotion.happiness,
         sadness: emotion.sadness,
         irritation: emotion.irritation,
         anxiety: emotion.anxiety,
-        affection: emotion.affection,
         curiosity: emotion.curiosity,
+        boredom: emotion.boredom,
+        affection: emotion.affection,
         romanticInterest: emotion.romanticInterest,
       },
       romancePhase: romance.state.phase,
       intimacy: {
         enabled: intimacy.state.adultModeEnabled,
         phase: intimacy.state.phase,
+        interactionStatus: intimacy.state.interactionStatus,
         comfort: intimacy.state.comfort,
         interest: intimacy.state.interest,
         arousal: intimacy.state.arousal,
+        initiativeDrive: intimacy.state.initiativeDrive,
+        signal: {
+          kind: nlu.semantic.intimacy.kind,
+          strength: nlu.semantic.intimacy.strength,
+          explicit: nlu.semantic.intimacy.explicit,
+          intimacyContext: nlu.semantic.intimacy.intimacyContext === true,
+        },
+        mind: {
+          active: intimacyMind.active,
+          tenderness: intimacyMind.tenderness,
+          desire: intimacyMind.desire,
+          caution: intimacyMind.caution,
+          playfulness: intimacyMind.playfulness,
+          confidence: intimacyMind.confidence,
+          conflicted: intimacyMind.conflicted,
+          preferredPace: intimacyMind.preferredPace,
+          inwardArousal: intimacyMind.inwardArousal,
+          outwardArousal: intimacyMind.outwardArousal,
+          wantsCloseness: intimacyMind.wantsCloseness,
+          wantsMore: intimacyMind.wantsMore,
+          activePreferenceKeys: intimacyMind.activePreferenceKeys,
+          reflection: intimacyMind.reflection,
+        },
       },
       thought: {
         observation: thought.observation,
@@ -845,7 +900,7 @@ export async function handleUserMessage(
       },
       // v0.17: GPT owns normal conversational continuity. Give it a real
       // short-term dialogue window; durable memory still comes from Local Brain.
-      recentHistory: historyForDialogue.slice(-12).map((line) => ({
+      recentHistory: historyForDialogue.slice(-14).map((line) => ({
         role: line.role,
         text: line.text,
       })),
@@ -853,9 +908,23 @@ export async function handleUserMessage(
         role: line.role,
         text: line.text,
       })),
-      memories: memoryContext.memories.slice(0, 2).map((memory) => memory.summary),
-      facts: memoryContext.facts.slice(0, 3).map((fact) => fact.statement),
-      openThreads: memoryContext.openThreads.slice(0, 1).map((thread) => thread.summary),
+      memories: memoryContext.memories.slice(0, 6).map((memory) => ({
+        summary: memory.summary,
+        kind: memory.kind,
+        importance: memory.importance,
+        emotionalWeight: memory.emotionalWeight,
+        confidence: memory.confidence,
+        retrievalStrength: memory.retrievalStrength,
+      })),
+      facts: memoryContext.facts.slice(0, 6).map((fact) => ({
+        statement: fact.statement,
+        subject: fact.subject,
+        confidence: fact.confidence,
+      })),
+      openThreads: memoryContext.openThreads.slice(0, 3).map((thread) => ({
+        summary: thread.summary,
+        priority: thread.priority,
+      })),
       retrospective: retrospective?.summary,
       causal: causalRelations.slice(0, 2).map((relation) =>
         `${relation.cause} → ${relation.effect}`,
@@ -865,8 +934,15 @@ export async function handleUserMessage(
     }, signal);
     checkSignal(signal);
     if (cloudLanguage.used && cloudLanguage.text) {
+      const candidateParts = (cloudLanguage.messages?.length
+        ? cloudLanguage.messages
+        : [cloudLanguage.text])
+        .map((part) => part.replace(/\s+/gu, " ").trim())
+        .filter(Boolean)
+        .slice(0, 3);
+      const candidateText = candidateParts.join(" ");
       const cloudGuarded = guardCloudCharacterReply(
-        cloudLanguage.text,
+        candidateText,
         input.text,
         decision,
         responsePlan,
@@ -874,74 +950,83 @@ export async function handleUserMessage(
       // GPT owns ordinary conversational wording/continuity. Local Guard now
       // protects only durable invariants; if one is violated we keep the local
       // fallback rather than persisting a contradictory character state.
-      if (!cloudGuarded.usedFallback) guarded = cloudGuarded;
-      else cloudLanguage = { ...cloudLanguage, used: false, reason: cloudGuarded.reason ?? "response-guard" };
+      if (!cloudGuarded.usedFallback && candidateParts.length) {
+        replyParts = candidateParts;
+        guarded = { ...cloudGuarded, text: candidateParts.join("\n") };
+      } else {
+        cloudLanguage = { ...cloudLanguage, used: false, reason: cloudGuarded.reason ?? "response-guard" };
+      }
     }
   }
-  const reply = guarded.text;
+  if (!replyParts.length && guarded.text) replyParts = [guarded.text];
+  const reply = replyParts.join("\n");
   const generationMs = Math.round(performance.now() - generationStarted);
-  // Locked/local answers can be shown after validation, before the network commit.
-  // They remain explicitly marked unsaved until commitTurn succeeds.
+  // Show one temporary combined bubble while the turn is still unsaved. After
+  // commit, a cloud turn may materialize as 2–3 separate human-like bubbles.
   if (!silent) publish(reply);
   const replyTimestamp = runtimeNow({
     ...before,
     emotion,
     relationship,
   });
-  const characterEvent = createEvent({
-    id: replyId,
-    type: "message",
-    source: "character",
-    timestamp: replyTimestamp,
-    payload: {
-      text: reply,
-      silent,
-      inReplyTo: input.id,
-      decision: decision.action,
-      tone: responsePlan.tone,
-      contentMode: decision.content.mode,
-      contentStance: decision.content.stance,
-      contentLocked: decision.content.locked,
-      visualCue: responsePlan.visualCue,
-      mindContinuity:
-        thought.topic && thought.topicKey && thought.position && thought.positionReason && thought.persistence >= 0.58
+  const characterEvents = (silent ? [""] : replyParts).map((part, index, all) =>
+    createEvent({
+      id: index === 0 ? replyId : `${replyId}_${index + 1}`,
+      type: "message",
+      source: "character",
+      timestamp: replyTimestamp + index * 700,
+      payload: {
+        text: part,
+        memoryText: index === 0 && all.length > 1 ? reply : undefined,
+        silent,
+        inReplyTo: input.id,
+        messagePart: { index: index + 1, count: all.length },
+        decision: decision.action,
+        tone: responsePlan.tone,
+        contentMode: decision.content.mode,
+        contentStance: decision.content.stance,
+        contentLocked: decision.content.locked,
+        visualCue: responsePlan.visualCue,
+        mindContinuity:
+          index === 0 && thought.topic && thought.topicKey && thought.position && thought.positionReason && thought.persistence >= 0.58
+            ? {
+                topic: thought.topic,
+                topicKey: thought.topicKey,
+                position: thought.position,
+                reason: thought.positionReason,
+                confidence: thought.positionConfidence,
+                persistence: thought.persistence,
+                reconsideration: thought.reconsideration,
+                challengeDirection: thought.challengeDirection,
+                changedFrom: thought.changedFrom,
+              }
+            : undefined,
+        romanceAction: index === 0 ? romance.action : "none",
+        romancePhase: romance.state.phase,
+        intimacyAction: index === 0 ? intimacy.action : "none",
+        intimacyPhase: intimacy.state.phase,
+        intimacyMind: index === 0 && intimacyMind.active
           ? {
-              topic: thought.topic,
-              topicKey: thought.topicKey,
-              position: thought.position,
-              reason: thought.positionReason,
-              confidence: thought.positionConfidence,
-              persistence: thought.persistence,
-              reconsideration: thought.reconsideration,
-              challengeDirection: thought.challengeDirection,
-              changedFrom: thought.changedFrom,
+              desire: intimacyMind.desire,
+              tenderness: intimacyMind.tenderness,
+              caution: intimacyMind.caution,
+              conflicted: intimacyMind.conflicted,
+              preferredPace: intimacyMind.preferredPace,
+              wantsCloseness: intimacyMind.wantsCloseness,
+              wantsMore: intimacyMind.wantsMore,
             }
           : undefined,
-      romanceAction: romance.action,
-      romancePhase: romance.state.phase,
-      intimacyAction: intimacy.action,
-      intimacyPhase: intimacy.state.phase,
-      intimacyMind: intimacyMind.active
-        ? {
-            desire: intimacyMind.desire,
-            tenderness: intimacyMind.tenderness,
-            caution: intimacyMind.caution,
-            conflicted: intimacyMind.conflicted,
-            preferredPace: intimacyMind.preferredPace,
-            wantsCloseness: intimacyMind.wantsCloseness,
-            wantsMore: intimacyMind.wantsMore,
-          }
-        : undefined,
-      appearanceAssetId: appearance.assetId,
-      localDialogue: {
-        templateId: rendered.templateId,
-        dialogueActs: rendered.dialogueActs,
-        openingPhrase: rendered.openingPhrase,
-        fallbackLevel: rendered.fallbackLevel,
+        appearanceAssetId: appearance.assetId,
+        localDialogue: {
+          templateId: rendered.templateId,
+          dialogueActs: rendered.dialogueActs,
+          openingPhrase: index === 0 ? rendered.openingPhrase : undefined,
+          fallbackLevel: rendered.fallbackLevel,
+        },
       },
-    },
-    importance: 0.35,
-  });
+      importance: index === 0 ? 0.35 : 0.2,
+    }),
+  );
   const world = markUserInteraction(before.world, replyTimestamp, {
     engaged: !silent,
   });
@@ -951,7 +1036,7 @@ export async function handleUserMessage(
     await repository.commitTurn(
       [
         userEvent,
-        characterEvent,
+        ...characterEvents,
         ...new Map(
           [
             ...(current.pendingWorldEvents ?? []),
@@ -974,8 +1059,12 @@ export async function handleUserMessage(
       localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
       appearanceAssetId?: string;
     };
+    const savedReplies = boot.recentConversation
+      .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
+      .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     return {
-      reply: String(savedPayload.text ?? ""),
+      reply: savedReplies.length ? savedReplies.map((line) => line.text).join("\n") : String(savedPayload.text ?? ""),
+      replyMessages: savedReplies.length ? savedReplies : undefined,
       silent: savedPayload.silent === true,
       replyId,
       replyTimestamp: saved!.timestamp,
@@ -1058,6 +1147,16 @@ export async function handleUserMessage(
   };
   return {
     reply,
+    replyMessages: characterEvents.map((event) => ({
+      id: event.id,
+      role: "character" as const,
+      text: String((event.payload as { text?: string }).text ?? ""),
+      timestamp: event.timestamp,
+      silent,
+      templateId: rendered.templateId,
+      dialogueActs: rendered.dialogueActs,
+      appearanceAssetId: appearance.assetId,
+    })),
     silent,
     replyId,
     replyTimestamp,

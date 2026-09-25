@@ -12,7 +12,11 @@ let fetchCalls = [];
 let reply = {
   status: 200,
   body: {
-    text: "Да, я поняла, о чём ты. Тут я бы не спешила с выводом.",
+    text: "Да, я поняла, о чём ты.\nПросто я бы тут не спешила с выводом.",
+    messages: [
+      "Да, я поняла, о чём ты.",
+      "Просто я бы тут не спешила с выводом.",
+    ],
     model: "gpt-6-luna",
     usage: {
       inputTokens: 720,
@@ -38,6 +42,8 @@ let reply = {
       userTone: "neutral",
       relationshipEvent: "none",
       memoryCandidate: "",
+      memoryUsed: true,
+      emotionTone: "warm",
     },
   },
 };
@@ -154,19 +160,51 @@ const base = {
     isAwake: true,
     activityDetail: "просто лежу и даю голове немного затихнуть",
   },
-  relationship: { stage: "close", trust: 0.7, closeness: 0.7, attachment: 0.6, security: 0.7, unresolvedTension: 0.1 },
-  emotion: { mood: 0.6, happiness: 0.5, sadness: 0.1, irritation: 0.1, anxiety: 0.1, affection: 0.7, curiosity: 0.6, romanticInterest: 0.4 },
+  relationship: { stage: "close", trust: 0.7, closeness: 0.7, attachment: 0.6, security: 0.7, respect: 0.8, unresolvedTension: 0.1 },
+  emotion: { mood: 0.6, energy: 0.55, happiness: 0.5, sadness: 0.1, irritation: 0.1, anxiety: 0.1, curiosity: 0.6, boredom: 0.1, affection: 0.7, romanticInterest: 0.4 },
   romancePhase: "neutral",
-  intimacy: { enabled: false, phase: "normal", comfort: 0, interest: 0, arousal: 0 },
+  intimacy: {
+    enabled: false,
+    phase: "normal",
+    interactionStatus: "inactive",
+    comfort: 0,
+    interest: 0,
+    arousal: 0,
+    initiativeDrive: 0,
+    signal: { kind: "none", strength: 0, explicit: false, intimacyContext: false },
+    mind: {
+      active: false,
+      tenderness: 0,
+      desire: 0,
+      caution: 0,
+      playfulness: 0,
+      confidence: 0,
+      conflicted: false,
+      preferredPace: "slow",
+      inwardArousal: false,
+      outwardArousal: false,
+      wantsCloseness: false,
+      wantsMore: false,
+      activePreferenceKeys: [],
+      reflection: "Intimacy is not currently active in her attention.",
+    },
+  },
   thought: { interpretation: "Пользователь возвращается к важной теме.", stance: "Не торопиться с выводом." },
   recentHistory: [
     { role: "user", text: "Вчера мы об этом уже говорили." },
     { role: "character", text: "Я бы не делала из этого быстрый вывод." },
   ],
   recoveredHistory: [],
-  memories: ["Вчерашний разговор был важен пользователю."],
-  facts: [],
-  openThreads: [],
+  memories: [{
+    summary: "Вчерашний разговор был важен пользователю.",
+    kind: "episodic",
+    importance: 0.8,
+    emotionalWeight: 0.7,
+    confidence: 0.9,
+    retrievalStrength: 0.8,
+  }],
+  facts: [{ statement: "Пользователь не любит поспешные выводы.", subject: "user", confidence: 0.85 }],
+  openThreads: [{ summary: "Вернуться к вчерашнему разговору.", priority: 0.7 }],
   causal: [],
   locked: false,
   silent: false,
@@ -188,7 +226,33 @@ assert.equal(shouldUseCloudLanguage({
   continuity: { ...base.continuity, previousCharacterText: "Нет, я сейчас не злюсь." },
 }), true);
 assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), true);
-assert.equal(shouldUseCloudLanguage({ ...base, intimacy: { enabled: true, phase: "high_intimacy", comfort: 1, interest: 1, arousal: 1 } }), true);
+assert.equal(shouldUseCloudLanguage({
+  ...base,
+  intimacy: {
+    ...base.intimacy,
+    enabled: true,
+    phase: "high_intimacy",
+    interactionStatus: "open",
+    comfort: 1,
+    interest: 1,
+    arousal: 1,
+    initiativeDrive: 0.8,
+    signal: { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true },
+    mind: {
+      ...base.intimacy.mind,
+      active: true,
+      desire: 0.9,
+      playfulness: 0.8,
+      confidence: 0.8,
+      inwardArousal: true,
+      outwardArousal: true,
+      wantsCloseness: true,
+      wantsMore: true,
+      preferredPace: "responsive",
+      reflection: "The attraction is strong enough to show in her wording.",
+    },
+  },
+}), true);
 assert.equal(shouldUseCloudLanguage({ ...base, silent: true }), false);
 
 const result = await renderCloudLanguage(base);
@@ -201,6 +265,12 @@ assert.deepEqual(result.budget?.compactionSteps, ["recent-8"]);
 assert.equal(result.conversation?.continuesPrevious, true);
 assert.equal(result.conversation?.topic, "вчерашний разговор");
 assert.equal(result.signals?.userTone, "neutral");
+assert.equal(result.signals?.memoryUsed, true);
+assert.equal(result.signals?.emotionTone, "warm");
+assert.deepEqual(result.messages, [
+  "Да, я поняла, о чём ты.",
+  "Просто я бы тут не спешила с выводом.",
+]);
 assert.equal(idTokenCalls, 1);
 assert.equal(appCheckTokenCalls, 1);
 assert.equal(fetchCalls.length, 1);
@@ -212,6 +282,10 @@ assert.equal(fetchCalls[0].options.credentials, "omit");
 assert.equal(fetchCalls[0].options.cache, "no-store");
 assert.equal(JSON.parse(fetchCalls[0].options.body).userText, base.userText);
 assert.equal(JSON.parse(fetchCalls[0].options.body).world.activity, "relaxing");
+assert.equal(JSON.parse(fetchCalls[0].options.body).memories[0].importance, 0.8);
+assert.equal(JSON.parse(fetchCalls[0].options.body).emotion.energy, 0.55);
+assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.signal.kind, "none");
+assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.mind.inwardArousal, false);
 
 reply = {
   status: 200,
@@ -229,4 +303,4 @@ assert.equal(localOnly.attempted, false);
 assert.equal(localOnly.reason, "local-route");
 assert.equal(fetchCalls.length, callsBeforeLocal);
 
-console.log("PASS cloud dialogue: GPT-first routing, Cloudflare transport, Auth, App Check, metadata, telemetry and local fallback");
+console.log("PASS cloud dialogue: GPT-first routing, multi-bubble replies, memory/emotion context, Cloudflare transport, Auth, App Check, metadata, telemetry and local fallback");

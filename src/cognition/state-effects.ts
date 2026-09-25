@@ -43,17 +43,43 @@ export function inferStateEffects(
   }
 
 
-  // Romance is not part of the starting relationship. It grows only from
-  // repeated, directed romantic signals. A generic compliment barely moves it;
-  // explicit flirting/affection moves it more, but still cannot jump stages.
+  // Romance grows from repeated directed signals, but the same compliment
+  // should land differently depending on the bond that already exists.
+  // A new acquaintance can be flattered; a close, trusted relationship can
+  // make an openly suggestive compliment genuinely affect attraction.
+  const bond = currentRelationship
+    ? Math.max(
+        0,
+        Math.min(
+          1,
+          currentRelationship.closeness * 0.34 +
+            currentRelationship.trust * 0.26 +
+            currentRelationship.attachment * 0.2 +
+            currentRelationship.security * 0.12 +
+            currentRelationship.respect * 0.08,
+        ),
+      )
+    : 0;
+  const suggestiveFlirt = /(?:секси|сексуальн|горяч|соблазн|желан|сводишь\s+меня\s+с\s+ума|не\s+могу\s+отвести.*глаз|шикарн(?:ая|ые)\s+(?:фигура|ноги|талия|губы)|офигенн(?:ая|ые)\s+(?:фигура|ноги|талия|губы))/iu.test(
+    perception.literalMeaning,
+  );
+
   if (sourceIntent === "flirt_character") {
-    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.02;
-    emotion.affection = (emotion.affection ?? 0) + 0.008;
+    const intensity = suggestiveFlirt ? 1 : 0.72;
+    emotion.romanticInterest =
+      (emotion.romanticInterest ?? 0) + 0.014 + bond * 0.024 * intensity;
+    emotion.affection = (emotion.affection ?? 0) + 0.006 + bond * 0.006;
+    emotion.happiness = (emotion.happiness ?? 0) + 0.008 + bond * 0.012 * intensity;
+    emotion.curiosity = (emotion.curiosity ?? 0) + 0.004 + bond * 0.008 * intensity;
+    relationship.closeness = (relationship.closeness ?? 0) + 0.002 + bond * 0.003;
+    if (bond >= 0.55)
+      relationship.attachment = (relationship.attachment ?? 0) + 0.0015 + bond * 0.0025;
   } else if (sourceIntent === "affection_declaration") {
-    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.016;
-    emotion.affection = (emotion.affection ?? 0) + 0.012;
+    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.014 + bond * 0.012;
+    emotion.affection = (emotion.affection ?? 0) + 0.012 + bond * 0.004;
   } else if (sourceIntent === "compliment_character") {
-    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.004;
+    emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.003 + bond * 0.006;
+    emotion.happiness = (emotion.happiness ?? 0) + 0.006 + bond * 0.005;
   }
 
   // Jealousy is an appraisal of a valued bond being threatened, not a global

@@ -211,8 +211,21 @@ function detectLocalIntimacySignal(normalized: string): LocalSemanticFrame["inti
   const approach = /(?:хочу\s+быть\s+ближе|давай\s+ближе|можешь\s+поцеловать|поцелуй\s+меня|обними\s+меня|хочу\s+быть\s+рядом|иди\s+сюда|сядь\s+ближе|подойди\s+ближе|можно\s+к\s+тебе\s+ближе|давай\s+поближе|прижмись\s+ко\s+мне|можно\s+я\s+тебя\s+обниму|можно\s+я\s+тебя\s+поцелую)/u.test(normalized);
   if (approach) return { kind: "approach", strength: 0.74, explicit: true, intimacyContext: true };
 
-  const flirt = /(?:флиртуешь|флирт|дразнишь|подкатываешь|соблазн|сексуальн|горячая|горячий|искушаешь|провоцируешь|заигрываешь|химия\s+между\s+нами)/u.test(normalized);
-  if (flirt) return { kind: "flirt", strength: 0.68, explicit: false, intimacyContext: true };
+  // Compliments have different intimacy weight. A warm "ты красивая" can
+  // increase closeness without pretending she is already sexually affected,
+  // while an openly suggestive compliment is a real flirt cue. Relationship
+  // and Adult Mode still decide whether that cue can become arousal later.
+  const suggestiveCompliment = /(?:ты\s+(?:(?:очень|прям|безумно|чертовски|реально)\s+)?(?:сексуальная|горячая|соблазнительная|желанная)|ты\s+(?:сводишь|свела)\s+меня\s+с\s+ума|не\s+могу\s+отвести\s+(?:от\s+тебя\s+)?глаз|от\s+тебя\s+(?:реально\s+)?трудно\s+оторваться|у\s+тебя\s+(?:(?:очень|прям)\s+)?(?:шикарная|офигенная|красивая)\s+(?:фигура|талия|ноги|губы)|мне\s+(?:очень|безумно)\s+нравится\s+(?:твоя\s+)?(?:фигура|талия|ноги|губы|взгляд))/u.test(normalized);
+  if (suggestiveCompliment)
+    return { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true };
+
+  const flirt = /(?:флиртуешь|флирт|дразнишь|подкатываешь|соблазн|сексуальн|горячая|горячий|искушаешь|провоцируешь|заигрываешь|химия\s+между\s+нами|ты\s+меня\s+смущаешь|хочу\s+тебя\s+подразнить)/u.test(normalized);
+  if (flirt) return { kind: "flirt", strength: 0.74, explicit: false, intimacyContext: true };
+
+  const appearanceCompliment = /(?:ты\s+(?:(?:такая|очень|невероятно|реально)\s+)?(?:красивая|прекрасная|симпатичная|милая)|тебе\s+(?:очень\s+)?ид[её]т|у\s+тебя\s+(?:красивые|офигенные|шикарные)\s+(?:глаза|волосы|улыбка)|мне\s+нравится\s+(?:твой\s+)?(?:голос|взгляд|улыбка))/u.test(normalized);
+  if (appearanceCompliment)
+    return { kind: "affection", strength: 0.64, explicit: false, intimacyContext: hasIntimateContext };
+
   const affection = /(?:обним|поцел|нежн|скучал|скучала|люблю\s+тебя|мне\s+хорошо\s+с\s+тобой|хочу\s+побыть\s+рядом|прижаться\s+к\s+тебе)/u.test(normalized);
   if (affection) return { kind: "affection", strength: 0.58, explicit: false, intimacyContext: hasIntimateContext };
   return { kind: "none", strength: 0, explicit: false, intimacyContext: hasIntimateContext };

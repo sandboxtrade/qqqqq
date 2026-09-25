@@ -645,6 +645,27 @@ await test("intimacy NLU is contextual and does not hijack ordinary desire", () 
   assert.equal(analyzeLocalNLU("Хочу тебя").semantic.intimacy.kind, "consent");
 });
 
+await test("suggestive compliments are stronger flirt signals than ordinary appearance compliments", () => {
+  const warmTurn = analyzeLocalNLU("Ты очень красивая");
+  const warm = warmTurn.semantic.intimacy;
+  assert.equal(warmTurn.intent, "compliment_character");
+  assert.equal(warm.kind, "affection");
+  assert.ok(warm.strength >= 0.6 && warm.strength < 0.8);
+
+  const boldTurn = analyzeLocalNLU("Ты чертовски сексуальная");
+  const bold = boldTurn.semantic.intimacy;
+  assert.equal(boldTurn.intent, "flirt_character");
+  assert.equal(bold.kind, "flirt");
+  assert.ok(bold.strength >= 0.88);
+  assert.equal(bold.intimacyContext, true);
+
+  const figureTurn = analyzeLocalNLU("У тебя шикарная фигура");
+  const figure = figureTurn.semantic.intimacy;
+  assert.equal(figureTurn.intent, "flirt_character");
+  assert.equal(figure.kind, "flirt");
+  assert.ok(figure.strength >= 0.88);
+});
+
 await test("intimacy short yes/no resolves only from an intimate previous turn", () => {
   const intimateHistory = [
     { role: "user", text: "Я не уверен, но хочу быть ближе", timestamp: NOW - 2000 },

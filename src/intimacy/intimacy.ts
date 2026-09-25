@@ -492,10 +492,14 @@ export function buildIntimacyMind(input: {
     : directPreference > 0.54 && confidence > 0.68
       ? "bold"
       : "responsive";
-  const inwardArousal = active && state.arousal >= 0.58;
-  const outwardArousal = active && state.phase === "high_intimacy" && state.arousal >= 0.78 && state.comfort >= 0.62;
+  const bonded = ["close", "deep"].includes(relationship.stage) &&
+    relationship.closeness >= 0.54 && relationship.trust >= 0.54;
+  const inwardArousal = active && state.arousal >= 0.48 && bonded;
+  const outwardArousal = active && bonded &&
+    state.arousal >= 0.7 && state.comfort >= 0.6 && state.interest >= 0.62 &&
+    caution < 0.42 && !["paused", "stopped", "hesitant"].includes(state.interactionStatus);
   const wantsCloseness = active && tenderness >= 0.52 && caution < 0.72;
-  const wantsMore = active && desire >= 0.62 && confidence >= 0.56 && caution < 0.46;
+  const wantsMore = active && desire >= 0.6 && confidence >= 0.56 && caution < 0.46;
   const activePreferenceKeys = (preferences?.items ?? [])
     .filter((item) => item.validUntil === undefined && item.stance === "like" && item.confidence >= 0.4)
     .sort((a, b) => b.confidence * b.strength - a.confidence * a.strength)
@@ -507,11 +511,15 @@ export function buildIntimacyMind(input: {
       ? "Desire is present, but caution and mutual comfort matter more than momentum."
       : state.phase === "aftercare"
         ? "Tenderness and emotional closeness are more important than escalation right now."
-        : wantsMore
-          ? "She wants more closeness and feels safe enough to show that desire without treating it as automatic consent."
-          : wantsCloseness
-            ? "She wants closeness, but prefers to let the interaction build rather than force a next step."
-            : "She notices the intimate context but is not trying to escalate it.";
+        : outwardArousal
+          ? "The attraction is strong enough that it can show in her wording and teasing. She can admit being affected, but it is still not automatic consent to any next step."
+          : inwardArousal
+            ? "She is genuinely aroused internally, though she may show it only as being flustered, bolder, or more teasing depending on confidence."
+            : wantsMore
+              ? "She wants more closeness and feels safe enough to show that desire without treating it as automatic consent."
+              : wantsCloseness
+                ? "She wants closeness, but prefers to let the interaction build rather than force a next step."
+                : "She notices the intimate context but is not trying to escalate it.";
   return {
     active, tenderness, desire, caution, playfulness, confidence, conflicted, preferredPace,
     activePreferenceKeys, inwardArousal, outwardArousal, wantsCloseness, wantsMore, reflection,
@@ -681,14 +689,51 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
   if (signal.kind === "affection" || signal.kind === "flirt") {
     state.phase = nextIntimacyPhase(state.phase, "close");
     state.interactionStatus = "open";
-    const mutuality = clampIntimacy(state.comfort * 0.55 + state.interest * 0.45);
-    state.comfort = clampIntimacy(state.comfort + (signal.kind === "affection" ? 0.055 : 0.025) * strength);
-    state.interest = clampIntimacy(state.interest + (signal.kind === "flirt" ? 0.085 : 0.055) * strength);
-    state.arousal = clampIntimacy(state.arousal + (signal.kind === "flirt" ? 0.11 : 0.035) * strength * (0.65 + mutuality * 0.35));
+
+    const bondHeat = clampIntimacy(
+      input.relationship.closeness * 0.3 +
+      input.relationship.trust * 0.24 +
+      input.relationship.attachment * 0.18 +
+      input.relationship.security * 0.1 +
+      input.emotion.affection * 0.09 +
+      input.emotion.romanticInterest * 0.09,
+    );
+    const mutuality = clampIntimacy(state.comfort * 0.5 + state.interest * 0.34 + bondHeat * 0.16);
+    const closeEnoughForArousal =
+      ["close", "deep"].includes(input.relationship.stage) &&
+      input.relationship.closeness >= 0.54 &&
+      input.relationship.trust >= 0.54 &&
+      state.comfort >= 0.42 &&
+      input.relationship.unresolvedTension < 0.28;
+
+    state.comfort = clampIntimacy(
+      state.comfort + (signal.kind === "affection" ? 0.055 : 0.028) * strength,
+    );
+    state.interest = clampIntimacy(
+      state.interest +
+        (signal.kind === "flirt" ? 0.09 + bondHeat * 0.035 : 0.052) * strength,
+    );
+
+    const affectionArousal = 0.024 * strength * (0.65 + mutuality * 0.35);
+    const flirtArousal = closeEnoughForArousal
+      ? (0.085 + bondHeat * 0.11) * strength * (0.72 + mutuality * 0.28)
+      : (0.018 + bondHeat * 0.028) * strength;
+    state.arousal = clampIntimacy(
+      state.arousal + (signal.kind === "flirt" ? flirtArousal : affectionArousal),
+    );
+
     const paceFactor = signal.kind === "flirt"
-      ? 0.82 + playfulPreference * 0.18
+      ? 0.84 + playfulPreference * 0.2 + (closeEnoughForArousal ? bondHeat * 0.08 : 0)
       : 0.9 + emotionalClosenessPreference * 0.1;
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + (signal.kind === "flirt" ? 0.075 : 0.045) * strength * (0.55 + mutuality * 0.45) * paceFactor * (1 - gradualPreference * 0.12));
+    state.initiativeDrive = clampIntimacy(
+      state.initiativeDrive +
+        (signal.kind === "flirt" ? 0.082 : 0.044) *
+          strength *
+          (0.52 + mutuality * 0.48) *
+          paceFactor *
+          (1 - gradualPreference * 0.1),
+    );
+
     state.lastInteractionAt = input.now;
     action = "warmth";
     return finish();
