@@ -49,15 +49,6 @@ export default function App() {
     loadOlder,
   } = useAppStore();
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
-  const dialogueStatus = lastTrace
-    ? lastTrace.cloudLanguage?.used
-      ? "gpt"
-      : "local"
-    : runtimeConfigurationError
-      ? "config"
-      : isLocalRepositoryAllowed
-        ? "local"
-        : "cloud";
   const visualCueKey = lastTrace
     ? [...messages]
         .reverse()
@@ -74,9 +65,6 @@ export default function App() {
     const onVisibility = () => {
       if (document.visibilityState === "visible") reconcileWorld(true);
     };
-    // Time-dependent world/romance state must continue to move while the app
-    // stays open. Passive ticks are local-only; focus/online also retry cloud
-    // maintenance immediately.
     const clockTimer = window.setInterval(() => {
       if (document.visibilityState === "visible") reconcileWorld(false);
     }, 60_000);
@@ -92,30 +80,47 @@ export default function App() {
   }, [reconcileWorld]);
 
   if (isFirebaseConfigured && authStatus === "signed_out") {
-    return (
-      <AuthGate busy={busy} error={error} onSignIn={() => void signIn()} />
-    );
+    return <AuthGate busy={busy} error={error} onSignIn={() => void signIn()} />;
   }
+
+  const transportKind = runtimeConfigurationError
+    ? "config"
+    : lastTrace?.cloudLanguage?.used
+      ? "gpt"
+      : lastTrace?.cloudLanguage?.attempted || lastTrace?.responseGuardFallback
+        ? "local"
+        : isLocalRepositoryAllowed
+          ? "local"
+          : "cloud";
+  const transportLabel =
+    transportKind === "config"
+      ? "CONFIG"
+      : transportKind === "gpt"
+        ? "GPT"
+        : transportKind === "local"
+          ? "LOCAL"
+          : "CLOUD";
+  const companionStatus = initializing
+    ? "просыпается…"
+    : ready
+      ? busy
+        ? "отвечает тебе"
+        : "рядом"
+      : "подключение…";
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <span className="mini-avatar">
-            {defaultCharacter.name.slice(0, 1)}
-          </span>
+          <span className="mini-avatar">{defaultCharacter.name.slice(0, 1)}</span>
           <div>
             <strong>{defaultCharacter.name}</strong>
-            <small>
-              {initializing ? "просыпается…" : ready ? "рядом" : "подключение…"}
-            </small>
+            <small>{companionStatus}</small>
           </div>
         </div>
-        <div className="top-status">
+        <div className={`top-status top-status-${transportKind}`}>
           <span className={ready ? "status-dot online" : "status-dot"} />
-          <span title={lastTrace?.cloudLanguage?.used ? "Ответ сформулирован GPT" : lastTrace?.cloudLanguage?.reason ?? undefined}>
-            {dialogueStatus}
-          </span>
+          <span>{transportLabel}</span>
         </div>
       </header>
 
@@ -125,7 +130,10 @@ export default function App() {
         visualCue={lastTrace?.responsePlan.visualCue ?? null}
         visualCueKey={visualCueKey}
         onNavigate={setActiveTab}
-        onQuietAction={(text) => { setActiveTab("chat"); void send(text); }}
+        onQuietAction={(text) => {
+          setActiveTab("chat");
+          void send(text);
+        }}
         quietActionDisabled={!ready || busy}
       />
 

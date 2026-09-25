@@ -222,7 +222,7 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
       setScene({ current: requested, previous: reduce ? null : previous, kind: transitionKind(previous, requested) });
       timer = setTimeout(() => {
         if (ticket === generation.current) setScene(s => ({ ...s, previous: null }));
-      }, 750);
+      }, 950);
     }).catch(() => {
       if (controller.signal.aborted || ticket !== generation.current) return;
       const fallback = findRenderFallbackAsset(requested);

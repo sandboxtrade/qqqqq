@@ -31,6 +31,7 @@ const timeLabel: Record<string, string> = {
   day: "день",
   evening: "вечер",
 };
+
 const relationshipLabel: Record<string, string> = {
   new: "знакомство",
   familiar: "приятели",
@@ -58,7 +59,10 @@ export function CharacterStage({
   const [transientCue, setTransientCue] = useState<AvatarVisualCue | null>(null);
 
   useEffect(() => {
-    if (!visualCue || !visualCueKey) { setTransientCue(null); return; }
+    if (!visualCue || !visualCueKey) {
+      setTransientCue(null);
+      return;
+    }
     setTransientCue(visualCue);
     const timer = window.setTimeout(() => setTransientCue(null), 6500);
     return () => window.clearTimeout(timer);
@@ -79,6 +83,26 @@ export function CharacterStage({
     [runtime, resolvedCue, busy],
   );
 
+  const currentActivity = runtime
+    ? (activityLabel[runtime.world.currentActivity] ?? runtime.world.currentActivity)
+    : "загрузка";
+  const currentTime = runtime ? (timeLabel[runtime.world.timeOfDay] ?? runtime.world.timeOfDay) : "";
+  const relationshipStage = runtime
+    ? (relationshipLabel[runtime.relationship.stage] ?? runtime.relationship.stage)
+    : "связь";
+  const warmth = runtime
+    ? runtime.relationship.closeness >= 0.74
+      ? "ощутимо тянется к тебе"
+      : runtime.relationship.closeness >= 0.5
+        ? "становится ближе"
+        : "привыкает к тебе"
+    : "";
+  const topSummary = runtime
+    ? busy
+      ? "собирает ответ"
+      : `${currentTime} · ${moodLabel}`
+    : "подготовка сцены";
+
   return (
     <section
       className={`stage live-photo-stage cue-${visualState.cue} ${busy ? "is-thinking" : ""}`}
@@ -97,26 +121,63 @@ export function CharacterStage({
           <strong>Тихий момент вдвоём</strong>
           <span>Без спешки и лишних слов</span>
           <div className="quiet-actions">
-            <button type="button" disabled={quietActionDisabled} onClick={() => onQuietAction?.("Вернёмся к разговору")}>Вернуться к разговору</button>
-            <button type="button" disabled={quietActionDisabled} onClick={() => onQuietAction?.("Стоп")}>Остановиться</button>
+            <button
+              type="button"
+              disabled={quietActionDisabled}
+              onClick={() => onQuietAction?.("Вернёмся к разговору")}
+            >
+              Вернуться к разговору
+            </button>
+            <button
+              type="button"
+              disabled={quietActionDisabled}
+              onClick={() => onQuietAction?.("Стоп")}
+            >
+              Остановиться
+            </button>
           </div>
         </div>
       )}
+
       <div className="stage-topline">
         <div className="presence-pill">
           <span
             className={
-              runtime?.world.isAwake === false
-                ? "presence-dot sleeping"
-                : "presence-dot"
+              runtime?.world.isAwake === false ? "presence-dot sleeping" : "presence-dot"
             }
           />
-          {busy
-            ? "думает…"
-            : runtime
-              ? (activityLabel[runtime.world.currentActivity] ??
-                runtime.world.currentActivity)
-              : "загрузка"}
+          {busy ? "думает…" : currentActivity}
+        </div>
+        <div className="stage-meta-pills" aria-hidden="true">
+          {currentTime ? <span className="stage-meta-pill">{currentTime}</span> : null}
+          <span className="stage-meta-pill subtle">{busy ? "ответ" : moodLabel}</span>
+        </div>
+      </div>
+
+      <div className="stage-bottom">
+        <div className="character-title">
+          <div>
+            <h1>{defaultCharacter.name}</h1>
+            <p>{topSummary}</p>
+          </div>
+          <span className="relationship-badge">{relationshipStage}</span>
+        </div>
+
+        <div className="stage-summary-row">
+          <span className="stage-summary-pill">{currentActivity}</span>
+          {warmth ? <span className="stage-summary-pill">{warmth}</span> : null}
+        </div>
+
+        <div className="quick-actions">
+          <button type="button" onClick={() => onNavigate("chat")}>Написать</button>
+          <button type="button" onClick={() => onNavigate("together")}>Побыть вместе</button>
+          <button
+            type="button"
+            disabled={quietActionDisabled}
+            onClick={() => onQuietAction?.("Как ты сейчас?")}
+          >
+            Как ты?
+          </button>
         </div>
       </div>
     </section>

@@ -17,6 +17,11 @@ function timeOf(timestamp: number) {
 }
 
 const BOTTOM_THRESHOLD_PX = 72;
+const starterPrompts = [
+  "Как ты сейчас?",
+  "О чём ты хочешь поговорить?",
+  "Побудем немного вместе?",
+];
 
 export function ChatScreen({
   messages,
@@ -115,8 +120,7 @@ export function ChatScreen({
               void onLoadOlder().then(() => {
                 window.requestAnimationFrame(() => {
                   if (!node) return;
-                  node.scrollTop =
-                    previousTop + Math.max(0, node.scrollHeight - previousHeight);
+                  node.scrollTop = previousTop + Math.max(0, node.scrollHeight - previousHeight);
                   updateBottomState();
                 });
               });
@@ -125,21 +129,21 @@ export function ChatScreen({
             {loadingOlder ? "Загружаем…" : "Показать более ранние сообщения"}
           </button>
         )}
+
         {!messages.length && (
           <div className="empty-chat">
             <Icon name="sparkle" size={22} />
             <strong>Разговор начинается здесь</strong>
             <span>
-              Она будет помнить важные вещи и возвращаться к незакрытым темам.
+              Она будет помнить важные вещи, менять состояние и возвращаться к незакрытым темам.
             </span>
           </div>
         )}
+
         {messages.map((message) => (
           <article key={message.id} className={`message-row ${message.role}`}>
             <div className={`bubble ${message.role}`}>
-              {message.proactive && (
-                <span className="proactive-label">сама написала</span>
-              )}
+              {message.proactive && <span className="proactive-label">сама написала</span>}
               <p>{message.text}</p>
               <time>
                 {timeOf(message.timestamp)}
@@ -153,11 +157,7 @@ export function ChatScreen({
               </time>
               {message.role === "user" && message.delivery === "failed" && (
                 <div className="failed-message-actions">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onRetry(message.id)}
-                  >
+                  <button type="button" disabled={busy} onClick={() => void onRetry(message.id)}>
                     Повторить
                   </button>
                   <button
@@ -171,11 +171,7 @@ export function ChatScreen({
                   >
                     Изменить
                   </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onDismissFailed(message.id)}
-                  >
+                  <button type="button" disabled={busy} onClick={() => void onDismissFailed(message.id)}>
                     Пропустить
                   </button>
                 </div>
@@ -183,6 +179,7 @@ export function ChatScreen({
             </div>
           </article>
         ))}
+
         {streamingText && (
           <article className="message-row character">
             <div className="bubble character streaming">
@@ -191,6 +188,7 @@ export function ChatScreen({
             </div>
           </article>
         )}
+
         {busy && !streamingText && (
           <div className="typing">
             <span />
@@ -198,22 +196,38 @@ export function ChatScreen({
             <span />
           </div>
         )}
+
         {busy && (
           <div className="send-phase" role="status">
             {phase}
           </div>
         )}
+
         <div ref={endRef} />
         {showNewMessages && (
-          <button
-            className="new-messages-button"
-            type="button"
-            onClick={() => scrollToBottom("smooth")}
-          >
+          <button className="new-messages-button" type="button" onClick={() => scrollToBottom("smooth")}>
             Новые сообщения ↓
           </button>
         )}
       </div>
+
+      {ready && !busy && !draft.trim() && (
+        <div className="starter-row" aria-label="Быстрые подсказки">
+          {starterPrompts.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              className="starter-chip"
+              onClick={() => {
+                nearBottomRef.current = true;
+                void onSend(prompt);
+              }}
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form className="composer" onSubmit={submit}>
         <div className="composer-field">
@@ -221,15 +235,9 @@ export function ChatScreen({
           <textarea
             ref={textareaRef}
             value={draft}
-            onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-              onDraftChange(event.target.value)
-            }
+            onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onDraftChange(event.target.value)}
             onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }
