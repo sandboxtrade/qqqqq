@@ -64,6 +64,17 @@ export interface WorldSimulationResult {
   generatedEvents: WorldEventSnapshot[];
 }
 
+const SLEEP_CHAT_GRACE_MS = 10 * 60_000;
+
+export function isSleepChatGraceActive(world: WorldState, now = Date.now()) {
+  return Boolean(
+    world.isAwake &&
+      world.currentActivity === "chatting" &&
+      now - world.lastUserInteractionAt >= 0 &&
+      now - world.lastUserInteractionAt <= SLEEP_CHAT_GRACE_MS,
+  );
+}
+
 // ---- time-engine.ts ----
 const FALLBACK_TIME_ZONE = "UTC";
 
@@ -568,7 +579,21 @@ export function simulateWorld(
     mergeDelta(emotionDelta, event.emotionalEffect);
   }
 
-  const currentRoutine = resolveRoutine(now, state.timeZone);
+  const scheduledRoutine = resolveRoutine(now, state.timeZone);
+  // During the sleep window, a conversation that already woke Yuzuki should
+  // stay awake for a short grace period instead of being reset to sleeping on
+  // every simulation tick. Once the user goes quiet, the normal sleep routine
+  // takes over again automatically.
+  const currentRoutine: RoutineSlot =
+    scheduledRoutine.availability === "sleeping" && isSleepChatGraceActive(state, now)
+      ? {
+          activity: "chatting",
+          location: state.currentLocation === "unknown" ? "bedroom" : state.currentLocation,
+          availability: "free",
+          isAwake: true,
+          targetEnergy: Math.max(0.28, Math.min(0.42, emotion.energy)),
+        }
+      : scheduledRoutine;
   const targetEnergyAdjustment =
     (currentRoutine.targetEnergy - emotion.energy) *
     (1 - Math.exp(-0.16 * elapsedHours));
