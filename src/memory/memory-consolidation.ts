@@ -15,6 +15,7 @@ import {
   factFromCandidate,
 } from "./semantic-extraction";
 import {
+  memoryTopicTerms,
   resolveThreadsFromEvent,
   threadCandidateFromEvent,
 } from "./retrieval";
@@ -40,14 +41,7 @@ function eventMemoryText(event: CharacterEvent) {
 }
 
 function topicsFrom(text: string) {
-  return [
-    ...new Set(
-      text
-        .toLowerCase()
-        .split(/[^\p{L}\p{N}]+/u)
-        .filter((x) => x.length > 4),
-    ),
-  ].slice(0, 8);
+  return memoryTopicTerms(text, 12);
 }
 
 
@@ -113,6 +107,12 @@ function emotionalWeight(text: string) {
   return strong ? 0.72 : 0.24;
 }
 
+function isDurableUserDetail(event: CharacterEvent, text: string) {
+  if (event.source !== "user" || event.type !== "message") return false;
+  if (extractSemanticCandidates(text).length > 0) return true;
+  return /(?:\bу\s+меня\s+(?:есть\s+)?(?:девушк|парень|жена|муж|реб[её]нок|сын|дочь|брат|сестра|кот|кошк|собак|машин|авто)|\bя\s+(?:работаю|учусь|живу|торгую|занимаюсь)|\b(?:моя|мой|мо[её]|мои)\s+(?:цель|мечта|работа|уч[её]ба|девушк|жена|муж|парень|машин|кот|кошк|собак)|\bя\s+хочу\s+(?:переех|стать|начать|создать)|\bя\s+родил(?:ся|ась)|\bмне\s+важно\b|\bзапомни\b|\bremember\b)/iu.test(text);
+}
+
 function inferredImportance(event: CharacterEvent, text: string) {
   let score = event.importance;
   if (text.length > 160) score += 0.08;
@@ -120,20 +120,14 @@ function inferredImportance(event: CharacterEvent, text: string) {
     /(запомни|важно|никогда|всегда|обещ|люблю|ненавижу|родил|умер|переех|увол|женил|расстал|remember|important|promise)/iu.test(
       text,
     )
-  )
-    score += 0.28;
-  if (
-    /(меня зовут|мне \d{1,3} (?:лет|года?|год)|я живу|я работаю|я люблю|я не люблю|мне нравится|мне не нравится)/iu.test(
-      text,
-    )
-  )
-    score += 0.14;
+  ) score += 0.28;
+  if (isDurableUserDetail(event, text)) score = Math.max(score + 0.14, 0.64);
   return clamp(score);
 }
 
+
 function memoryFromEvent(
   event: CharacterEvent,
-  existingKind?: MemoryRecord["kind"],
 ): MemoryRecord | null {
   const worldSummary =
     event.type === "world"
@@ -162,8 +156,7 @@ function memoryFromEvent(
       ? clamp(event.importance * 0.75)
       : emotionalWeight(text);
   const kind: MemoryRecord["kind"] =
-    existingKind ??
-    (importance >= 0.61 || emotional >= 0.65 ? "episodic" : "short_term");
+    importance >= 0.61 || emotional >= 0.65 ? "episodic" : "short_term";
   const who =
     event.type === "world"
       ? "Она"
@@ -564,16 +557,19 @@ export async function consolidateEvents(
     let memory: MemoryRecord | null = null;
     if (generatedMemory) {
       const existingMemory = await repository.getMemory(generatedMemory.id);
+      const promoted = existingMemory?.kind === "short_term" && generatedMemory.kind === "episodic";
       const storedMemory: MemoryRecord = existingMemory
         ? {
             ...generatedMemory,
-            kind: existingMemory.kind,
-            retrievalStrength: existingMemory.retrievalStrength,
+            kind: promoted ? "episodic" : existingMemory.kind,
+            retrievalStrength: promoted
+              ? Math.max(existingMemory.retrievalStrength, generatedMemory.retrievalStrength)
+              : existingMemory.retrievalStrength,
             accessCount: existingMemory.accessCount,
             createdAt: existingMemory.createdAt,
             lastAccessedAt: existingMemory.lastAccessedAt,
-            status: existingMemory.status,
-            validUntil: existingMemory.validUntil,
+            status: promoted && existingMemory.status === "archived" ? "active" : existingMemory.status,
+            validUntil: promoted && existingMemory.status === "archived" ? undefined : existingMemory.validUntil,
             supersedesMemoryId: existingMemory.supersedesMemoryId,
             contradictionGroup: existingMemory.contradictionGroup,
           }

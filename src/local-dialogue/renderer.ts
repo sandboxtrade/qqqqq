@@ -20,11 +20,15 @@ function activeUserFacts(context: DialogueContext) {
 export function selectRelevantMemoryFact(context: DialogueContext): KnowledgeFact | undefined {
   const text = normalizeDialogueText(context.userText ?? "");
   const facts = activeUserFacts(context);
-  const preferredKey = /(?:как меня зовут|имя)/u.test(text) ? "user.name"
+  const preferredKey = /(?:как меня зовут|мо[её] имя)/u.test(text) ? "user.name"
     : /(?:сколько мне лет|возраст)/u.test(text) ? "user.age"
-      : /(?:где я работаю|работ)/u.test(text) ? "user.work"
-        : /(?:где я живу|живу|город)/u.test(text) ? "user.residence"
-          : undefined;
+      : /(?:где я работаю|кем я работаю|работ|устроил)/u.test(text) ? "user.work"
+        : /(?:где я учусь|уч[её]б|на кого я учусь)/u.test(text) ? "user.study"
+          : /(?:как зовут.*(?:девуш|жен|парн|муж)|имя.*(?:девуш|жен|парн|муж))/u.test(text) ? "user.partner.name"
+            : /(?:как зовут.*(?:кот|кош|собак|питом)|имя.*(?:кот|кош|собак|питом))/u.test(text) ? "user.pet.name"
+              : /(?:какая у меня.*(?:машин|авто|тач)|на чем я езжу|на чём я езжу)/u.test(text) ? "user.vehicle"
+                : /(?:где я живу|живу|город)/u.test(text) ? "user.residence"
+                  : undefined;
   if (preferredKey) return facts.find((fact) => fact.key === preferredKey);
   return facts[0];
 }
@@ -41,7 +45,11 @@ function memoryStatement(fact: KnowledgeFact | undefined, context: DialogueConte
     if (fact.value.startsWith("not:")) return `ты больше не живёшь там: ${fact.value.slice(4)}`;
     return `про место, где ты живёшь, у меня осталось: ${fact.value}`;
   }
-  if (fact.key === "user.work") return `про твою работу у меня осталось: ${fact.value}`;
+  if (fact.key === "user.work") return `ты работаешь: ${fact.value}`;
+  if (fact.key === "user.study") return `ты учишься: ${fact.value}`;
+  if (fact.key === "user.partner.name") return `твоего партнёра зовут ${fact.value}`;
+  if (fact.key === "user.pet.name") return `твоего питомца зовут ${fact.value}`;
+  if (fact.key === "user.vehicle") return `ты ездишь на ${fact.value}`;
   if (fact.key.startsWith("user.preference.")) return fact.statement
     .replace(/^Пользователю/u, "тебе")
     .replace(/^пользователю/u, "тебе")
@@ -88,6 +96,18 @@ function semanticValue(plan: CharacterResponsePlan, key: string) {
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
+const INTERNAL_DIALOGUE_LABELS = new Set([
+  "relationship", "conversation", "social", "plans", "character", "wellbeing",
+  "work", "memory", "romance", "intimacy", "unknown",
+]);
+
+function userFacingValue(value: string | undefined) {
+  const clean = value?.replace(/\s+/gu, " ").trim();
+  if (!clean) return undefined;
+  if (INTERNAL_DIALOGUE_LABELS.has(clean.toLocaleLowerCase("ru-RU"))) return undefined;
+  return clean;
+}
+
 export function resolveSlots(
   template: string,
   plan: CharacterResponsePlan,
@@ -105,14 +125,14 @@ export function resolveSlots(
     "relationship.description": relationshipDescription(context),
     "memory.value": memoryValue,
     "memory.statement": memoryStatement(fact, context),
-    "topic": plan.topic,
+    "topic": userFacingValue(plan.topic),
     "timeOfDay": context.world.timeOfDay,
     "world.activity": ACTIVITY[context.world.currentActivity],
     "world.activityDetail": describeWorldActivityDetail(context.world.currentActivity, context.now),
     "initiative.topic": context.initiative?.topic,
     "semantic.summary": semanticValue(plan, "summary"),
     "semantic.continuation": semanticValue(plan, "continuation"),
-    "semantic.focus": semanticValue(plan, "focus"),
+    "semantic.focus": userFacingValue(semanticValue(plan, "focus")),
     "semantic.reason": semanticValue(plan, "reason"),
     "semantic.alternative": semanticValue(plan, "alternative"),
   };
@@ -219,6 +239,7 @@ export function composeFromActs(plan: CharacterResponsePlan, context: DialogueCo
 function compactBeatDetail(value: string | undefined, max = 96) {
   const clean = (value ?? "").replace(/\s+/gu, " ").trim();
   if (!clean) return undefined;
+  if (INTERNAL_DIALOGUE_LABELS.has(clean.toLocaleLowerCase("ru-RU"))) return undefined;
   return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
 }
 
@@ -650,9 +671,13 @@ function authoritative(plan: CharacterResponsePlan) {
 }
 
 export class LocalDialogueRenderer implements ResponseRenderer {
-  async render(plan: CharacterResponsePlan, context: DialogueContext): Promise<RenderedResponse> {
+  async render(
+    plan: CharacterResponsePlan,
+    context: DialogueContext,
+    options: { emergencyFallback?: boolean } = {},
+  ): Promise<RenderedResponse> {
     try {
-      return this.renderInternal(plan, context);
+      return this.renderInternal(plan, context, options);
     } catch (error) {
       if ((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV)
         console.error("[Yuzuki Local Dialogue] renderer fallback", error);
@@ -661,7 +686,11 @@ export class LocalDialogueRenderer implements ResponseRenderer {
     }
   }
 
-  private renderInternal(plan: CharacterResponsePlan, context: DialogueContext): RenderedResponse {
+  private renderInternal(
+    plan: CharacterResponsePlan,
+    context: DialogueContext,
+    options: { emergencyFallback?: boolean },
+  ): RenderedResponse {
     if (plan.dialogueActs.includes("SILENCE") || plan.decision.action === "stay_silent")
       return this.result("", "silence", 0, 0, plan, context, []);
 
@@ -669,7 +698,7 @@ export class LocalDialogueRenderer implements ResponseRenderer {
     if (direct) {
       const text = postProcessDialogue(direct.text);
       if (text && isSafeRenderedText(text)) {
-        const decorated = applySpontaneousBeat(text, plan, context);
+        const decorated = options.emergencyFallback ? { text, beatId: undefined as string | undefined } : applySpontaneousBeat(text, plan, context);
         const finalText = postProcessDialogue(decorated.text);
         return this.result(finalText, decorated.beatId ? `${direct.id}|beat:${decorated.beatId}` : direct.id, 0, maximumRecentSimilarity(finalText, recentCharacterResponses(context.history)), plan, context, []);
       }
@@ -705,7 +734,7 @@ export class LocalDialogueRenderer implements ResponseRenderer {
       const selected = weighted[rng.int(weighted.length)] ?? similarityPool[0];
       const text = postProcessDialogue(selected.choice.text);
       if (text && isSafeRenderedText(text)) {
-        const decorated = applySpontaneousBeat(text, plan, context);
+        const decorated = options.emergencyFallback ? { text, beatId: undefined as string | undefined } : applySpontaneousBeat(text, plan, context);
         const finalText = postProcessDialogue(decorated.text);
         return this.result(finalText, decorated.beatId ? `${selected.template.id}|beat:${decorated.beatId}` : selected.template.id, selected.level, maximumRecentSimilarity(finalText, recent), plan, context, rejected);
       }
@@ -715,7 +744,7 @@ export class LocalDialogueRenderer implements ResponseRenderer {
     if (composed) {
       const text = postProcessDialogue(composed.text);
       if (text && isSafeRenderedText(text)) {
-        const decorated = applySpontaneousBeat(text, plan, context);
+        const decorated = options.emergencyFallback ? { text, beatId: undefined as string | undefined } : applySpontaneousBeat(text, plan, context);
         const finalText = postProcessDialogue(decorated.text);
         const id = `composed:${composed.ids.join("+")}`;
         return this.result(finalText, decorated.beatId ? `${id}|beat:${decorated.beatId}` : id, 3, maximumRecentSimilarity(finalText, recent), plan, context, rejected);
@@ -725,7 +754,7 @@ export class LocalDialogueRenderer implements ResponseRenderer {
     const fallback = chooseFallback(plan, context);
     const fallbackText = postProcessDialogue(fallback.text);
     const safe = isSafeRenderedText(fallbackText) ? fallbackText : "Я тебя слушаю.";
-    const decorated = applySpontaneousBeat(safe, plan, context);
+    const decorated = options.emergencyFallback ? { text: safe, beatId: undefined as string | undefined } : applySpontaneousBeat(safe, plan, context);
     const finalText = postProcessDialogue(decorated.text);
     const id = `fallback:${fallback.key}`;
     return this.result(finalText, decorated.beatId ? `${id}|beat:${decorated.beatId}` : id, 5, maximumRecentSimilarity(finalText, recent), plan, context, rejected);

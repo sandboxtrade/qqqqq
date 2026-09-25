@@ -21,7 +21,7 @@ import {
 import { inferStateEffects } from "../cognition/state-effects";
 import { getCompanionRepository } from "../storage/repository-factory";
 import { guardCharacterReply, guardCloudCharacterReply } from "../dialogue/dialogue";
-import { retrieveMemoryContext } from "../memory/retrieval";
+import { factKeysForQuery, isMemoryRecallQuery, retrieveMemoryContext } from "../memory/retrieval";
 import { recoverRecentMemory } from "../memory/memory-consolidation";
 import { characterViewTopicKey, getMemoryHealth } from "../memory/model";
 import {
@@ -78,6 +78,7 @@ import {
   resolveContextualNLU,
   shouldUseRetrospectivePass,
   type DialogueAct,
+  type DialogueConversationHint,
   type LocalNLUResult,
   type RenderDebug,
 } from "../local-dialogue/index";
@@ -102,6 +103,9 @@ export interface ConversationLine {
   templateId?: string;
   dialogueActs?: DialogueAct[];
   appearanceAssetId?: string;
+  languageSource?: "gpt" | "local";
+  languageReason?: string;
+  conversationHint?: DialogueConversationHint;
 }
 export interface RuntimeTrace {
   usedGeminiPerception: boolean;
@@ -194,10 +198,13 @@ export function reconcileRuntimeState(
       ...worldEvents(advanced.simulation),
     ].map((event) => [event.id, event]),
   );
-  return {
+  const reconciled = {
     ...advanced.state,
     pendingWorldEvents: [...pending.values()],
   };
+  // World/activity can change while the app stays open. Keep the picture tied
+  // to that world instead of leaving the last chat emotion frozen until reload.
+  return normalizeAmbientAppearance(reconciled, [], now);
 }
 export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
   return events
@@ -212,6 +219,11 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         silent?: boolean;
         localDialogue?: { templateId?: string; dialogueActs?: string[] };
         appearanceAssetId?: string;
+        language?: {
+          source?: string;
+          reason?: string;
+          conversation?: DialogueConversationHint;
+        };
       };
       const rawText = String(payload?.text ?? "").trim();
       const text = e.type === "character_action"
@@ -233,6 +245,17 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
               templateId: typeof payload.localDialogue?.templateId === "string" ? payload.localDialogue.templateId : undefined,
               dialogueActs,
               appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
+              languageSource: payload.language?.source === "gpt" || payload.language?.source === "local"
+                ? payload.language.source
+                : undefined,
+              languageReason: typeof payload.language?.reason === "string" ? payload.language.reason : undefined,
+              conversationHint: payload.language?.conversation && typeof payload.language.conversation === "object"
+                ? {
+                    topic: typeof payload.language.conversation.topic === "string" ? payload.language.conversation.topic : undefined,
+                    continuesPrevious: typeof payload.language.conversation.continuesPrevious === "boolean" ? payload.language.conversation.continuesPrevious : undefined,
+                    openThread: typeof payload.language.conversation.openThread === "string" ? payload.language.conversation.openThread : undefined,
+                  }
+                : undefined,
             },
           ]
         : [];
@@ -263,11 +286,48 @@ function shouldTriggerSequence(
   return nlu.semantic.intimacy.intimacyContext === true && SX_TURN_PATTERN.test(text);
 }
 
-function shouldShowReadyToChat(state: RuntimeState, now: number) {
+const READY_TRANSITION_ACTIVITIES = new Set([
+  "ready_to_chat",
+  "putting_phone_away",
+  "putting_book_away",
+  "sitting_up",
+]);
+
+export function shouldShowReadyToChat(state: RuntimeState, now: number) {
   const currentActivityAsset = parseActivitySceneId(state.appearance?.assetId);
+  const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
+  // ready_to_chat (and the small transition poses leading into it) are one-turn
+  // bridges from ambient life into conversation. Once the world is already in
+  // chatting mode they must yield to the emotion selector on the next turn.
+  if (
+    currentActivityAsset &&
+    READY_TRANSITION_ACTIVITIES.has(currentActivityAsset.activity) &&
+    state.world.currentActivity === "chatting" &&
+    sinceLastInteraction <= 90_000
+  ) return false;
   if (currentActivityAsset) return true;
   if (state.world.currentActivity !== "chatting") return true;
-  return Math.max(0, now - state.world.lastUserInteractionAt) > 90_000;
+  return sinceLastInteraction > 90_000;
+}
+
+export function shouldHoldSequenceAppearance(state: RuntimeState, now: number) {
+  const sequence = parseSequenceSceneId(state.appearance?.assetId);
+  if (!sequence) return false;
+  const intimacy = state.intimacy;
+  if (!intimacy?.adultModeEnabled) return false;
+  if (["paused", "stopped"].includes(intimacy.interactionStatus)) return false;
+  const selectedAt = state.appearance?.selectedAt ?? 0;
+  const age = Math.max(0, now - selectedAt);
+  const lastIntimateInteraction = intimacy.lastInteractionAt ?? state.world.lastUserInteractionAt;
+  const idleFor = Math.max(0, now - lastIntimateInteraction);
+  const activeHeat =
+    intimacy.arousal >= 0.72 ||
+    intimacy.phase === "intimate" ||
+    intimacy.phase === "high_intimacy";
+  if (sequence.kind === "sxfin") {
+    return age <= 120_000 && idleFor <= 180_000 && (activeHeat || intimacy.phase === "aftercare");
+  }
+  return activeHeat && age <= 10 * 60_000 && idleFor <= 5 * 60_000;
 }
 
 function normalizeAmbientAppearance(
@@ -275,7 +335,7 @@ function normalizeAmbientAppearance(
   history: ConversationLine[],
   now = runtimeNow(state),
 ): RuntimeState {
-  if (parseSequenceSceneId(state.appearance?.assetId)) return state;
+  if (shouldHoldSequenceAppearance(state, now)) return state;
   const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
   if (state.world.currentActivity === "chatting" && sinceLastInteraction < 90_000 && state.appearance?.assetId)
     return state;
@@ -586,21 +646,44 @@ export async function handleUserMessage(
   });
   options.onPhase?.("Вспоминаем разговор…");
   const contextStarted = performance.now();
-  // Short follow-ups rarely contain enough words to retrieve the right durable
-  // memory on their own ("точно?", "а он?", "почему?"). Use the two most
-  // recent surface turns as retrieval context without treating them as new facts.
-  const memoryQuery = input.text.trim().split(/\s+/u).filter(Boolean).length <= 8
-    ? [...options.history.slice(-2).map((line) => line.text), input.text]
-        .filter(Boolean)
-        .join("\n")
-    : input.text;
-  const [, memoryContext, history] = await Promise.all([
-    repository.appendEvent(userEvent),
-    retrieveMemoryContext(memoryQuery, repository, now),
-    base.revision !== current.revision
-      ? repository.listConversationEvents({ limit: 80 }).then(page => conversationFrom(page.events))
-      : Promise.resolve(options.history),
-  ]);
+  const initialNlu = analyzeLocalNLU(input.text);
+  const explicitMemoryLookup =
+    ["memory_question", "ask_user_memory"].includes(initialNlu.intent) ||
+    isMemoryRecallQuery(input.text) ||
+    factKeysForQuery(input.text).length > 0;
+  // Short ordinary follow-ups need recent surface context for retrieval. Direct
+  // memory questions do not: mixing the last chat lines into "где я работаю?"
+  // can drown the very fact the user is testing.
+  const memoryQuery = explicitMemoryLookup
+    ? input.text
+    : input.text.trim().split(/\s+/u).filter(Boolean).length <= 8
+      ? [...options.history.slice(-2).map((line) => line.text), input.text]
+          .filter(Boolean)
+          .join("\n")
+      : input.text;
+  const historyPromise = base.revision !== current.revision
+    ? repository.listConversationEvents({ limit: 80 }).then(page => conversationFrom(page.events))
+    : Promise.resolve(options.history);
+  let memoryContext: Awaited<ReturnType<typeof retrieveMemoryContext>>;
+  let history: ConversationLine[];
+  if (explicitMemoryLookup) {
+    // Memory consolidation normally runs after a turn. A direct recall question
+    // must not race that background job, otherwise Yuzuki can "forget" a fact
+    // that was written only one turn ago. Flush pending evidence only for recall
+    // turns so ordinary chat keeps the fast parallel path.
+    await repository.appendEvent(userEvent);
+    await recoverRecentMemory(repository, 120);
+    [memoryContext, history] = await Promise.all([
+      retrieveMemoryContext(memoryQuery, repository, now),
+      historyPromise,
+    ]);
+  } else {
+    [, memoryContext, history] = await Promise.all([
+      repository.appendEvent(userEvent),
+      retrieveMemoryContext(memoryQuery, repository, now),
+      historyPromise,
+    ]);
+  }
   checkSignal(signal);
   let contextMs = Math.round(performance.now() - contextStarted);
   memoryContext.memories = memoryContext.memories.filter(
@@ -616,8 +699,8 @@ export async function handleUserMessage(
     timestamp: line.timestamp,
     templateId: line.templateId,
     dialogueActs: line.dialogueActs,
+    conversationHint: line.conversationHint,
   }));
-  const initialNlu = analyzeLocalNLU(input.text);
   const initialFrame = buildDialogueFrame(historyForDialogue, initialNlu);
   let nlu = resolveContextualNLU(initialNlu, initialFrame, input.text);
   let dialogueFrame = buildDialogueFrame(historyForDialogue, nlu);
@@ -628,7 +711,7 @@ export async function handleUserMessage(
     const retrospectiveConversation = await loadRetrospectiveConversation(repository, signal, history, input.id);
     const retrospectiveHistory = retrospectiveConversation.map((line) => ({
       id: line.id, role: line.role, text: line.text, timestamp: line.timestamp,
-      templateId: line.templateId, dialogueActs: line.dialogueActs,
+      templateId: line.templateId, dialogueActs: line.dialogueActs, conversationHint: line.conversationHint,
     }));
     retrospective = buildRetrospectiveContext(retrospectiveHistory, nlu, dialogueFrame, input.text);
     nlu = applyRetrospectiveNLU(nlu, retrospective, input.text);
@@ -875,7 +958,7 @@ export async function handleUserMessage(
           family: parseActivitySceneId(readyAppearance.assetId)?.activity ?? "ready_to_chat",
         }
       : undefined;
-  const rendered = await localDialogueRenderer.render(localPlan, dialogueContext);
+  const rendered = await localDialogueRenderer.render(localPlan, dialogueContext, { emergencyFallback: true });
   logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
   checkSignal(signal);
   const localGuarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
@@ -885,7 +968,6 @@ export async function handleUserMessage(
   if (!silent) {
     cloudLanguage = await renderCloudLanguage({
       userText: input.text,
-      localDraft: localGuarded.text,
       intent: nlu.intent,
       dialogueActs: localPlan.dialogueActs,
       goal: localPlan.goal,
@@ -933,6 +1015,9 @@ export async function handleUserMessage(
         previousCharacterTextBeforeLast: dialogueFrame.previousCharacterTextBeforeLast,
         lastUserIntent: dialogueFrame.lastUserIntent,
         lastCharacterIntent: dialogueFrame.lastCharacterIntent,
+        lastCharacterTopic: dialogueFrame.lastCharacterTopic,
+        lastCharacterOpenThread: dialogueFrame.lastCharacterOpenThread,
+        lastCharacterContinuesPrevious: dialogueFrame.lastCharacterContinuesPrevious,
         turnsOnTopic: dialogueFrame.turnsOnTopic,
       },
       world: {
@@ -1129,6 +1214,12 @@ export async function handleUserMessage(
             }
           : undefined,
         appearanceAssetId: appearance.assetId,
+        language: {
+          source: cloudLanguage.used ? "gpt" : "local",
+          reason: cloudLanguage.used ? undefined : cloudLanguage.reason,
+          model: cloudLanguage.model,
+          conversation: cloudLanguage.used ? cloudLanguage.conversation : undefined,
+        },
         localDialogue: {
           templateId: rendered.templateId,
           dialogueActs: rendered.dialogueActs,

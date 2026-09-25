@@ -99,6 +99,61 @@ export function extractSemanticCandidates(text: string): FactCandidate[] {
       confidence: 0.86,
     });
 
+  match = source.match(
+    /(?:^|[.!?]\s*)я\s+устроил(?:ся|ась)\s+(?:в|на)\s+([^.!?]{2,100})/iu,
+  );
+  if (match)
+    add({
+      key: "user.work",
+      value: cleanValue(match[1]),
+      statement: `Пользователь устроился работать: ${cleanValue(match[1])}.`,
+      confidence: 0.84,
+    });
+
+  match = source.match(
+    /(?:^|[.!?]\s*)я\s+учусь\s+(?:в|на)\s+([^.!?]{2,100})/iu,
+  );
+  if (match)
+    add({
+      key: "user.study",
+      value: cleanValue(match[1]),
+      statement: `Пользователь учится: ${cleanValue(match[1])}.`,
+      confidence: 0.86,
+    });
+
+  match = source.match(
+    /(?:^|[.!?]\s*)(?:мою\s+(?:девушку|жену)|моего\s+(?:парня|мужа))\s+зовут\s+([\p{L}-]{2,40})/iu,
+  );
+  if (match)
+    add({
+      key: "user.partner.name",
+      value: cleanValue(match[1]),
+      statement: `Партнёра пользователя зовут ${cleanValue(match[1])}.`,
+      confidence: 0.93,
+    });
+
+  match = source.match(
+    /(?:^|[.!?]\s*)(?:моего\s+(?:кота|пса)|мою\s+(?:кошку|собаку))\s+зовут\s+([\p{L}-]{2,40})/iu,
+  );
+  if (match)
+    add({
+      key: "user.pet.name",
+      value: cleanValue(match[1]),
+      statement: `Питомца пользователя зовут ${cleanValue(match[1])}.`,
+      confidence: 0.92,
+    });
+
+  match = source.match(
+    /(?:^|[.!?]\s*)у\s+меня\s+(?:машина|авто|тачка)\s+([^.!?]{2,90})/iu,
+  ) ?? source.match(/(?:^|[.!?]\s*)я\s+езжу\s+на\s+([^.!?]{2,90})/iu);
+  if (match)
+    add({
+      key: "user.vehicle",
+      value: cleanValue(match[1]),
+      statement: `Пользователь ездит на: ${cleanValue(match[1])}.`,
+      confidence: 0.82,
+    });
+
   const preferencePatterns: Array<{
     regex: RegExp;
     sentiment: "like" | "dislike";

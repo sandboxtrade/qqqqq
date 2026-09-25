@@ -49,7 +49,7 @@ import { decodeAppearance } from "../avatar/avatar-model";
 import { decodeRomance } from "../relationship/relationship";
 
 export const STORAGE_SCHEMA_VERSION = 2;
-export const MEMORY_PROCESSOR_VERSION = 4;
+export const MEMORY_PROCESSOR_VERSION = 5;
 const LEGACY_MEMORY_PROCESSOR_VERSION = 1;
 
 export class PersistenceSchemaError extends Error {

@@ -340,7 +340,7 @@ export interface SequenceSceneInfo {
   variant: number;
 }
 
-function parseActivitySceneFilename(filename: string) {
+export function parseActivitySceneFilename(filename: string) {
   const name = filename.split(/[\\/]/u).at(-1) ?? filename;
   const match = /^([a-z_]+)\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/iu.exec(name);
   if (!match || !activitySceneNames.has(match[1] as ActivitySceneName)) return null;
@@ -350,7 +350,7 @@ function parseActivitySceneFilename(filename: string) {
   };
 }
 
-function parseSequenceSceneFilename(filename: string): SequenceSceneInfo | null {
+export function parseSequenceSceneFilename(filename: string): SequenceSceneInfo | null {
   const name = filename.split(/[\\/]/u).at(-1) ?? filename;
   const match = /^(sxfin|sx)\.?([1-9]\d*)\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/iu.exec(name);
   if (!match) return null;

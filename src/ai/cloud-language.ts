@@ -10,8 +10,6 @@ export type CloudLanguageRole = "user" | "character";
 
 export interface CloudLanguageInput {
   userText: string;
-  /** Local renderer output is emergency fallback/reference only in v0.17. */
-  localDraft: string;
   intent: string;
   dialogueActs: readonly string[];
   goal: string;
@@ -63,6 +61,9 @@ export interface CloudLanguageInput {
     previousCharacterTextBeforeLast?: string;
     lastUserIntent?: string;
     lastCharacterIntent?: string;
+    lastCharacterTopic?: string;
+    lastCharacterOpenThread?: string;
+    lastCharacterContinuesPrevious?: boolean;
     turnsOnTopic: number;
   };
   world: {
@@ -193,7 +194,6 @@ export interface CloudConversationMetadata {
 export interface CloudLanguageSignals {
   userTone?: string;
   relationshipEvent?: string;
-  memoryCandidate?: string;
   memoryUsed?: boolean;
   emotionTone?: string;
 }
@@ -228,7 +228,6 @@ interface WorkerReply {
   signals?: {
     userTone?: unknown;
     relationshipEvent?: unknown;
-    memoryCandidate?: unknown;
     memoryUsed?: unknown;
     emotionTone?: unknown;
   };
@@ -315,7 +314,6 @@ function parseSignals(raw: WorkerReply["signals"]): CloudLanguageSignals | undef
   return {
     userTone: asOptionalString(raw.userTone, 32),
     relationshipEvent: asOptionalString(raw.relationshipEvent, 32),
-    memoryCandidate: asOptionalString(raw.memoryCandidate, 220),
     memoryUsed: typeof raw.memoryUsed === "boolean" ? raw.memoryUsed : undefined,
     emotionTone: asOptionalString(raw.emotionTone, 32),
   };

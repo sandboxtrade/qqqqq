@@ -9,9 +9,29 @@ import { decayMemory, type KnowledgeFact, type MemoryContext, type MemoryRecord,
 // ---- memory-retrieval.ts ----
 const DAY = 86_400_000;
 
+const MEMORY_STOP_WORDS = new Set([
+  "а", "и", "но", "да", "нет", "ну", "же", "ли", "бы", "в", "во", "на", "по", "к", "ко", "с", "со", "у", "о", "об", "от", "до", "за", "из", "для", "про",
+  "это", "этот", "эта", "эти", "того", "тоже", "ещё", "еще", "там", "тут", "как", "что", "кто", "где", "когда", "почему", "зачем",
+  "я", "ты", "он", "она", "мы", "вы", "они", "мне", "меня", "мой", "моя", "моё", "мои", "тебе", "тебя", "твой", "твоя",
+  "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "at", "for", "about", "i", "me", "my", "you", "your", "we", "what", "where", "when", "why", "how",
+]);
+
+const MEMORY_CONCEPTS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["work", /(?:работ|карьер|професси|должност|смен[аыу]|устроил(?:ся|ась)?|уволил(?:ся|ась)?|офис|автосервис|мастерск|job|work|career|office)/iu],
+  ["study", /(?:уч[её]б|учусь|учил(?:ся|ась)?|училищ|школ|колледж|универ|институт|образован|курс|study|school|college|university|course)/iu],
+  ["residence", /(?:живу|жил(?:а)?|переех|город|квартир|дом[аеу]?|место\s+жительств|residen|where\s+i\s+live|moved|city|home)/iu],
+  ["partner", /(?:девушк|парн(?:я|ем|ю)?|жен[аые]|муж|невест|жених|партн[её]р|отношени|girlfriend|boyfriend|wife|husband|partner|relationship)/iu],
+  ["family", /(?:мам|пап|родител|брат|сестр|семь[яеи]|сын|доч|бабуш|дедуш|family|mother|father|brother|sister|son|daughter)/iu],
+  ["pet", /(?:кот|кошк|собак|питом|щен|кот[её]нок|pet|cat|dog)/iu],
+  ["car", /(?:машин|авто|тачк|bmw|бмв|mercedes|мерседес|audi|ауди|car|vehicle)/iu],
+  ["trading", /(?:трейд|крипт|рынок|бирж|сделк|позици|фьючерс|bybit|атас|trading|crypto|market|exchange)/iu],
+  ["plan", /(?:план|цель|мечт|собираюсь|хочу\s+(?:переех|стать|сделать|купить|начать)|завтра|потом|plan|goal|dream)/iu],
+  ["preference", /(?:люблю|нравит|не\s+люблю|не\s+нравит|предпочита|любим|favorite|favourite|prefer|like|dislike)/iu],
+];
+
 function normalizeToken(token: string) {
-  let value = token.toLowerCase();
-  if (/^[а-яё]+$/u.test(value) && value.length > 4) {
+  let value = token.toLowerCase().replace(/ё/gu, "е");
+  if (/^[а-я]+$/u.test(value) && value.length > 4) {
     value = value.replace(
       /(иями|ями|ами|ого|ему|ому|ыми|ими|ах|ях|ов|ев|ей|ам|ям|ом|ем|ой|ый|ий|ая|яя|ое|ее|ые|ие|ы|и|а|я|у|ю|е|о)$/u,
       "",
@@ -20,23 +40,39 @@ function normalizeToken(token: string) {
   return value;
 }
 
-export const textTokens = (text: string) =>
-  new Set(
-    text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .map(normalizeToken)
-      .filter((token) => token.length > 1),
-  );
+function rawMemoryTerms(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/ё/gu, "е")
+    .split(/[^\p{L}\p{N}]+/u)
+    .map(normalizeToken)
+    .filter((token) => token.length > 1 && !MEMORY_STOP_WORDS.has(token));
+}
 
-/** Exact lower-case words used for Firestore array-contains-any topic lookup. */
-export const topicQueryTerms = (text: string) =>
-  [...new Set(
-    text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((token) => token.length > 4),
-  )].slice(0, 10);
+export function memoryConceptTerms(text: string) {
+  return MEMORY_CONCEPTS
+    .filter(([, pattern]) => pattern.test(text))
+    .map(([concept]) => `concept:${concept}`);
+}
+
+/** Stable terms persisted on memories and reused for query-side lookup. */
+export function memoryTopicTerms(text: string, limit = 12) {
+  const concepts = memoryConceptTerms(text);
+  const raw = rawMemoryTerms(text).filter((token) => token.length > 3);
+  return [...new Set([...concepts, ...raw])].slice(0, limit);
+}
+
+export const textTokens = (text: string) =>
+  new Set([...rawMemoryTerms(text), ...memoryConceptTerms(text)]);
+
+/** Firestore array-contains-any supports at most ten values. Keep generic four-letter
+ * chat words out of the indexed deep-read path unless they map to a concept. */
+export const topicQueryTerms = (text: string) => [
+  ...new Set([
+    ...memoryConceptTerms(text),
+    ...rawMemoryTerms(text).filter((token) => token.length > 4),
+  ]),
+].slice(0, 10);
 
 function overlapScore(query: Set<string>, text: string) {
   if (!query.size) return 0;
@@ -47,9 +83,21 @@ function overlapScore(query: Set<string>, text: string) {
 }
 
 export function isBroadRecallQuery(query: string) {
-  return /(помнишь|помнишь\s+ли|что\s+ты\s+помнишь|напомни|мы\s+(?:обсуждали|говорили)|что\s+я\s+(?:говорил|рассказывал)|раньше\s+(?:говорил|рассказывал)|remember|what\s+do\s+you\s+remember|remind|talked\s+about)/iu.test(
-    query,
-  );
+  const normalized = query
+    .toLowerCase()
+    .replace(/ё/gu, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return /^(?:(?:а|ну)\s+)?(?:что\s+ты\s+(?:вообще\s+)?помнишь(?:\s+обо\s+мне)?|что\s+ты\s+(?:вообще\s+)?знаешь\s+обо\s+мне|расскажи\s+что\s+ты\s+помнишь(?:\s+обо\s+мне)?|ты\s+(?:вообще\s+)?помнишь(?:\s+меня|\s+обо\s+мне)?|помнишь|what\s+do\s+you\s+remember(?:\s+about\s+me)?|do\s+you\s+remember\s+me)$/iu.test(normalized);
+}
+
+export function isMemoryRecallQuery(query: string) {
+  return /(?:помнишь|помнишь\s+ли|что\s+ты\s+помнишь|напомни|мы\s+(?:обсуждали|говорили)|что\s+я\s+(?:тебе\s+)?(?:говорил|говорила|рассказывал|рассказывала)|раньше\s+(?:говорил|говорила|рассказывал|рассказывала)|remember|what\s+do\s+you\s+remember|remind|talked\s+about)/iu.test(query);
+}
+
+function isUserMemoryRecallQuery(query: string) {
+  return /(?:обо\s+мне|про\s+меня|что\s+я\s+(?:тебе\s+)?(?:говорил|говорила|рассказывал|рассказывала)|где\s+я|кем\s+я|как\s+меня|сколько\s+мне|мой|моя|мое|моё|мои|my\s+(?:name|age|job)|about\s+me|what\s+i\s+(?:said|told))/iu.test(query) || isBroadRecallQuery(query);
 }
 
 export function factKeysForQuery(query: string): string[] {
@@ -63,8 +111,16 @@ export function factKeysForQuery(query: string): string[] {
     add("user.age");
   if (/(где\s+я\s+живу|живу\s+где|мой\s+город|место\s+жительств|where\s+do\s+i\s+live|where\s+i\s+live)/iu.test(query))
     add("user.residence");
-  if (/(где\s+я\s+работаю|кем\s+я\s+работаю|моя\s+работа|where\s+do\s+i\s+work|my\s+job)/iu.test(query))
+  if (/(где\s+я\s+работаю|кем\s+я\s+работаю|моя\s+работа|куда\s+я\s+устроил(?:ся|ась)|where\s+do\s+i\s+work|my\s+job)/iu.test(query))
     add("user.work");
+  if (/(где\s+я\s+учусь|на\s+кого\s+я\s+учусь|чему\s+я\s+учусь|моя\s+уч[её]ба|where\s+do\s+i\s+study|what\s+do\s+i\s+study)/iu.test(query))
+    add("user.study");
+  if (/(как\s+зовут\s+(?:мою\s+)?(?:девушку|жену)|как\s+зовут\s+(?:моего\s+)?(?:парня|мужа)|имя\s+(?:моей\s+)?(?:девушки|жены)|имя\s+(?:моего\s+)?(?:парня|мужа)|partner(?:'s)?\s+name)/iu.test(query))
+    add("user.partner.name");
+  if (/(как\s+зовут\s+(?:моего|мою)\s+(?:кота|кошку|собаку)|имя\s+(?:моего|моей)\s+(?:кота|кошки|собаки)|pet(?:'s)?\s+name)/iu.test(query))
+    add("user.pet.name");
+  if (/(какая\s+у\s+меня\s+(?:машина|тачка|авто)|на\s+ч[её]м\s+я\s+езжу|моя\s+(?:машина|тачка)|my\s+car)/iu.test(query))
+    add("user.vehicle");
   return keys;
 }
 
@@ -76,6 +132,7 @@ export function rankMemories(
 ): MemoryRecord[] {
   const queryTokens = textTokens(query);
   const broadRecall = isBroadRecallQuery(query);
+  const userRecall = isUserMemoryRecallQuery(query);
   return memories
     .filter((memory) => memory.status === "active")
     .map((memory) => {
@@ -87,7 +144,14 @@ export function rankMemories(
       const accessedDays = Math.max(0, (now - memory.lastAccessedAt) / DAY);
       const recency = Math.exp(-ageDays / 45);
       const accessRecency = Math.exp(-accessedDays / 30);
-      const score = broadRecall
+      const sourceBias = userRecall
+        ? memory.summary.startsWith("Пользователь:")
+          ? 0.18
+          : memory.summary.startsWith("Она:")
+            ? -0.1
+            : 0
+        : 0;
+      const score = (broadRecall
         ? semanticProxy * 0.12 +
           memory.importance * 0.32 +
           memory.emotionalWeight * 0.13 +
@@ -99,7 +163,7 @@ export function rankMemories(
           memory.emotionalWeight * 0.08 +
           memory.retrievalStrength * 0.09 +
           recency * 0.04 +
-          accessRecency * 0.03;
+          accessRecency * 0.03) + sourceBias;
       return { memory, score, semanticProxy };
     })
     .filter(({ score, semanticProxy }) =>
@@ -118,6 +182,7 @@ export function rankFacts(
 ): KnowledgeFact[] {
   const queryTokens = textTokens(query);
   const broadRecall = isBroadRecallQuery(query);
+  const userRecall = isUserMemoryRecallQuery(query);
   const explicitKeys = new Set(factKeysForQuery(query));
   const latest = new Map<string, KnowledgeFact>();
   for (const fact of facts) {
@@ -137,9 +202,14 @@ export function rankFacts(
       const exactKey = explicitKeys.has(fact.key) ? 1 : 0;
       const ageDays = Math.max(0, (now - fact.lastConfirmedAt) / DAY);
       const freshness = Math.exp(-ageDays / 180);
-      const score = broadRecall
+      const subjectBias = userRecall
+        ? fact.subject === "user"
+          ? 0.18
+          : -0.08
+        : 0;
+      const score = (broadRecall
         ? exactKey * 0.45 + fact.confidence * 0.38 + freshness * 0.17
-        : exactKey * 0.55 + semantic * 0.55 + fact.confidence * 0.15 + freshness * 0.05;
+        : exactKey * 0.55 + semantic * 0.55 + fact.confidence * 0.15 + freshness * 0.05) + subjectBias;
       return { fact, score, semantic, exactKey };
     })
     .filter(({ score, semantic, exactKey }) =>

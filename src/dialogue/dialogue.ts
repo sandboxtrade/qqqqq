@@ -30,16 +30,16 @@ export function localFallbackReply(
   if (decision.action === "change_topic")
     return "Хорошо, сменим тему.";
   if (decision.action === "ask")
-    return "Уточни, пожалуйста, что именно ты имеешь в виду?";
+    return "Что именно ты имеешь в виду?";
   if (decision.action === "acknowledge" && plan.tone === "respectful")
-    return "Хорошо. Я это услышала и не буду давить.";
+    return "Хорошо. Давить не буду.";
   if (decision.action === "acknowledge")
-    return "Я услышала тебя. Не хочу сейчас сводить это к дежурному совету.";
+    return "Мм. Поняла тебя.";
   if (decision.action === "joke") return "Ладно, это было неплохо. Засчитано.";
   if (decision.action === "initiate_activity")
     return "Мне нравится идея. Давай выберем, что именно будем делать.";
   if (decision.tone === "restrained")
-    return "Я тебя услышала. Но сейчас я бы не стала делать вид, что всё нормально.";
+    return "Да, меня это задело. Сейчас не хочу делать вид, что всё нормально.";
   if (userText.includes("?"))
     return "Расскажи чуть подробнее, что ты имеешь в виду?";
   return "Я тебя слушаю.";
@@ -193,6 +193,7 @@ export function guardCharacterReply(
     usedFallback: false,
   };
 }
+
 
 /**
  * GPT-first dialogue guard (v0.17).
