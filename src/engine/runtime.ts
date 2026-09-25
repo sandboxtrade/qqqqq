@@ -35,6 +35,7 @@ import { worldClock } from "../world/world";
 import { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } from "../initiative/initiative";
 import { checkSignal } from "../core/async";
 import type { CompanionRepository, ConversationCursor } from "../storage/repositories/interfaces";
+import { renderCloudLanguage, type CloudLanguageResult } from "../ai/cloud-language";
 
 import { currentRomance, initialRomance, planRomance, type RomanceState } from "../relationship/relationship";
 import {
@@ -104,6 +105,7 @@ export interface RuntimeTrace {
   responsePlan: ReturnType<typeof planResponse>;
   nlu?: LocalNLUResult;
   localRenderer?: RenderDebug;
+  cloudLanguage?: CloudLanguageResult;
   intimacy?: { enabled: boolean; phase: IntimacyState["phase"]; action: string };
   memoryContext: { memories: string[]; facts: string[]; openThreads: string[] };
   reasoning?: { retrospective: boolean; recovered: boolean; scannedLines: number; causalRelations: number };
@@ -748,7 +750,85 @@ export async function handleUserMessage(
   const rendered = await localDialogueRenderer.render(localPlan, dialogueContext);
   logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
   checkSignal(signal);
-  const guarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
+  const localGuarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
+  let guarded = localGuarded;
+  let cloudLanguage: CloudLanguageResult = { attempted: false, used: false, reason: "local-only" };
+  if (!silent) {
+    cloudLanguage = await renderCloudLanguage({
+      userText: input.text,
+      localDraft: localGuarded.text,
+      intent: nlu.intent,
+      dialogueActs: localPlan.dialogueActs,
+      goal: localPlan.goal,
+      tone: responsePlan.tone,
+      length: responsePlan.length,
+      relationship: {
+        stage: relationship.stage,
+        trust: relationship.trust,
+        closeness: relationship.closeness,
+        attachment: relationship.attachment,
+        security: relationship.security,
+        unresolvedTension: relationship.unresolvedTension,
+      },
+      emotion: {
+        mood: emotion.mood,
+        happiness: emotion.happiness,
+        sadness: emotion.sadness,
+        irritation: emotion.irritation,
+        anxiety: emotion.anxiety,
+        affection: emotion.affection,
+        curiosity: emotion.curiosity,
+        romanticInterest: emotion.romanticInterest,
+      },
+      romancePhase: romance.state.phase,
+      intimacy: {
+        enabled: intimacy.state.adultModeEnabled,
+        phase: intimacy.state.phase,
+        comfort: intimacy.state.comfort,
+        interest: intimacy.state.interest,
+        arousal: intimacy.state.arousal,
+      },
+      thought: {
+        observation: thought.observation,
+        interpretation: thought.interpretation,
+        feeling: thought.feeling,
+        desire: thought.desire,
+        concern: thought.concern,
+        stance: thought.stance,
+        memoryEcho: thought.memoryEcho,
+        reconsideration: thought.reconsideration,
+        relationalEmotion: thought.relationalEmotion,
+        relationalReflection: thought.relationalReflection,
+        retrospectiveEcho: thought.retrospectiveEcho,
+      },
+      recentHistory: historyForDialogue.slice(-4).map((line) => ({
+        role: line.role,
+        text: line.text,
+      })),
+      memories: memoryContext.memories.slice(0, 2).map((memory) => memory.summary),
+      facts: memoryContext.facts.slice(0, 3).map((fact) => fact.statement),
+      openThreads: memoryContext.openThreads.slice(0, 1).map((thread) => thread.summary),
+      retrospective: retrospective?.summary,
+      causal: causalRelations.slice(0, 2).map((relation) =>
+        `${relation.cause} → ${relation.effect}`,
+      ),
+      locked: decision.content.locked,
+      silent,
+    }, signal);
+    checkSignal(signal);
+    if (cloudLanguage.used && cloudLanguage.text) {
+      const cloudGuarded = guardCharacterReply(
+        cloudLanguage.text,
+        input.text,
+        decision,
+        responsePlan,
+      );
+      // The cloud layer can only improve wording. If validation changes/rejects
+      // its meaning, keep the already validated Local Brain wording instead.
+      if (!cloudGuarded.usedFallback) guarded = cloudGuarded;
+      else cloudLanguage = { ...cloudLanguage, used: false, reason: "response-guard" };
+    }
+  }
   const reply = guarded.text;
   const generationMs = Math.round(performance.now() - generationStarted);
   // Locked/local answers can be shown after validation, before the network commit.
@@ -909,6 +989,7 @@ export async function handleUserMessage(
     usedGeminiReply: false,
     nlu,
     localRenderer: rendered.debug,
+    cloudLanguage,
     intimacy: { enabled: savedIntimacy.adultModeEnabled, phase: savedIntimacy.phase, action: intimacy.action },
     responseGuardFallback: guarded.usedFallback,
     responseGuardReason: guarded.reason,
