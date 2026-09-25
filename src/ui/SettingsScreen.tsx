@@ -74,11 +74,11 @@ export function SettingsScreen({
         <div className="setting-row">
           <span>Dialogue Engine</span>
           <strong>
-            {trace
-              ? trace.responseGuardFallback
-                ? "local + guard fallback"
-                : "local"
-              : "local"}
+            {trace?.cloudLanguage?.used
+              ? `GPT${trace.cloudLanguage.model ? ` · ${trace.cloudLanguage.model}` : ""}`
+              : trace?.cloudLanguage
+                ? `local fallback · ${trace.cloudLanguage.reason ?? "unknown"}`
+                : "ожидает первого ответа"}
           </strong>
         </div>
         <div className="setting-row">

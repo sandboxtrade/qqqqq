@@ -49,6 +49,15 @@ export default function App() {
     loadOlder,
   } = useAppStore();
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
+  const dialogueStatus = lastTrace
+    ? lastTrace.cloudLanguage?.used
+      ? "gpt"
+      : "local"
+    : runtimeConfigurationError
+      ? "config"
+      : isLocalRepositoryAllowed
+        ? "local"
+        : "cloud";
   const visualCueKey = lastTrace
     ? [...messages]
         .reverse()
@@ -104,12 +113,8 @@ export default function App() {
         </div>
         <div className="top-status">
           <span className={ready ? "status-dot online" : "status-dot"} />
-          <span>
-            {runtimeConfigurationError
-              ? "config"
-              : isLocalRepositoryAllowed
-                ? "local"
-                : "cloud"}
+          <span title={lastTrace?.cloudLanguage?.used ? "Ответ сформулирован GPT" : lastTrace?.cloudLanguage?.reason ?? undefined}>
+            {dialogueStatus}
           </span>
         </div>
       </header>

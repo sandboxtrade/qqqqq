@@ -23,11 +23,16 @@ export function buildDialogueFrame(
   const characterBeforeLast = characterLines.at(-2);
   const previousNLU = previousUser ? analyzeLocalNLU(previousUser.text) : undefined;
   const genericFrameTopics = new Set(["conversation", "social", "plans"]);
+  const hintedCharacterTopic = lastCharacter?.conversationHint?.topic?.trim();
+  const characterTopic = hintedCharacterTopic && !genericFrameTopics.has(hintedCharacterTopic)
+    ? hintedCharacterTopic
+    : undefined;
   const previousSurfaceTopic = previousUser ? classifyTopic(previousUser.text) : undefined;
   const previousFocusTopic = previousNLU?.semantic.focus ? classifyTopic(previousNLU.semantic.focus) : undefined;
-  const previousTopic = previousNLU?.topic && !genericFrameTopics.has(previousNLU.topic)
+  const previousUserTopic = previousNLU?.topic && !genericFrameTopics.has(previousNLU.topic)
     ? previousNLU.topic
     : previousFocusTopic ?? previousSurfaceTopic ?? previousNLU?.topic;
+  const previousTopic = characterTopic ?? previousUserTopic;
   const currentFocusTopic = current.semantic.focus ? classifyTopic(current.semantic.focus) : undefined;
   const continuesConcretePrevious = Boolean(
     previousTopic &&
@@ -68,6 +73,9 @@ export function buildDialogueFrame(
     previousUserTextBeforeLast: previousUserBeforeLast?.text,
     previousCharacterText: lastCharacter?.text,
     previousCharacterTextBeforeLast: characterBeforeLast?.text,
+    lastCharacterTopic: hintedCharacterTopic || undefined,
+    lastCharacterOpenThread: lastCharacter?.conversationHint?.openThread,
+    lastCharacterContinuesPrevious: lastCharacter?.conversationHint?.continuesPrevious,
   };
 }
 
@@ -277,9 +285,10 @@ export function shouldUseRetrospectivePass(
 ) {
   const normalized = normalizeDialogueForMatching(currentText);
   const tokenCount = tokenizeDialogue(currentText).length;
-  if (nlu.intent === "unknown" || nlu.confidence < 0.48) return true;
   if (["memory_question", "ask_user_memory"].includes(nlu.intent)) return true;
   if (/(?:тогда|раньше|до этого|помнишь|мы\s+говорили|я\s+(?:говорил|говорила|рассказывал|рассказывала)|ты\s+(?:говорила|сказала))/u.test(normalized)) return true;
+  if (isLikelyAdjacentCharacterTurn(nlu, frame, currentText) && nlu.confidence >= 0.64) return false;
+  if (nlu.intent === "unknown" || nlu.confidence < 0.48) return true;
   if (CONTEXTUAL_INTENTS.has(nlu.intent) && !hasResolvableReference(nlu, frame)) return true;
   if (tokenCount <= 5 && RETROSPECTIVE_SHORT_RE.test(normalized) && !frame.previousCharacterText) return true;
   if (tokenCount <= 7 && DEICTIC_LOW_CONTEXT_RE.test(normalized) && !frame.previousTopic && !frame.currentTopic) return true;
@@ -413,6 +422,37 @@ const USER_STATE_INTENTS = new Set([
 ]);
 
 const DEICTIC_CONTINUATION_RE = /^(?:(?:а|и|ну)\s+)?(?:это|там|туда|оттуда|тогда|так|с этим|про это|об этом|он|она|они|его|ее|её|их)(?:\s|$)/u;
+const SELF_CONTAINED_SHORT_QUESTION_RE = /^(?:(?:а|и|ну)\s+)?(?:как\s+дела|как\s+ты|что\s+делаешь|чем\s+занимаешься|где\s+ты|сколько\s+времени|который\s+час)[?.! ]*$/u;
+const ADJACENT_FRAGMENT_RE = /^(?:(?:а|и|ну|ой|мм)\s+)?(?:(?:в|в\s+каком|в\s+смысле|в\s+связи|про|насчёт|по)\s+.{1,70}|.{1,36})[?!. ]*$/u;
+
+function isLikelyAdjacentCharacterTurn(
+  nlu: LocalNLUResult,
+  frame: DialogueFrame,
+  currentText?: string,
+) {
+  if (!currentText || !frame.previousCharacterText) return false;
+  const normalized = normalizeDialogueForMatching(currentText);
+  const tokenCount = tokenizeDialogue(normalized).length;
+  if (!normalized || tokenCount > 7 || SELF_CONTAINED_SHORT_QUESTION_RE.test(normalized)) return false;
+
+  const characterTopic = frame.lastCharacterTopic ?? frame.previousTopic ?? frame.currentTopic;
+  const currentConcreteTopic = nlu.topic && !GENERIC_RETROSPECTIVE_TOPICS.has(nlu.topic)
+    ? nlu.topic
+    : undefined;
+  if (
+    currentConcreteTopic &&
+    characterTopic &&
+    currentConcreteTopic !== characterTopic &&
+    nlu.confidence >= 0.78 &&
+    tokenCount >= 3
+  ) return false;
+
+  if (frame.pendingQuestion && !nlu.isQuestion && tokenCount <= 7) return true;
+  if (CONTEXTUAL.has(nlu.intent)) return true;
+  if (["unknown", "statement"].includes(nlu.intent) && ADJACENT_FRAGMENT_RE.test(normalized)) return true;
+  if (nlu.isQuestion && tokenCount <= 4 && ADJACENT_FRAGMENT_RE.test(normalized)) return true;
+  return false;
+}
 
 export function hasResolvableReference(nlu: LocalNLUResult, frame: DialogueFrame) {
   if (!CONTEXTUAL.has(nlu.intent)) return true;
@@ -779,13 +819,49 @@ function resolvePendingQuestionReply(
   return nlu;
 }
 
+function resolveAdjacentCharacterTurn(
+  nlu: LocalNLUResult,
+  frame: DialogueFrame,
+  currentText?: string,
+): LocalNLUResult {
+  if (!isLikelyAdjacentCharacterTurn(nlu, frame, currentText)) return nlu;
+  const normalized = normalizeDialogueForMatching(currentText ?? "");
+  const asksBack = nlu.isQuestion || /\?\s*$/u.test((currentText ?? "").trim());
+  const alreadySpecific = !["unknown", "statement"].includes(nlu.intent);
+  const explicitTopic = nlu.topic && !["conversation", "social", "character"].includes(nlu.topic)
+    ? nlu.topic
+    : undefined;
+  if (alreadySpecific && explicitTopic && !CONTEXTUAL.has(nlu.intent)) return nlu;
+  return {
+    ...nlu,
+    intent: alreadySpecific
+      ? nlu.intent
+      : asksBack
+        ? "ask_followup"
+        : "reference_previous_topic",
+    topic: frame.lastCharacterTopic ?? frame.previousTopic ?? frame.currentTopic ?? nlu.topic ?? "conversation",
+    isQuestion: asksBack || nlu.isQuestion,
+    confidence: Math.max(nlu.confidence, frame.pendingQuestion && !asksBack ? 0.9 : 0.84),
+    semantic: {
+      ...nlu.semantic,
+      subject: asksBack && !alreadySpecific ? "character" : nlu.semantic.subject,
+      stance: asksBack && !alreadySpecific && nlu.semantic.stance === "neutral" ? "ask_fact" : nlu.semantic.stance,
+      focus: asksBack && !alreadySpecific && !nlu.semantic.focus && normalized.length <= 40
+        ? frame.previousCharacterText
+        : nlu.semantic.focus,
+      reciprocal: true,
+    },
+  };
+}
+
 export function resolveContextualNLU(
   nlu: LocalNLUResult,
   frame: DialogueFrame,
   currentText?: string,
 ): LocalNLUResult {
   const pendingReply = resolvePendingQuestionReply(nlu, frame, currentText);
-  const certainty = resolveCharacterCertaintyFollowup(pendingReply, frame, currentText);
+  const adjacent = resolveAdjacentCharacterTurn(pendingReply, frame, currentText);
+  const certainty = resolveCharacterCertaintyFollowup(adjacent, frame, currentText);
   const reciprocal = resolveReciprocalQuestion(certainty, frame, currentText);
   const reciprocalDesire = resolveReciprocalDesireQuestion(reciprocal, frame, currentText);
   const activityDetail = resolveCharacterActivityDetailFollowup(reciprocalDesire, frame, currentText);

@@ -38,6 +38,7 @@ const {
   resolveContextualNLU,
 } = await import("../src/local-dialogue/index.ts");
 const { russianLanguagePack } = await import("../src/local-dialogue/language-pack.ts");
+const { resolveSlots } = await import("../src/local-dialogue/renderer.ts");
 const { localPerception, interpret, buildThought, decide, planResponse } = await import("../src/cognition/local-cognition.ts");
 const { defaultCharacter } = await import("../src/character/character.ts");
 const { initialEmotionalState, deriveMood } = await import("../src/emotions/emotions.ts");
@@ -372,6 +373,39 @@ await test("short certainty follow-ups stay anchored to Yuzuki's immediately pre
     assert.match(result.rendered.text, /злюсь|злост|злая|именно это/iu, text);
     assert.doesNotMatch(result.rendered.text, /ага,? поняла|мнение у меня|первого впечатления/iu, text);
   }
+});
+
+await test("short reactions attach to Yuzuki's latest line before any retrospective recovery", async () => {
+  const history = [
+    { role: "user", text: "Ну смотря как ты сама захочешь ахаха", timestamp: NOW - 2000 },
+    {
+      role: "character",
+      text: "Ты сейчас меня дразнишь. И, кажется, довольно успешно.",
+      timestamp: NOW - 1000,
+      dialogueActs: ["FLIRT"],
+      conversationHint: { topic: "relationship", continuesPrevious: true, openThread: "лёгкий взаимный флирт" },
+    },
+  ];
+  const text = "Ой, успешно?";
+  const initial = analyzeLocalNLU(text);
+  const firstFrame = buildDialogueFrame(history, initial);
+  const nlu = resolveContextualNLU(initial, firstFrame, text);
+  const resolvedFrame = buildDialogueFrame(history, nlu);
+  assert.equal(nlu.intent, "ask_followup");
+  assert.equal(nlu.topic, "relationship");
+  assert.equal(nlu.semantic.focus, "Ты сейчас меня дразнишь. И, кажется, довольно успешно.");
+  assert.equal(shouldUseRetrospectivePass(nlu, resolvedFrame, text), false);
+});
+
+await test("internal dialogue labels cannot leak through user-facing renderer slots", async () => {
+  const baseTurn = await renderTurn({ text: "Что думаешь?", turnId: "internal_label_guard" });
+  const plan = {
+    ...baseTurn.plan,
+    topic: "relationship",
+    semanticPayload: { ...baseTurn.plan.semanticPayload, focus: "relationship" },
+  };
+  assert.equal(resolveSlots("Про {{semantic.focus}}", plan, baseTurn.context), null);
+  assert.equal(resolveSlots("Тема: {{topic}}", plan, baseTurn.context), null);
 });
 
 await test("screenshot regressions no longer turn clear short messages into clarification", async () => {

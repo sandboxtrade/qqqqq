@@ -115,7 +115,6 @@ const { shouldUseCloudLanguage, renderCloudLanguage } = await import("../src/ai/
 
 const base = {
   userText: "Я всё думаю о том разговоре вчера, как ты это видишь?",
-  localDraft: "Я бы не делала из этого быстрый вывод.",
   intent: "ask_for_opinion",
   dialogueActs: ["ANSWER"],
   goal: "answer",
@@ -157,6 +156,9 @@ const base = {
     previousCharacterText: "Я бы не делала из этого быстрый вывод.",
     lastUserIntent: "statement",
     lastCharacterIntent: "ANSWER",
+    lastCharacterTopic: "вчерашний разговор",
+    lastCharacterOpenThread: "вернуться к разговору без поспешного вывода",
+    lastCharacterContinuesPrevious: true,
     turnsOnTopic: 3,
   },
   world: {
@@ -288,6 +290,8 @@ assert.equal(fetchCalls[0].options.headers["X-Firebase-AppCheck"], "app-check-to
 assert.equal(fetchCalls[0].options.credentials, "omit");
 assert.equal(fetchCalls[0].options.cache, "no-store");
 assert.equal(JSON.parse(fetchCalls[0].options.body).userText, base.userText);
+assert.equal("localDraft" in JSON.parse(fetchCalls[0].options.body), false);
+assert.equal(JSON.parse(fetchCalls[0].options.body).continuity.lastCharacterTopic, "вчерашний разговор");
 assert.equal(JSON.parse(fetchCalls[0].options.body).world.activity, "relaxing");
 assert.equal(JSON.parse(fetchCalls[0].options.body).memories[0].importance, 0.8);
 assert.equal(JSON.parse(fetchCalls[0].options.body).emotion.energy, 0.55);

@@ -261,6 +261,16 @@ export interface DialogueFrame {
   previousUserTextBeforeLast?: string;
   previousCharacterText?: string;
   previousCharacterTextBeforeLast?: string;
+  /** Ephemeral GPT continuity hints saved on the previous character turn. */
+  lastCharacterTopic?: string;
+  lastCharacterOpenThread?: string;
+  lastCharacterContinuesPrevious?: boolean;
+}
+
+export interface DialogueConversationHint {
+  topic?: string;
+  continuesPrevious?: boolean;
+  openThread?: string;
 }
 
 export interface DialogueHistoryLine {
@@ -270,6 +280,7 @@ export interface DialogueHistoryLine {
   timestamp: number;
   templateId?: string;
   dialogueActs?: DialogueAct[];
+  conversationHint?: DialogueConversationHint;
 }
 
 export interface DialogueContext {
@@ -329,6 +340,7 @@ export interface ResponseRenderer {
   render(
     plan: CharacterResponsePlan,
     context: DialogueContext,
+    options?: { emergencyFallback?: boolean },
   ): Promise<RenderedResponse>;
 }
 
