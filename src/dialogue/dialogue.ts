@@ -193,3 +193,61 @@ export function guardCharacterReply(
     usedFallback: false,
   };
 }
+
+/**
+ * GPT-first dialogue guard (v0.17).
+ *
+ * Unlike guardCharacterReply, this does not force the cloud reply to mimic a
+ * local action/template. The cloud model owns normal conversational wording and
+ * turn-taking. We only reject violations of durable/local invariants: explicit
+ * silence, internal-state leaks, forbidden claims, and contradictions to a
+ * locked stance/boundary/refusal/preference.
+ */
+export function guardCloudCharacterReply(
+  generated: string,
+  userText: string,
+  decision: CharacterDecision,
+  plan: ResponsePlan,
+): GuardedReply {
+  if (decision.action === "stay_silent")
+    return { text: "", usedFallback: false };
+
+  const text = normalize(generated);
+  const fallback = (reason: string): GuardedReply => ({
+    text: localFallbackReply(userText, decision, plan),
+    usedFallback: true,
+    reason,
+  });
+
+  if (!text) return fallback("empty");
+  if (FORBIDDEN_INTERNAL_RE.test(text)) return fallback("internal-state-leak");
+
+  if (
+    decision.content.forbiddenClaims?.some((claim) =>
+      text.toLowerCase().includes(claim.toLowerCase()),
+    )
+  )
+    return fallback("forbidden-claim");
+
+  const hardSemanticContract =
+    decision.content.locked ||
+    decision.action === "refuse" ||
+    decision.action === "set_boundary" ||
+    decision.content.mode === "boundary" ||
+    decision.content.mode === "refusal";
+
+  if (hardSemanticContract && contradictsDecision(text, decision))
+    return fallback(`semantic-contradiction:${decision.action}`);
+
+  if (
+    decision.content.locked &&
+    decision.content.mode === "personal_preference" &&
+    contradictsLockedPreference(text, decision.content.validationKeywords)
+  )
+    return fallback("locked-content-contradiction");
+
+  return {
+    text: trimAtBoundary(text, MAX_CHARS[plan.length]),
+    usedFallback: false,
+  };
+}

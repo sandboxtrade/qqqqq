@@ -27,7 +27,7 @@ Core boundaries:
 - `world/` — elapsed-time simulation, routine and own-life events.
 - `initiative/` — persistent self-generated intentions and deduplication.
 - `intimacy/` — adult-only local state/profile foundation, still separate from normal chat.
-- `ai/` — optional language-polish transport plus isolated legacy adapters; Local Brain remains authoritative.
+- `ai/` — GPT-first conversation transport plus isolated legacy adapters; Local Brain remains authoritative for durable state.
 - `storage/` — repository abstraction, persistence codec and bounded Firestore live sync.
 - `engine/runtime.ts` — orchestration boundary and atomic turn integration.
 
@@ -42,9 +42,10 @@ Rules:
 7. Memory claims require supplied memory/fact evidence.
 8. Initiative selection remains local and precedes text rendering.
 9. The local engine uses deterministic seedable variability; primary decisions are never random.
-10. Cloud/LLM failures cannot prevent a normal reply because the validated local response is created first.
-11. Optional OpenAI polishing may only rewrite an already-created local response through the authenticated Cloudflare Worker and must fall back to the local wording on any failure.
-12. Firestore paths, revision rules, pending turns and live-sync remain authoritative and unchanged.
+10. GPT is the normal language/conversation generator; Local Brain remains authoritative for durable memory/state and hard constraints.
+11. The authenticated Cloudflare Worker is stateless and cannot mutate Firestore; cloud failure falls back to the validated local renderer for the same turn.
+12. The cloud reply is checked by an invariant guard that protects locked refusals/boundaries/preferences without forcing normal replies to match local templates.
+13. Firestore paths, revision rules, pending turns and live-sync remain authoritative and unchanged.
 
 
 ---
@@ -134,7 +135,9 @@ Bootstrap is read-only for mutable state so delayed startup work cannot overwrit
 
 ## User turn
 
-`load latest runtime revision -> simulate elapsed time -> immutable user event/pending marker -> existing memory retrieval -> Local NLU -> existing Character Brain interpretation/decision -> deterministic emotion + relationship effects -> final CharacterDecision + ResponsePlan -> romance/appearance plan -> Local Dialogue Renderer -> local response guard -> optional authenticated Cloudflare/OpenAI wording pass -> local response guard again -> immutable character event -> atomic commit of reply + state + world -> live sync/UI`
+`load latest runtime revision -> simulate elapsed time -> immutable user event/pending marker -> memory retrieval -> Local NLU/state appraisal -> Character Brain durable state + hard constraints -> build compact recent-history/world/memory packet -> authenticated Cloudflare/OpenAI conversation generation -> invariant guard -> immutable character event -> atomic commit of reply + state + world -> live sync/UI`
+
+`Local Dialogue Renderer -> local guard` is kept as the same-turn fallback when cloud generation fails.
 
 Memory consolidation and initiative maintenance remain outside the critical saved-reply path.
 
@@ -150,13 +153,13 @@ Character Brain owns:
 - response length/tone/question intent;
 - memory references supplied by the existing memory layer.
 
-The renderer only converts that semantic decision into language.
+For ordinary unlocked turns, GPT owns the conversational wording and local turn-taking. Character Brain still owns locked stances, boundaries, refusal rules and durable state.
 
 ## Local dialogue boundary
 
 `Local NLU -> CharacterResponsePlan/dialogue acts -> data-driven template/fragment selection -> slots -> repetition penalty/cooldown -> post-processing`
 
-No remote model is required. The complete local reply exists before any cloud call. Eligible non-sensitive turns may optionally pass through `src/ai/cloud-language.ts` to the authenticated Cloudflare Worker for wording only; the Worker cannot mutate Local Brain state and any failure keeps the local reply.
+The local renderer remains complete enough to answer offline/failure cases, but it is no longer the primary language source. Normal visible chat is generated through `src/ai/cloud-language.ts` and the authenticated Cloudflare Worker using recent dialogue, world state and retrieved memory. The Worker cannot mutate Local Brain state and any failure keeps the local fallback.
 
 ## Silent turn
 

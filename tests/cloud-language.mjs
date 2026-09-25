@@ -22,12 +22,22 @@ let reply = {
       estimatedCostUsd: 0.000086,
     },
     budget: {
-      requestChars: 2140,
-      originalRequestChars: 2510,
-      estimatedInputTokens: 900,
-      estimatedMaxCostUsd: 0.00019,
+      requestChars: 4200,
+      originalRequestChars: 5100,
+      estimatedInputTokens: 1800,
+      estimatedMaxCostUsd: 0.00031,
       compacted: true,
-      compactionSteps: ["recent-2"],
+      compactionSteps: ["recent-8"],
+    },
+    conversation: {
+      topic: "вчерашний разговор",
+      continuesPrevious: true,
+      openThread: "",
+    },
+    signals: {
+      userTone: "neutral",
+      relationshipEvent: "none",
+      memoryCandidate: "",
     },
   },
 };
@@ -136,6 +146,14 @@ const base = {
     lastCharacterIntent: "ANSWER",
     turnsOnTopic: 3,
   },
+  world: {
+    timeOfDay: "evening",
+    location: "living_room",
+    activity: "relaxing",
+    availability: "free",
+    isAwake: true,
+    activityDetail: "просто лежу и даю голове немного затихнуть",
+  },
   relationship: { stage: "close", trust: 0.7, closeness: 0.7, attachment: 0.6, security: 0.7, unresolvedTension: 0.1 },
   emotion: { mood: 0.6, happiness: 0.5, sadness: 0.1, irritation: 0.1, anxiety: 0.1, affection: 0.7, curiosity: 0.6, romanticInterest: 0.4 },
   romancePhase: "neutral",
@@ -155,13 +173,13 @@ const base = {
 };
 
 assert.equal(shouldUseCloudLanguage(base), true);
+// v0.17: GPT is the default conversation path even for simple and intimate turns.
 assert.equal(shouldUseCloudLanguage({
   ...base,
   intent: "greeting",
   userText: "Привет",
   semantic: { ...base.semantic, isQuestion: false, reciprocal: false },
-  continuity: { ...base.continuity, pendingQuestion: undefined },
-}), false);
+}), true);
 assert.equal(shouldUseCloudLanguage({
   ...base,
   intent: "short_yes",
@@ -170,15 +188,19 @@ assert.equal(shouldUseCloudLanguage({
   continuity: { ...base.continuity, previousCharacterText: "Нет, я сейчас не злюсь." },
 }), true);
 assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), true);
-assert.equal(shouldUseCloudLanguage({ ...base, intimacy: { enabled: true, phase: "high_intimacy", comfort: 1, interest: 1, arousal: 1 } }), false);
+assert.equal(shouldUseCloudLanguage({ ...base, intimacy: { enabled: true, phase: "high_intimacy", comfort: 1, interest: 1, arousal: 1 } }), true);
+assert.equal(shouldUseCloudLanguage({ ...base, silent: true }), false);
 
 const result = await renderCloudLanguage(base);
 assert.equal(result.used, true);
 assert.equal(result.model, "gpt-6-luna");
 assert.equal(result.usage?.cacheWriteTokens, 0);
 assert.equal(result.budget?.compacted, true);
-assert.equal(result.budget?.requestChars, 2140);
-assert.deepEqual(result.budget?.compactionSteps, ["recent-2"]);
+assert.equal(result.budget?.requestChars, 4200);
+assert.deepEqual(result.budget?.compactionSteps, ["recent-8"]);
+assert.equal(result.conversation?.continuesPrevious, true);
+assert.equal(result.conversation?.topic, "вчерашний разговор");
+assert.equal(result.signals?.userTone, "neutral");
 assert.equal(idTokenCalls, 1);
 assert.equal(appCheckTokenCalls, 1);
 assert.equal(fetchCalls.length, 1);
@@ -189,6 +211,7 @@ assert.equal(fetchCalls[0].options.headers["X-Firebase-AppCheck"], "app-check-to
 assert.equal(fetchCalls[0].options.credentials, "omit");
 assert.equal(fetchCalls[0].options.cache, "no-store");
 assert.equal(JSON.parse(fetchCalls[0].options.body).userText, base.userText);
+assert.equal(JSON.parse(fetchCalls[0].options.body).world.activity, "relaxing");
 
 reply = {
   status: 200,
@@ -201,15 +224,9 @@ assert.equal(skipped.reason, "server-budget");
 assert.equal(skipped.budget?.estimatedMaxCostUsd, 0.0005);
 
 const callsBeforeLocal = fetchCalls.length;
-const localOnly = await renderCloudLanguage({
-  ...base,
-  intent: "greeting",
-  userText: "Привет",
-  semantic: { ...base.semantic, isQuestion: false, reciprocal: false },
-  continuity: { ...base.continuity, pendingQuestion: undefined },
-});
+const localOnly = await renderCloudLanguage({ ...base, silent: true });
 assert.equal(localOnly.attempted, false);
 assert.equal(localOnly.reason, "local-route");
 assert.equal(fetchCalls.length, callsBeforeLocal);
 
-console.log("PASS cloud language: Cloudflare transport, Auth, App Check, local routing, telemetry and budget fallback");
+console.log("PASS cloud dialogue: GPT-first routing, Cloudflare transport, Auth, App Check, metadata, telemetry and local fallback");

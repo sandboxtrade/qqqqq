@@ -1,6 +1,6 @@
-# Yuzuki Cloudflare language worker
+# Yuzuki GPT-first conversation worker
 
-This Worker is only the optional OpenAI wording layer. The Local Brain remains authoritative for memory, personality, emotions, relationship, intimacy, decisions, and persistence.
+From v0.17.0 this Worker is the normal dialogue-generation path for Yuzuki. The browser sends the current user message plus a compact state/context packet. GPT writes the final conversational reply. Local Brain remains authoritative for durable memory, personality, emotions, relationship, world state, romance/intimacy boundaries, persistence and hard character constraints.
 
 Production endpoint:
 
@@ -10,6 +10,8 @@ Required Cloudflare secret:
 
 `OPENAI_API_KEY`
 
-Do not commit the API key to this repository. The browser client sends a Firebase Auth ID token and a Firebase App Check token to the Worker. If the Worker, Auth, App Check, quota, budget guard, or OpenAI request fails, the app keeps the already-generated local reply.
+Never commit the API key to the repository. The client authenticates every request with Firebase Auth and Firebase App Check. If Worker/Auth/App Check/OpenAI fails, the existing local renderer is used as a resilient fallback.
 
-The deployed Worker source is `cloudflare/worker.js`.
+The Worker uses OpenAI Responses API structured outputs. It returns the visible `text` plus small conversation metadata for diagnostics/future memory routing. The Worker never writes Firestore or mutates Yuzuki state directly.
+
+Deploy source: `cloudflare/worker.js`.

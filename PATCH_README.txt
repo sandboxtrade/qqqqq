@@ -1,46 +1,44 @@
-Yuzuki — Cloudflare language client patch
+Yuzuki v0.17.0 — GPT-first Conversation Architecture
 Base: virtual-companion-current-full-2026-09-24-v0.16.0
 
-Purpose
-- Replace Firebase Callable transport for the optional language layer with the deployed Cloudflare Worker.
-- Keep Local Brain, memory, personality, emotion, relationship, intimacy, decisions and persistence authoritative and local.
-- Send Firebase Auth ID token + Firebase App Check token to the Worker.
-- Keep the already-generated local reply on Worker/OpenAI/Auth/App Check/quota/timeout/budget failure.
-- Keep the OpenAI API key out of the browser and repository.
+WHAT CHANGED
+- GPT-6 Luna is now the normal conversation generator for every visible user turn.
+- Local Brain remains authoritative for durable memory, personality, emotions, relationship, world state, romance/intimacy state, boundaries and locked character positions.
+- LocalDialogueRenderer remains the resilient fallback only when Cloudflare/OpenAI/Auth/App Check/budget/timeout fails.
+- GPT receives up to 12 recent dialogue lines, selected recovered history, relevant memory/facts/open threads, current world activity, emotion/relationship state and hard local constraints.
+- Short elliptical turns are resolved from the real recent conversation instead of relying on local templates.
+- GPT output uses Responses API Structured Outputs and returns the visible reply plus small conversation metadata.
+- Cloud replies use a dedicated invariant guard: ordinary wording is free, but locked refusals/boundaries/preferences and forbidden internal claims stay protected.
+- The Worker no longer skips ordinary simple or high-intimacy dialogue solely because of route type; explicit stay_silent still remains local.
+- ENGINE_VERSION/package version -> 0.17.0. Persistence SCHEMA_VERSION stays 4.
 
-Production endpoint
+INSTALL
+1. Copy the archive contents into repository root with replacement.
+2. GitHub Pages/app deployment updates the browser/client files.
+3. IMPORTANT: Cloudflare is separate. Open `shy-unit-ebfb` -> Edit code, replace Worker code with `cloudflare/worker.js`, then Deploy.
+4. Do not change or expose `OPENAI_API_KEY`; it remains a Cloudflare secret.
+
+PRODUCTION ENDPOINT
 https://shy-unit-ebfb.ermilov-stepa228337.workers.dev/yuzukiSpeak
 
-Changed/new project files
-.env.example
-README.md
-docs/ARCHITECTURE.md
-src/ai/cloud-language.ts
-src/config/runtime-config.ts
-src/storage/firebase.ts
-tests/cloud-language.mjs
-tests/regression.mjs
-cloudflare/worker.js
-cloudflare/README.md
+PERSISTENCE CONTRACTS NOT CHANGED
+- firestore.rules
+- firestore.indexes.json
+- public/runtime-config.js
+- src/storage/auth.ts
+- src/storage/live-sync.ts
+- src/storage/persistence-schema.ts
+- Firestore paths / revision logic / SCHEMA_VERSION=4
 
-Critical persistence contracts intentionally untouched
-firestore.rules
-firestore.indexes.json
-public/runtime-config.js
-src/storage/auth.ts
-src/storage/live-sync.ts
-src/storage/persistence-schema.ts
-Firestore paths / revision logic / schema version
+VERIFICATION
+- npm test: PASS
+- 172 regression checks: PASS
+- 75 Local Dialogue groups: PASS
+- 120 canonical NLU scenarios: PASS
+- 400-turn local fallback stress: PASS
+- AI transport: PASS
+- GPT-first Cloudflare client transport: PASS
+- cloudflare/worker.js syntax: PASS
 
-Verification completed
-- 170 regression checks passed
-- 73 Local Dialogue test groups passed
-- 120 canonical NLU scenarios passed
-- 400-turn stress run passed
-- Cloudflare client transport test passed
-- AI transport test passed
-- cloudflare/worker.js syntax check passed
-- Modified TypeScript files parse successfully
-
-Note
-A full npm typecheck/build was not run in the isolated build container because dependency installation timed out. The project tests above do not require live cloud calls and all passed.
+NOTE
+No live OpenAI request was made by the automated test suite. The already-deployed production Worker/secret should be smoke-tested after deployment using Network -> yuzukiSpeak -> Response.

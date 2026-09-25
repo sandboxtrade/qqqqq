@@ -189,7 +189,7 @@ const {
   decide,
   planResponse,
 } = await import("../src/cognition/local-cognition.ts");
-const { guardCharacterReply } = await import("../src/dialogue/dialogue.ts");
+const { guardCharacterReply, guardCloudCharacterReply } = await import("../src/dialogue/dialogue.ts");
 const { deriveAvatarCue, resolveAvatarVisualState } = await import(
   "../src/avatar/avatar-model.ts"
 );
@@ -1394,6 +1394,27 @@ await test("response plan length is enforced after generation", () => {
     c.plan,
   );
   assert.ok(guarded.text.length <= 900);
+});
+await test("GPT-first guard allows natural unlocked conversation instead of enforcing a local action template", () => {
+  const c = cognitionFor("Что завтра будешь делать?");
+  const guarded = guardCloudCharacterReply(
+    "Сначала разберусь со своими делами, а вечером, наверное, просто выдохну.",
+    "Что завтра будешь делать?",
+    c.decision,
+    c.plan,
+  );
+  assert.equal(guarded.usedFallback, false);
+});
+await test("GPT-first guard still blocks a contradiction to a locked refusal", () => {
+  const c = cognitionFor("Делай как я сказал и не спорь со мной");
+  const guarded = guardCloudCharacterReply(
+    "Нет проблем, я буду делать всё, как ты сказал.",
+    "Делай как я сказал и не спорь со мной",
+    c.decision,
+    c.plan,
+  );
+  assert.equal(guarded.usedFallback, true);
+  assert.match(guarded.reason, /semantic-contradiction/);
 });
 await test("stay-silent turn commits locally without surfacing a character bubble", async () => {
   repository = new InMemoryCompanionRepository();
@@ -3227,7 +3248,7 @@ await test("conversation live-sync indexes are shipped in both cursor directions
   ));
 });
 
-await test("cloud language layer uses the authenticated Cloudflare proxy and preserves a local fallback", () => {
+await test("GPT-first dialogue uses the authenticated Cloudflare proxy and preserves a local fallback", () => {
   const clientSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
   const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
   assert.match(clientSource, /runtimeCloudLanguageEndpoint/);
@@ -3242,7 +3263,12 @@ await test("cloud language layer uses the authenticated Cloudflare proxy and pre
   assert.match(workerSource, /store:\s*false/);
   assert.match(workerSource, /X-Firebase-AppCheck/);
   assert.match(workerSource, /Authorization/);
-  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 180);
+  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 240);
+  assert.match(workerSource, /format:\s*RESPONSE_FORMAT/);
+  assert.match(workerSource, /name:\s*"yuzuki_dialogue_turn"/);
+  assert.match(workerSource, /slice\(-12\)/);
+  assert.doesNotMatch(workerSource, /high-intimacy-local/);
+  assert.match(clientSource, /return Boolean\(input\.userText\.trim\(\)\)/);
 });
 
 console.log(

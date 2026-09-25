@@ -20,7 +20,7 @@ import {
 } from "../cognition/local-cognition";
 import { inferStateEffects } from "../cognition/state-effects";
 import { getCompanionRepository } from "../storage/repository-factory";
-import { guardCharacterReply } from "../dialogue/dialogue";
+import { guardCharacterReply, guardCloudCharacterReply } from "../dialogue/dialogue";
 import { retrieveMemoryContext } from "../memory/retrieval";
 import { recoverRecentMemory } from "../memory/memory-consolidation";
 import { characterViewTopicKey, getMemoryHealth } from "../memory/model";
@@ -31,7 +31,7 @@ import {
   simulateWorld,
 } from "../world/world";
 import type { WorldState, WorldSimulationResult } from "../world/world";
-import { worldClock } from "../world/world";
+import { describeWorldActivityDetail, worldClock } from "../world/world";
 import { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } from "../initiative/initiative";
 import { checkSignal } from "../core/async";
 import type { CompanionRepository, ConversationCursor } from "../storage/repositories/interfaces";
@@ -796,6 +796,14 @@ export async function handleUserMessage(
         lastCharacterIntent: dialogueFrame.lastCharacterIntent,
         turnsOnTopic: dialogueFrame.turnsOnTopic,
       },
+      world: {
+        timeOfDay: before.world.timeOfDay,
+        location: before.world.currentLocation,
+        activity: before.world.currentActivity,
+        availability: before.world.availability,
+        isAwake: before.world.isAwake,
+        activityDetail: describeWorldActivityDetail(before.world.currentActivity, now),
+      },
       relationship: {
         stage: relationship.stage,
         trust: relationship.trust,
@@ -835,14 +843,13 @@ export async function handleUserMessage(
         relationalReflection: thought.relationalReflection,
         retrospectiveEcho: thought.retrospectiveEcho,
       },
-      // The language layer needs enough immediate surface context to resolve
-      // "Точно?", "А ты?", "Почему?", pronouns and other elliptical turns.
-      // This history is stateless request context only; it is not model memory.
-      recentHistory: historyForDialogue.slice(-8).map((line) => ({
+      // v0.17: GPT owns normal conversational continuity. Give it a real
+      // short-term dialogue window; durable memory still comes from Local Brain.
+      recentHistory: historyForDialogue.slice(-12).map((line) => ({
         role: line.role,
         text: line.text,
       })),
-      recoveredHistory: retrospective?.evidence.slice(-3).map((line) => ({
+      recoveredHistory: retrospective?.evidence.slice(-4).map((line) => ({
         role: line.role,
         text: line.text,
       })),
@@ -858,16 +865,17 @@ export async function handleUserMessage(
     }, signal);
     checkSignal(signal);
     if (cloudLanguage.used && cloudLanguage.text) {
-      const cloudGuarded = guardCharacterReply(
+      const cloudGuarded = guardCloudCharacterReply(
         cloudLanguage.text,
         input.text,
         decision,
         responsePlan,
       );
-      // The cloud layer can only improve wording. If validation changes/rejects
-      // its meaning, keep the already validated Local Brain wording instead.
+      // GPT owns ordinary conversational wording/continuity. Local Guard now
+      // protects only durable invariants; if one is violated we keep the local
+      // fallback rather than persisting a contradictory character state.
       if (!cloudGuarded.usedFallback) guarded = cloudGuarded;
-      else cloudLanguage = { ...cloudLanguage, used: false, reason: "response-guard" };
+      else cloudLanguage = { ...cloudLanguage, used: false, reason: cloudGuarded.reason ?? "response-guard" };
     }
   }
   const reply = guarded.text;

@@ -10,6 +10,7 @@ export type CloudLanguageRole = "user" | "character";
 
 export interface CloudLanguageInput {
   userText: string;
+  /** Local renderer output is emergency fallback/reference only in v0.17. */
   localDraft: string;
   intent: string;
   dialogueActs: readonly string[];
@@ -50,6 +51,14 @@ export interface CloudLanguageInput {
     lastCharacterIntent?: string;
     turnsOnTopic: number;
   };
+  world: {
+    timeOfDay: string;
+    location: string;
+    activity: string;
+    availability: string;
+    isAwake: boolean;
+    activityDetail?: string;
+  };
   relationship: {
     stage: string;
     trust: number;
@@ -89,7 +98,9 @@ export interface CloudLanguageInput {
     relationalReflection?: string;
     retrospectiveEcho?: string;
   };
+  /** Recent chronological surface dialogue. The current user message is sent separately. */
   recentHistory: Array<{ role: CloudLanguageRole; text: string }>;
+  /** Older lines selected by the local retrospective/retrieval pass. */
   recoveredHistory?: Array<{ role: CloudLanguageRole; text: string }>;
   memories: string[];
   facts: string[];
@@ -117,6 +128,18 @@ export interface CloudLanguageBudget {
   compactionSteps?: string[];
 }
 
+export interface CloudConversationMetadata {
+  topic?: string;
+  continuesPrevious?: boolean;
+  openThread?: string;
+}
+
+export interface CloudLanguageSignals {
+  userTone?: string;
+  relationshipEvent?: string;
+  memoryCandidate?: string;
+}
+
 export interface CloudLanguageResult {
   attempted: boolean;
   used: boolean;
@@ -124,6 +147,8 @@ export interface CloudLanguageResult {
   model?: string;
   usage?: CloudLanguageUsage;
   budget?: CloudLanguageBudget;
+  conversation?: CloudConversationMetadata;
+  signals?: CloudLanguageSignals;
   reason?: string;
 }
 
@@ -133,6 +158,16 @@ interface WorkerReply {
   skipped?: unknown;
   reason?: unknown;
   error?: unknown;
+  conversation?: {
+    topic?: unknown;
+    continuesPrevious?: unknown;
+    openThread?: unknown;
+  };
+  signals?: {
+    userTone?: unknown;
+    relationshipEvent?: unknown;
+    memoryCandidate?: unknown;
+  };
   usage?: {
     inputTokens?: unknown;
     cachedInputTokens?: unknown;
@@ -150,38 +185,7 @@ interface WorkerReply {
   };
 }
 
-const CALL_TIMEOUT_MS = 10_000;
-const SIMPLE_LOCAL_INTENTS = new Set([
-  "greeting",
-  "farewell",
-  "thanks",
-  "good_morning",
-  "good_night",
-  "acknowledgement",
-  "short_yes",
-  "short_no",
-]);
-
-const CONTEXTUAL_CLOUD_INTENTS = new Set([
-  "ask_why",
-  "ask_followup",
-  "clarification_request",
-  "reference_previous_topic",
-  "ask_character_opinion",
-  "ask_character_preference",
-]);
-
-function isContextDependentTurn(input: CloudLanguageInput) {
-  return Boolean(
-    input.semantic.isQuestion ||
-    input.semantic.reciprocal ||
-    CONTEXTUAL_CLOUD_INTENTS.has(input.intent) ||
-    input.continuity.pendingQuestion ||
-    (/^(?:а\s+|ну\s+)?(?:точно|правда|серьезно|серьёзно|реально|почему|зачем|и|а\s+ты)[?.! ]*$/iu.test(input.userText.trim()) &&
-      input.continuity.previousCharacterText)
-  );
-}
-
+const CALL_TIMEOUT_MS = 11_000;
 let unavailableUntil = 0;
 
 function asNumber(value: unknown) {
@@ -192,13 +196,19 @@ function asOptionalNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function asOptionalString(value: unknown, max = 180) {
+  return typeof value === "string" && value.trim()
+    ? value.replace(/\s+/gu, " ").trim().slice(0, max)
+    : undefined;
+}
+
 function reasonFromError(error: unknown) {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   return raw.replace(/\s+/gu, " ").trim().slice(0, 180) || "cloud-language-error";
 }
 
 function looksLikeAssistantMeta(text: string) {
-  return /(?:как\s+(?:ии|ai)|я\s+(?:не\s+могу|не\s+имею\s+возможности)|openai|языков(?:ая|ой)\s+модел|политик(?:а|и)\s+безопасности|system\s+prompt)/iu.test(text);
+  return /(?:как\s+(?:ии|ai)|я\s+(?:не\s+могу|не\s+имею\s+возможности)|openai|языков(?:ая|ой)\s+модел|политик(?:а|и)\s+безопасности|system\s+prompt|local\s+brain|локальн(?:ый|ого)\s+движок)/iu.test(text);
 }
 
 function parseUsage(raw: WorkerReply["usage"]): CloudLanguageUsage | undefined {
@@ -227,6 +237,24 @@ function parseBudget(raw: WorkerReply["budget"]): CloudLanguageBudget | undefine
   };
 }
 
+function parseConversation(raw: WorkerReply["conversation"]): CloudConversationMetadata | undefined {
+  if (!raw) return undefined;
+  return {
+    topic: asOptionalString(raw.topic, 100),
+    continuesPrevious: typeof raw.continuesPrevious === "boolean" ? raw.continuesPrevious : undefined,
+    openThread: asOptionalString(raw.openThread, 180),
+  };
+}
+
+function parseSignals(raw: WorkerReply["signals"]): CloudLanguageSignals | undefined {
+  if (!raw) return undefined;
+  return {
+    userTone: asOptionalString(raw.userTone, 32),
+    relationshipEvent: asOptionalString(raw.relationshipEvent, 32),
+    memoryCandidate: asOptionalString(raw.memoryCandidate, 220),
+  };
+}
+
 function responseReason(data: WorkerReply, status: number) {
   if (typeof data.reason === "string" && data.reason.trim()) return data.reason.trim().slice(0, 180);
   if (typeof data.error === "string" && data.error.trim()) return data.error.trim().slice(0, 180);
@@ -241,20 +269,13 @@ function bindAbort(source: AbortSignal | undefined, target: AbortController) {
   return () => source.removeEventListener("abort", abort);
 }
 
+/**
+ * v0.17: cloud is the normal dialogue path. Local dialogue is the resilient
+ * fallback, not a router for "simple" messages. Only explicit silence stays local.
+ */
 export function shouldUseCloudLanguage(input: CloudLanguageInput) {
   if (input.silent) return false;
-  if (!input.userText.trim() || !input.localDraft.trim()) return false;
-  if (
-    SIMPLE_LOCAL_INTENTS.has(input.intent) &&
-    input.userText.trim().length < 80 &&
-    !isContextDependentTurn(input)
-  ) return false;
-  // Very private/high-intimacy turns stay fully local. Besides preserving the
-  // character's existing intimacy rules, this prevents a cloud wording layer
-  // from becoming a dependency for Adult Mode.
-  if (input.intimacy?.enabled && ["intimate", "high_intimacy"].includes(input.intimacy.phase))
-    return false;
-  return true;
+  return Boolean(input.userText.trim());
 }
 
 export async function renderCloudLanguage(
@@ -310,11 +331,13 @@ export async function renderCloudLanguage(
     const model = typeof data.model === "string" ? data.model : undefined;
     const usage = parseUsage(data.usage);
     const budget = parseBudget(data.budget);
+    const conversation = parseConversation(data.conversation);
+    const signals = parseSignals(data.signals);
 
     if (!response.ok) {
       const reason = responseReason(data, response.status);
-      unavailableUntil = Date.now() + (response.status === 404 ? 10 * 60_000 : 45_000);
-      return { attempted: true, used: false, reason, model, usage, budget };
+      unavailableUntil = Date.now() + (response.status === 404 ? 10 * 60_000 : 30_000);
+      return { attempted: true, used: false, reason, model, usage, budget, conversation, signals };
     }
 
     if (data.skipped === true) {
@@ -325,11 +348,13 @@ export async function renderCloudLanguage(
         model,
         usage,
         budget,
+        conversation,
+        signals,
       };
     }
 
     const text = typeof data.text === "string" ? data.text.trim() : "";
-    if (!text || text.length > 1400 || looksLikeAssistantMeta(text)) {
+    if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
       return {
         attempted: true,
         used: false,
@@ -337,6 +362,8 @@ export async function renderCloudLanguage(
         model,
         usage,
         budget,
+        conversation,
+        signals,
       };
     }
 
@@ -347,11 +374,13 @@ export async function renderCloudLanguage(
       model,
       usage,
       budget,
+      conversation,
+      signals,
     };
   } catch (error) {
     if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
     const reason = timedOut ? "cloud-language-timeout" : reasonFromError(error);
-    unavailableUntil = Date.now() + 45_000;
+    unavailableUntil = Date.now() + 30_000;
     return { attempted: true, used: false, reason };
   } finally {
     window.clearTimeout(timeout);
