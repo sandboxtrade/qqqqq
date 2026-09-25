@@ -670,6 +670,12 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   const top = scores.find((score) => !score.blocked && score.score > 0);
   const question = classifyQuestion(text);
   const semantic = extractSemanticFrame(text, question.isQuestion);
+  const asksTomorrowPlanIdeas =
+    question.isQuestion &&
+    (
+      /^(?:какие|есть(?:\s+ли)?|что\s+по)\s+(?:у\s+тебя\s+)?(?:(?:иде(?:я|и|й)|план(?:ы|ам|ах)?|вариант(?:ы|ов|ам)?)\s+)?(?:на\s+)?завтра(?:\s+(?:иде(?:я|и|й)|план(?:ы|ам|ах)?|вариант(?:ы|ов|ам)?))?[?.! ]*$/u.test(normalized) ||
+      /^(?:что|чем)\s+(?:будем|можем)\s+.+\s+завтра[?.! ]*$/u.test(normalized)
+    );
 
   let intent = top?.definition.id ?? (question.isQuestion ? "unknown" : normalized ? "statement" : "unknown");
 
@@ -677,6 +683,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   if (semantic.wantsListening) intent = "ask_for_support";
   else if (semantic.correctionTo) intent = "reference_previous_topic";
   else if (semantic.wantsAdvice) intent = "ask_for_opinion";
+  else if (asksTomorrowPlanIdeas) intent = "ask_for_opinion";
   else if (/^(?:не|нет|неа)\s*[,.:;-]?\s*(?:подожди\s*[,.:;-]?\s*)?(?:я\s+)?(?:другое\s+имел(?:а)?\s+в\s+виду|не\s+это\s+имел(?:а)?\s+в\s+виду)/u.test(normalized)) intent = "reference_previous_topic";
   else if (!question.isQuestion && /(?:вроде|как будто)?\s*все\s+нормальн.{0,16}(?:но|а)\s+(?:настроение|мне)\s+.*(?:паршив|плох|груст|тоск|не очень)/u.test(normalized)) intent = "user_sad";
   else if (!question.isQuestion && /(?:мне\s+)?(?:вроде\s+)?нравится\s+.+\s+но\s+.+(?:туп|сомн|плох|не уверен|не уверена|странн)/u.test(normalized)) intent = "uncertain";
@@ -703,6 +710,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
     ? Math.max(0.4, Math.min(0.99, 0.38 + topScore / 8.5))
     : normalized.length > 2 ? 0.28 : 0.18;
   if (semantic.wantsListening || semantic.correctionTo || semantic.wantsAdvice) confidence = Math.max(confidence, 0.9);
+  else if (asksTomorrowPlanIdeas) confidence = Math.max(confidence, 0.86);
   else if (semantic.asksCharacterView && intent !== "unknown") confidence = Math.max(confidence, 0.78);
   else if (["ask_character_state", "ask_character_preference", "ask_relationship"].includes(intent) && question.isQuestion) confidence = Math.max(confidence, 0.74);
   else if (semantic.focus && intent === "statement") confidence = Math.max(confidence, 0.54);

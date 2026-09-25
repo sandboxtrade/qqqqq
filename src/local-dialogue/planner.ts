@@ -879,6 +879,19 @@ function contextualAnswer(context: DialogueContext): string | undefined {
   const intimacyAnswer = intimacySelfAnswer(context, current);
   if (intimacyAnswer) return intimacyAnswer;
 
+  const asksTomorrowIdeas =
+    context.nlu.isQuestion &&
+    context.nlu.topic === "plans" &&
+    (
+      /^(?:какие|есть(?:\s+ли)?|что\s+по)\s+(?:у\s+тебя\s+)?(?:(?:иде(?:я|и|й)|план(?:ы|ам|ах)?|вариант(?:ы|ов|ам)?)\s+)?(?:на\s+)?завтра(?:\s+(?:иде(?:я|и|й)|план(?:ы|ам|ах)?|вариант(?:ы|ов|ам)?))?[?.! ]*$/u.test(current) ||
+      /^(?:что|чем)\s+(?:будем|можем)\s+.+\s+завтра[?.! ]*$/u.test(current)
+    );
+  if (asksTomorrowIdeas) return semanticPick(context, "tomorrow-ideas", [
+    "На завтра можно придумать что-то лёгкое: вместе выбрать фильм или игру, оставить время на спокойный разговор и не забивать весь день планами.",
+    "У меня есть несколько простых идей на завтра: что-нибудь вместе посмотреть, придумать маленькую общую штуку на день или просто оставить вечер под нас без жёсткого плана.",
+    "Я бы на завтра выбрала одну конкретную вещь, а не десять планов: например, что-то вместе посмотреть или придумать небольшой совместный вечер. Остальное — по настроению.",
+  ]);
+
   // Love is earned from the relationship state, not unlocked by the wording of
   // one message. She can be warm much earlier, but uses the strongest wording
   // only after sustained closeness and romantic interest have actually grown.

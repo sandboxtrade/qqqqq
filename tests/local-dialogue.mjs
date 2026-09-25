@@ -307,6 +307,27 @@ await test("messy everyday Russian and one-two character typos are understood", 
   }
 });
 
+await test("short tomorrow-plan questions are understood as requests for ideas", async () => {
+  const cases = [
+    "какие на завтра идеи",
+    "какие идеи на завтра",
+    "есть идеи на завтра?",
+    "что по планам на завтра?",
+  ];
+  const history = [
+    { role: "user", text: "Как у тебя сегодня настроение?", timestamp: NOW - 2000 },
+    { role: "character", text: "В целом всё нормально, я спокойная.", timestamp: NOW - 1000 },
+  ];
+  for (const text of cases) {
+    const result = await renderTurn({ text, turnId: `tomorrow_${text}`, history });
+    assert.equal(result.nlu.intent, "ask_for_opinion", text);
+    assert.equal(result.nlu.topic, "plans", text);
+    assert.notEqual(result.decision.action, "ask", text);
+    assert.doesNotMatch(result.rendered.text, /перефраз|не поймала связку|не совсем поняла|скажи чуть иначе/iu, text);
+    assert.match(result.rendered.text, /завтра|фильм|игр|вечер|план/iu, text);
+  }
+});
+
 await test("screenshot regressions no longer turn clear short messages into clarification", async () => {
   const stateQuestions = ["Ты как?", "Ну как настроение?", "настроние как?"];
   for (const text of stateQuestions) {
