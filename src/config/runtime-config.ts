@@ -11,6 +11,7 @@ export interface RuntimeConfig {
   firebase?: RuntimeFirebaseConfig;
   recaptchaEnterpriseSiteKey?: string;
   geminiModel?: string;
+  cloudLanguageEndpoint?: string;
 }
 
 declare global {
@@ -59,6 +60,10 @@ export const runtimeRecaptchaEnterpriseSiteKey = firstString(
 export const runtimeGeminiModel =
   firstString(env.VITE_GEMINI_MODEL, runtime?.geminiModel) ||
   "gemini-3.8-flash";
+
+export const runtimeCloudLanguageEndpoint =
+  firstString(env.VITE_CLOUD_LANGUAGE_ENDPOINT, runtime?.cloudLanguageEndpoint) ||
+  "https://shy-unit-ebfb.ermilov-stepa228337.workers.dev/yuzukiSpeak";
 
 export const runtimeAppCheckDebugEnabled =
   String(env.VITE_APP_CHECK_DEBUG ?? "").toLowerCase() === "true";

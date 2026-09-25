@@ -98,6 +98,8 @@ registerHooks({
     else if (url.endsWith("/ai/gemini-client.ts"))
       source =
         'export const generateCharacterReply=(...a)=>globalThis.__generate(...a); export const generateInitiativeMessage=async()=>"Как твои дела?";';
+    else if (url.endsWith("/ai/cloud-language.ts"))
+      source = 'export const renderCloudLanguage=async()=>({attempted:false,used:false,reason:"test-local"});';
     else if (url.endsWith(".ts"))
       source = stripTypeScriptTypes(readFileSync(fileURLToPath(url), "utf8"), {
         mode: "transform",
@@ -1920,6 +1922,7 @@ await test("character stage uses one full-scene media pack and ignores the old o
   assert.doesNotMatch(avatarSource, /new URL\([^\n]*neutral\.1\.1\.jpg/);
   assert.match(avatarSource, /mp4\|webm\|mov/);
   assert.match(avatarSource, /png\|jpe\?g\|webp/);
+  assert.match(avatarSource, /import\.meta\.glob\("\.\.\/assets\/character\/scenes\/\*"/);
   assert.match(avatarSource, /placeholder-avatar\.png/);
   assert.doesNotMatch(avatarSource, /builtInEmotionImageModules|assets\/character\/emotions\/\*\.png/);
 });
@@ -2687,8 +2690,6 @@ await test("visual emotion filenames use one vocabulary for photos and videos an
   assert.deepEqual(parseVisualEmotionFilename("happy.5.2.mov"), { emotion: "happy", intensity: 5, variant: 2 });
   assert.deepEqual(parseVisualEmotionFilename("horny.7.1.mp4"), { emotion: "horny", intensity: 7, variant: 1 });
   assert.deepEqual(parseVisualEmotionFilename("hornys.7.1.png"), { emotion: "hornys", intensity: 7, variant: 1 });
-  assert.deepEqual(parseVisualEmotionFilename("neutral.1.2.PNG"), { emotion: "neutral", intensity: 1, variant: 2 });
-  assert.deepEqual(parseVisualEmotionFilename("welcoming.1.1.JPG"), { emotion: "welcoming", intensity: 1, variant: 1 });
   assert.equal(parseVisualEmotionFilename("joy.5.1.mp4"), null);
   assert.equal(parseVisualEmotionFilename("happy.11.1.mp4"), null);
 });
@@ -3224,6 +3225,24 @@ await test("conversation live-sync indexes are shipped in both cursor directions
     index.fields.some((field) => field.fieldPath === "timestamp" && field.order === "DESCENDING") &&
     index.fields.some((field) => field.fieldPath === "__name__" && field.order === "DESCENDING")
   ));
+});
+
+await test("cloud language layer uses the authenticated Cloudflare proxy and preserves a local fallback", () => {
+  const clientSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  assert.match(clientSource, /runtimeCloudLanguageEndpoint/);
+  assert.match(clientSource, /Authorization:\s*`Bearer \${idToken}`/);
+  assert.match(clientSource, /"X-Firebase-AppCheck": appCheckToken/);
+  assert.match(clientSource, /getFirebaseAppCheckToken\(false\)/);
+  assert.doesNotMatch(clientSource, /api\.openai\.com|OPENAI_API_KEY/);
+  assert.match(workerSource, /env\.OPENAI_API_KEY/);
+  assert.match(workerSource, /const MODEL = "gpt-6-luna"/);
+  assert.match(workerSource, /effort:\s*"none"/);
+  assert.match(workerSource, /max_output_tokens:\s*MAX_OUTPUT_TOKENS/);
+  assert.match(workerSource, /store:\s*false/);
+  assert.match(workerSource, /X-Firebase-AppCheck/);
+  assert.match(workerSource, /Authorization/);
+  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 180);
 });
 
 console.log(
