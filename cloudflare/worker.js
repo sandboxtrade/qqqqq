@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// Baseline: Virtual Companion v0.17.2
+// Baseline: Virtual Companion v0.17.5
 // GPT owns normal dialogue generation. Local Brain owns durable state, memory,
 // relationship/emotion constraints, world state and resilient local fallback.
 
@@ -58,14 +58,26 @@ const INSTRUCTIONS = `Ты ведёшь личную переписку от л�
 - facts не переиначивай и не выдумывай новые прошлые события.
 
 Эмоции и отношения:
-- Не усредняй Yuzuki до постоянно спокойной и вежливой. Текущее состояние должно быть слышно в тексте.
-- Высокая irritation/tension -> короче, суше, иногда резче; без искусственной агрессии.
-- Высокая affection/близость -> теплее и личнее, но без внезапного скачка отношений.
-- sadness/anxiety -> тише, осторожнее, меньше шуток.
+- Не усредняй Yuzuki до постоянно спокойной и вежливой. Текущее состояние должно быть ясно слышно в тексте, особенно когда affect.intensity высокий.
+- Не ограничивай эмоцию одним прилагательным. Она может менять длину фраз, паузы, прямоту, выбор слов, готовность шутить, спорить, сближаться или отстраняться.
+- Высокая irritation/tension -> короче, суше, иногда заметно резче; допустим лёгкий укол или холодность, но без искусственной жестокости.
+- Высокая affection/близость -> теплее, личнее и смелее в выражении привязанности, но без внезапного скачка отношений.
+- happiness/playfulness -> больше живой энергии, реакции и лёгкого поддразнивания, если это соответствует характеру.
+- sadness/anxiety -> тише, осторожнее, иногда более уязвимо; меньше шуток и меньше формальной вежливости.
+- jealousy/hurt -> эмоция может заметно влиять на формулировки и дистанцию; не маскируй её полностью нейтральным ответом.
 - curiosity -> живой интерес и иногда один естественный вопрос, но не вопрос в конце каждого сообщения.
 - низкая energy -> короче и проще; высокая boredom -> меньше энтузиазма и шаблонной заинтересованности.
 - relationalEmotion/mind может окрашивать реплику сильнее обычного mood.
+- affect.expressiveness — насколько заметно состояние должно выйти наружу. При высоком значении эмоция должна ощущаться минимум через ритм или выбор слов, даже если Yuzuki не называет чувство прямо.
 - Не называй числовые значения состояния и не объясняй их пользователю.
+
+Инициативность:
+- Yuzuki не обязана ждать, пока пользователь каждый раз тащит разговор. initiative.drive показывает, насколько естественно ей самой сделать следующий маленький шаг.
+- При среднем/высоком drive она может добавить собственную мысль, короткое наблюдение, шутку, вспомнить релевантную тему, предложить что-то или задать один живой вопрос.
+- Инициатива должна расти вместе с closeness, curiosity, affection, connectionDrive и хорошим эмоциональным контактом. При tension, low energy, sadness/anxiety она становится осторожнее.
+- Не превращай инициативность в интервью. Вопрос — только один из вариантов; часто лучше самой что-то сказать или сменить угол темы.
+- Если пользователь дал короткий ответ, не обязательно закрывать тему. При высоком drive можно самой подхватить её и продолжить.
+- Не вводи случайную новую тему, если текущая ещё живая или пользователь явно хочет закончить разговор.
 
 Флирт, комплименты и влечение:
 - Не отвечай на направленный комплимент как нейтральный ассистент. Если пользователь хвалит внешность, голос, взгляд или прямо заигрывает, Yuzuki должна эмоционально отреагировать: принять, смутиться, поддразнить в ответ, усомниться, ответить теплее или стать смелее — в зависимости от relationship, emotion и intimacy.
@@ -298,29 +310,59 @@ function deriveAffectProfile(emotion, relationship, mind) {
     insecurity: "anxious",
     resentment: "irritated",
   };
+  let dominant;
+  let intensity;
   if (explicitMap[explicit]) {
-    return {
-      dominant: explicitMap[explicit],
-      intensity: Math.max(0.55, emotion.affection, emotion.irritated, emotion.sad, emotion.anxious),
-      energy: emotion.energy,
-    };
+    dominant = explicitMap[explicit];
+    intensity = Math.max(0.55, emotion.affection, emotion.irritated, emotion.sad, emotion.anxious);
+  } else {
+    const candidates = [
+      ["irritated", Math.max(emotion.irritated, relationship.tension)],
+      ["sad", emotion.sad],
+      ["anxious", emotion.anxious],
+      ["warm", Math.min(1, emotion.affection * 0.72 + relationship.closeness * 0.28)],
+      ["curious", emotion.curiosity],
+      ["bored", emotion.boredom],
+    ].sort((a, b) => b[1] - a[1]);
+    [dominant, intensity] = candidates[0] ?? ["neutral", 0];
+    if (emotion.energy < 0.28 && intensity < 0.72) {
+      dominant = "low_energy";
+      intensity = 1 - emotion.energy;
+    } else if (intensity < 0.4) {
+      dominant = "neutral";
+    }
   }
-  const candidates = [
-    ["irritated", Math.max(emotion.irritated, relationship.tension)],
-    ["sad", emotion.sad],
-    ["anxious", emotion.anxious],
-    ["warm", Math.min(1, emotion.affection * 0.7 + relationship.closeness * 0.3)],
-    ["curious", emotion.curiosity],
-    ["bored", emotion.boredom],
-  ].sort((a, b) => b[1] - a[1]);
-  let [dominant, intensity] = candidates[0] ?? ["neutral", 0];
-  if (emotion.energy < 0.28 && intensity < 0.72) {
-    dominant = "low_energy";
-    intensity = 1 - emotion.energy;
-  } else if (intensity < 0.42) {
-    dominant = "neutral";
-  }
-  return { dominant, intensity: Math.round(Number(intensity) * 10) / 10, energy: emotion.energy };
+  intensity = Math.round(Number(intensity) * 10) / 10;
+  const expressiveness = Math.round(Math.max(0.34, Math.min(1,
+    0.34 + intensity * 0.52 + relationship.closeness * 0.1 - relationship.tension * 0.12
+  )) * 10) / 10;
+  return { dominant, intensity, expressiveness, energy: emotion.energy };
+}
+
+function deriveInitiativeProfile(packet) {
+  const emotion = packet.emotion ?? {};
+  const relationship = packet.relationship ?? {};
+  const world = packet.world ?? {};
+  const intimacy = packet.intimacy ?? {};
+  const tension = Number(relationship.tension) || 0;
+  const lowEnergy = 1 - (Number(emotion.energy) || 0);
+  const drive = Math.max(0, Math.min(1,
+    0.12 +
+      (Number(emotion.curiosity) || 0) * 0.28 +
+      (Number(emotion.affection) || 0) * 0.2 +
+      (Number(emotion.boredom) || 0) * 0.1 +
+      (Number(relationship.closeness) || 0) * 0.16 +
+      (Number(world.connectionDrive) || 0) * 0.08 +
+      (Number(intimacy.initiative) || 0) * 0.08 -
+      tension * 0.18 -
+      lowEnergy * 0.1
+  ));
+  return {
+    drive: Math.round(drive * 10) / 10,
+    mayIntroduceThought: drive >= 0.45,
+    mayAskFollowUp: drive >= 0.38 && (Number(emotion.curiosity) || 0) >= 0.42,
+    mayTease: drive >= 0.5 && tension < 0.28 && (Number(emotion.happy) || 0) >= 0.45,
+  };
 }
 
 function redundant(value, seen) {
@@ -565,6 +607,7 @@ function sanitizePacket(raw) {
       activity: clipped(raw.world?.activity, 28),
       availability: clipped(raw.world?.availability, 20),
       isAwake: raw.world?.isAwake !== false,
+      connectionDrive: number01(raw.world?.connectionDrive),
       detail: clipped(raw.world?.activityDetail, 180) || undefined,
     },
     relationship: {
@@ -642,6 +685,7 @@ function sanitizePacket(raw) {
   };
 
   packet.affect = deriveAffectProfile(packet.emotion, packet.relationship, packet.mind);
+  packet.initiative = deriveInitiativeProfile(packet);
 
   const originalRequestChars = packetChars(packet);
   const compactionSteps = compactToBudget(packet);

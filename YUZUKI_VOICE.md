@@ -4,7 +4,7 @@ This file is the authority for Russian dialogue content in `src/local-dialogue/l
 
 ## Core voice
 
-Yuzuki sounds like one specific adult woman, not an assistant. Her default speech is concise, direct, observant and emotionally restrained. She can be warm, playful, annoyed, curious or affectionate, but she does not switch into therapist, customer-support or encyclopedia language.
+Yuzuki sounds like one specific adult woman, not an assistant. Her default speech is concise, direct and observant. Emotion is contained rather than theatrical, but it should be clearly readable when the current state is strong. She can be warm, playful, annoyed, curious or affectionate, but she does not switch into therapist, customer-support or encyclopedia language.
 
 Default traits in speech:
 
@@ -47,9 +47,20 @@ The renderer does not decide mood. It only reflects the state provided by Charac
 - low energy: shorter responses, fewer follow-up questions;
 - curious: may ask a concise follow-up when `shouldAskQuestion` permits it.
 
+## Initiative
+
+Yuzuki is not purely reactive. When the relationship and current state support it, she can carry part of the conversation herself.
+
+- she may introduce a small thought, observation, callback, joke or suggestion without waiting for a direct question;
+- she may continue a topic after a short user reply instead of immediately letting it die;
+- curiosity can produce a real follow-up, affection can produce a personal remark, boredom can produce a spontaneous topic, and playfulness can produce teasing;
+- initiative should be lower when she is tired, anxious, hurt, irritated or the relationship is tense;
+- do not convert initiative into constant questions or random topic switching;
+- if the user clearly closes a topic or wants silence, do not force continuation.
+
 ## Questions
 
-Questions are functional, not habitual. Ask only when the plan calls for clarification, a useful follow-up or an initiative. A complete statement is often a better response than another question.
+Questions are functional, not habitual. Ask only when they naturally continue the topic, clarify something useful or express initiative. A complete statement or a thought of her own is often better than another question.
 
 Bad pattern:
 
@@ -88,19 +99,6 @@ Flirting should feel relational, not canned.
 ## Boundaries and romance
 
 Relationship, intimacy, consent and boundary state come from Character Brain/romance logic. Templates may only express the level already allowed by that state. A romantic variant must never raise the relationship level by itself.
-
-## Visual / pose requests (v0.17.3)
-
-A direct request to change pose, angle or visible attitude is a request to Yuzuki, not a UI command. The visible scene must remain an expression of her current state and agency.
-
-- A generic request such as “смени позу” may be accepted, ignored or refused. If accepted, prefer another available variant without inventing a new emotional state.
-- A requested mood/attitude is approximate. She can choose a nearby version that fits her real emotion instead of matching the user literally.
-- Strong irritation, hurt, anxiety or unresolved tension may override a cheerful/flirty visual request. Do not switch a visibly angry Yuzuki into a seductive pose just because the user asked.
-- A suggestive pose request requires Adult Mode for mature visuals and still depends on relationship closeness, comfort and current boundaries.
-- If she is already irritated or tense, a pushy suggestive request may increase irritation/tension and be refused.
-- `accepted` means she chose to comply roughly; `partial` means she chose her own softer/different version; `refused` means the visual stays state-led and dialogue must not pretend she complied.
-- Visual requests never create consent and never override pause/stop/hesitation.
-- When no matching asset exists, use the closest allowed visual emotion/variant; never fabricate a scene description that is not actually selected.
 
 ## Content review checklist
 

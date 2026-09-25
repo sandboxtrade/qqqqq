@@ -71,6 +71,7 @@ export interface CloudLanguageInput {
     activity: string;
     availability: string;
     isAwake: boolean;
+    connectionDrive: number;
     activityDetail?: string;
   };
   relationship: {

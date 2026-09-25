@@ -276,8 +276,8 @@ export async function refreshInitiatives(
   }
 
   if (
-    hoursSinceUser >= 8 &&
-    relationship.closeness > 0.35 &&
+    hoursSinceUser >= 5 &&
+    relationship.closeness > 0.28 &&
     !dedupe.has(`checkin:${world.lastUserInteractionAt}`)
   ) {
     additions.push(
@@ -298,8 +298,8 @@ export async function refreshInitiatives(
   if (
     world.timeOfDay === "evening" &&
     world.availability !== "occupied" &&
-    emotion.energy > 0.32 &&
-    relationship.closeness > 0.3 &&
+    emotion.energy > 0.26 &&
+    relationship.closeness > 0.24 &&
     !dedupe.has(`activity:${calendarDateKey(now, world.timeZone)}`)
   ) {
     additions.push(
@@ -317,33 +317,39 @@ export async function refreshInitiatives(
     );
   }
 
+  const spontaneousDrive = Math.max(
+    emotion.curiosity * 0.92,
+    emotion.affection * 0.78,
+    emotion.boredom * 0.82,
+    world.connectionDrive * 0.7,
+  );
   if (
-    emotion.curiosity > 0.72 &&
+    spontaneousDrive > 0.52 &&
     !dedupe.has(`thought:${calendarDateKey(now, world.timeZone)}`)
   ) {
     additions.push(
       candidate(
         "share_thought",
         spontaneousThoughtTopic(emotion, world),
-        "Her curiosity is high enough that she would plausibly introduce a topic herself.",
-        0.32 + emotion.curiosity * 0.18,
+        "Her current emotion or curiosity gives her enough internal momentum to introduce a thought herself instead of waiting for the user to carry the conversation.",
+        0.35 + spontaneousDrive * 0.24,
         now,
         `thought:${calendarDateKey(now, world.timeZone)}`,
         [],
-        1,
-        16,
+        0.25,
+        18,
       ),
     );
   }
 
-  if (hoursSinceUser >= 1 && romanceAvailable && !intimacyPaused &&
+  if (hoursSinceUser >= 0.5 && romanceAvailable && !intimacyPaused &&
       !dedupe.has(`romance:${calendarDateKey(now, world.timeZone)}`)) {
     const intimateWarmth = intimacy?.adultModeEnabled === true
       ? Math.min(0.12, intimacy.initiativeDrive * 0.12)
       : 0;
     additions.push(candidate("affectionate_checkin", "Сказать, что ей приятно общаться с ним; лёгкий комплимент без давления, обещаний действий или смены образа.",
       "Warm relationship and current availability support a gentle romantic initiative.", 0.61 + intimateWarmth, now,
-      `romance:${calendarDateKey(now, world.timeZone)}`, [], 0, 2));
+      `romance:${calendarDateKey(now, world.timeZone)}`, [], 0, 3));
   }
   for (const initiative of additions)
     await repository.saveInitiative(initiative);

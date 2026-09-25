@@ -1,10 +1,15 @@
-YUZUKI combined patch: v0.17.3 + v0.17.4
+YUZUKI v0.17.5 — initiative + stronger emotional expression
 
-This archive contains the two latest updates merged into one patch.
-Overlay these files onto the project root with replacement.
+Changes:
+- More initiative inside normal GPT-first dialogue.
+- Adds an initiative profile derived from curiosity, affection, closeness, boredom, connection drive, intimacy initiative and tension/energy.
+- Stronger emotional expression in wording/rhythm without turning Yuzuki theatrical.
+- Proactive messages can surface somewhat more often, while still blocking duplicates/unanswered proactive messages.
+- Spontaneous initiatives can now come from affection/boredom/connection drive, not only high curiosity.
+- Evening shared-activity and relationship check-ins are slightly easier to trigger.
+- SCHEMA_VERSION remains 4. No Firestore migration.
 
-Included updates:
-- v0.17.3 emotion-aware pose patch
-- v0.17.4 sx-sequence + idle/activity + ready_to_chat patch
-
-When the same file exists in both updates, the newer v0.17.4 version is included.
+Install:
+1. Overlay the patch over the current project with replacement.
+2. Replace the Cloudflare Worker code with cloudflare/worker.js and Deploy.
+3. Do not change OPENAI_API_KEY or Cloudflare secrets.

@@ -941,6 +941,7 @@ export async function handleUserMessage(
         activity: before.world.currentActivity,
         availability: before.world.availability,
         isAwake: before.world.isAwake,
+        connectionDrive: before.world.connectionDrive,
         activityDetail: describeWorldActivityDetail(before.world.currentActivity, now),
       },
       relationship: {
@@ -1284,7 +1285,7 @@ export async function handleUserMessage(
     trace,
   };
 }
-const PROACTIVE_MESSAGE_COOLDOWN_MS = 4 * 60 * 60_000;
+const PROACTIVE_MESSAGE_COOLDOWN_MS = 2 * 60 * 60_000;
 const PROACTIVE_BLOCK_RECHECK_MS = 60 * 60_000;
 
 function latestProactiveEvent(events: CharacterEvent[]) {
@@ -1352,7 +1353,7 @@ export async function maintainRuntime(
     !initiativeSignal.aborted &&
     advanced.state.world.isAwake &&
     advanced.state.world.availability !== "sleeping" &&
-    maintenanceNow - advanced.state.world.lastUserInteractionAt > 10 * 60_000;
+    maintenanceNow - advanced.state.world.lastUserInteractionAt > 6 * 60_000;
 
   if (initiativeWindowOpen()) {
     const initiative = initiatives.find(
