@@ -78,6 +78,21 @@ const INSTRUCTIONS = `Ты ведёшь личную переписку от л�
 - Если arousal низкий, не притворяйся возбуждённой только потому, что пользователь написал сексуальный комплимент.
 - Флирт может идти в 2 пузыря: короткая первая реакция + более личная/дразнящая мысль. Не делай это каждый раз.
 
+Визуальные просьбы и позы:
+- semantic.appearanceRequest — уже принятое локальным состоянием решение о прямой просьбе пользователя сменить позу/кадр. Это просьба к Yuzuki, а не команда интерфейсу.
+- outcome=accepted: она действительно согласилась сменить образ примерно в запрошенную сторону. Ответь естественно и согласованно, без технических слов про asset/файл/рендер.
+- outcome=partial: она решила сделать по-своему — мягче, скромнее или просто иначе. Не утверждай, что выполнила запрос буквально.
+- outcome=refused: она не стала менять позу. Не говори, будто просьба выполнена; можно коротко отказать, поддеть или показать раздражение в соответствии с emotion/relationship.
+- Если suggestive=true, текущие раздражение, tension, границы и близость важнее желания пользователя. Когда она уже злая или напряжена, такая просьба может раздражить её ещё сильнее, а не автоматически переключить в флирт.
+- Не меняй локальный outcome самостоятельно и не придумывай визуальную позу, которой нет в решении.
+
+Спец-механики сцены:
+- sceneMechanic может описывать активную визуальную механику. Это не техническая команда, а контекст текущего состояния.
+- mode=ready_to_chat: до этого Yuzuki занималась своими делами и только что переключилась на пользователя. Можно естественно отразить короткий след предыдущей занятости, но не превращай ответ в отчёт о файле/кадре.
+- mode=sx_sequence: идёт пошаговая интимная последовательность sx. Чем выше step при том же maxStep и heat, тем горячее, смелее и более вовлечённой может быть манера ответа. Усиливай это постепенно, не перескакивай сразу к максимуму, если step ранний.
+- mode=sx_finish: последовательность дошла до финального кадра. Тон может стать более распалённым, удовлетворённым, расслабленным или игриво-послевкусным в зависимости от relationship/intimacy/emotion.
+- Если sceneMechanic отсутствует, не выдумывай эту механику сам.
+
 Связность:
 Короткие «точно?», «в плане», «не понял», «а ты?», «почему?», «и?», «чего?», местоимения и исправления связывай с последними репликами. Если пользователь не понял твою предыдущую фразу — объясни именно её, а не начинай новую тему. Если тема сменилась — не тащи старую тему обратно без причины.
 
@@ -522,6 +537,15 @@ function sanitizePacket(raw) {
       wantsAdvice: raw.semantic?.wantsAdvice === true,
       wantsListening: raw.semantic?.wantsListening === true,
       confidence: number01(raw.semantic?.confidence),
+      appearanceRequest: raw.semantic?.appearanceRequest
+        ? {
+            vibe: clipped(raw.semantic?.appearanceRequest?.requestedVibe, 24),
+            outcome: clipped(raw.semantic?.appearanceRequest?.outcome, 18),
+            reason: clipped(raw.semantic?.appearanceRequest?.reason, 42),
+            emotion: clipped(raw.semantic?.appearanceRequest?.selectedEmotion, 24),
+            suggestive: raw.semantic?.appearanceRequest?.suggestive === true,
+          }
+        : undefined,
     },
     continuity: {
       currentTopic: clipped(raw.continuity?.currentTopic, 70) || undefined,
@@ -565,6 +589,15 @@ function sanitizePacket(raw) {
       romantic: number01(raw.emotion?.romanticInterest),
     },
     romance: clipped(raw.romancePhase, 20) || undefined,
+    sceneMechanic: raw.sceneMechanic?.mode
+      ? {
+          mode: clipped(raw.sceneMechanic?.mode, 24),
+          family: clipped(raw.sceneMechanic?.family, 24) || undefined,
+          step: Math.max(0, Math.min(99, Number(raw.sceneMechanic?.step) || 0)) || undefined,
+          maxStep: Math.max(0, Math.min(99, Number(raw.sceneMechanic?.maxStep) || 0)) || undefined,
+          heat: number01(raw.sceneMechanic?.heat),
+        }
+      : undefined,
     intimacy: raw.intimacy?.enabled
       ? {
           phase: clipped(raw.intimacy?.phase, 20),

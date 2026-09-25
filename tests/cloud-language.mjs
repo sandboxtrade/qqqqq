@@ -133,6 +133,13 @@ const base = {
     wantsAdvice: false,
     wantsListening: false,
     confidence: 0.92,
+    appearanceRequest: {
+      requestedVibe: "different",
+      outcome: "accepted",
+      reason: "variant-change",
+      selectedEmotion: "comfortable",
+      suggestive: false,
+    },
   },
   decision: {
     action: "answer",
@@ -286,6 +293,13 @@ assert.equal(JSON.parse(fetchCalls[0].options.body).memories[0].importance, 0.8)
 assert.equal(JSON.parse(fetchCalls[0].options.body).emotion.energy, 0.55);
 assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.signal.kind, "none");
 assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.mind.inwardArousal, false);
+assert.deepEqual(JSON.parse(fetchCalls[0].options.body).semantic.appearanceRequest, {
+  requestedVibe: "different",
+  outcome: "accepted",
+  reason: "variant-change",
+  selectedEmotion: "comfortable",
+  suggestive: false,
+});
 
 reply = {
   status: 200,

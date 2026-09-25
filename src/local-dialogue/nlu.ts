@@ -179,6 +179,93 @@ export function detectLocalHumorSignal(text: string): NonNullable<LocalSemanticF
   return { kind: "none", confidence: 0 };
 }
 
+
+export type LocalAppearanceRequestVibe =
+  | "different"
+  | "neutral"
+  | "happy"
+  | "playful"
+  | "affectionate"
+  | "shy"
+  | "confident"
+  | "angry"
+  | "sad"
+  | "seductive";
+
+export interface LocalAppearanceRequest {
+  requested: boolean;
+  vibe: LocalAppearanceRequestVibe;
+  strength: number;
+  explicit: boolean;
+  suggestive: boolean;
+  wantsDifferentVariant: boolean;
+  rawHint?: string;
+}
+
+export function detectLocalAppearanceRequest(value: string): LocalAppearanceRequest {
+  const normalized = normalizeDialogueForMatching(value);
+  const empty: LocalAppearanceRequest = {
+    requested: false,
+    vibe: "different",
+    strength: 0,
+    explicit: false,
+    suggestive: false,
+    wantsDifferentVariant: false,
+  };
+  if (!normalized) return empty;
+
+  const directImperative =
+    /(?:^|\s)(?:сядь|встань|повернись|наклонись|улыбнись|посмотри\s+(?:на\s+меня|сюда)|смени|поменяй|измени|покажи|сделай|прими)(?:\s|$)/u.test(
+      normalized,
+    );
+  const requestVerb =
+    /(?:смени|сменить|поменяй|поменять|измени|изменить|покажи|показать|сделай|сделать|прими|принять|можешь\s+(?:сменить|поменять|показать|сесть|встать|повернуться|наклониться|улыбнуться)|давай\s+(?:сменим|поменяем|другую))/u.test(
+      normalized,
+    );
+  const visualTarget =
+    /(?:поз(?:у|ы|е|ой)?|ракурс|кадр|фот(?:о|ку|ку)?|вид|положение|стойк(?:у|е)?|по-другому|иначе|друг(?:ую|ой|ая)|сядь|встань|повернись|наклонись|улыбнись)/u.test(
+      normalized,
+    );
+
+  if (!(directImperative || (requestVerb && visualTarget))) return empty;
+
+  const suggestive =
+    /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн)/u.test(
+      normalized,
+    );
+  let vibe: LocalAppearanceRequestVibe = "different";
+  if (suggestive) vibe = "seductive";
+  else if (/(?:зл|сердит|ярост|раздраж|строг)/u.test(normalized)) vibe = "angry";
+  else if (/(?:груст|печаль|расстроенн|задумчиво\s+груст)/u.test(normalized)) vibe = "sad";
+  else if (/(?:игрив|весел|дразн|озор|шаловл|с\s+улыбк|улыбнись)/u.test(normalized)) vibe = "playful";
+  else if (/(?:мил|нежн|романтич|ласков|тепл)/u.test(normalized)) vibe = "affectionate";
+  else if (/(?:смущ|застен|скромн)/u.test(normalized)) vibe = "shy";
+  else if (/(?:уверенн|дерзк|самоувер|горд)/u.test(normalized)) vibe = "confident";
+  else if (/(?:счастлив|радост|весел)/u.test(normalized)) vibe = "happy";
+  else if (/(?:нейтральн|обычн|спокойн)/u.test(normalized)) vibe = "neutral";
+
+  const wantsDifferentVariant =
+    vibe === "different" ||
+    /(?:друг(?:ую|ой|ая)|по-другому|иначе|нов(?:ую|ый)|смени|поменяй)/u.test(
+      normalized,
+    );
+  let strength = 0.72;
+  if (suggestive) strength += 0.12;
+  if (/(?:очень|прям|максимально|сильно|реально|по-настоящему)/u.test(normalized))
+    strength += 0.1;
+  if (/!{2,}/u.test(value)) strength += 0.05;
+
+  return {
+    requested: true,
+    vibe,
+    strength: Math.max(0, Math.min(1, strength)),
+    explicit: true,
+    suggestive,
+    wantsDifferentVariant,
+    rawHint: compactSemantic(normalized, 120),
+  };
+}
+
 function detectLocalIntimacySignal(normalized: string): LocalSemanticFrame["intimacy"] {
   const hasIntimateContext = /(?:интим|18\+|близост|ближе|поцел|обним|прижм|ласк|возбуж|желан|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|соблазн|сексуаль|эрот|страст|секс|хими[яи])/u.test(normalized);
   const absoluteStop = /(?:^|\s)(?:стоп|хватит|прекрати|остановись)(?:\s|$|[,.!?])/u.test(normalized);
@@ -339,6 +426,17 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
   if (!focus && !isQuestion && meaningfulTokenCount(normalized) >= 3)
     focus = compactSemantic(semanticBase.replace(/^(?:я\s+)?(?:сегодня|вчера|завтра)\s+/u, ""));
 
+  const appearanceRequest = detectLocalAppearanceRequest(semanticBase);
+  let intimacy = detectLocalIntimacySignal(semanticBase);
+  if (appearanceRequest.suggestive && intimacy.kind === "none") {
+    intimacy = {
+      kind: "flirt",
+      strength: Math.max(0.72, appearanceRequest.strength * 0.9),
+      explicit: false,
+      intimacyContext: true,
+    };
+  }
+
   return {
     subject: detectSemanticSubject(semanticBase, isQuestion),
     stance,
@@ -354,7 +452,7 @@ export function extractSemanticFrame(text: string, isQuestion: boolean): LocalSe
     reciprocal,
     meaningfulTokens: meaningfulTokenCount(semanticBase),
     humor: detectLocalHumorSignal(text),
-    intimacy: detectLocalIntimacySignal(semanticBase),
+    intimacy,
   };
 }
 
@@ -683,6 +781,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   const top = scores.find((score) => !score.blocked && score.score > 0);
   const question = classifyQuestion(text);
   const semantic = extractSemanticFrame(text, question.isQuestion);
+  const appearanceRequest = detectLocalAppearanceRequest(normalized);
   const asksTomorrowPlanIdeas =
     question.isQuestion &&
     (
@@ -696,6 +795,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
   if (semantic.wantsListening) intent = "ask_for_support";
   else if (semantic.correctionTo) intent = "reference_previous_topic";
   else if (semantic.wantsAdvice) intent = "ask_for_opinion";
+  else if (appearanceRequest.requested) intent = "request_action";
   else if (asksTomorrowPlanIdeas) intent = "ask_for_opinion";
   else if (/^(?:не|нет|неа)\s*[,.:;-]?\s*(?:подожди\s*[,.:;-]?\s*)?(?:я\s+)?(?:другое\s+имел(?:а)?\s+в\s+виду|не\s+это\s+имел(?:а)?\s+в\s+виду)/u.test(normalized)) intent = "reference_previous_topic";
   else if (!question.isQuestion && /(?:вроде|как будто)?\s*все\s+нормальн.{0,16}(?:но|а)\s+(?:настроение|мне)\s+.*(?:паршив|плох|груст|тоск|не очень)/u.test(normalized)) intent = "user_sad";
@@ -723,6 +823,7 @@ export function analyzeLocalNLU(text: string): LocalNLUResult {
     ? Math.max(0.4, Math.min(0.99, 0.38 + topScore / 8.5))
     : normalized.length > 2 ? 0.28 : 0.18;
   if (semantic.wantsListening || semantic.correctionTo || semantic.wantsAdvice) confidence = Math.max(confidence, 0.9);
+  else if (appearanceRequest.requested) confidence = Math.max(confidence, 0.86);
   else if (asksTomorrowPlanIdeas) confidence = Math.max(confidence, 0.86);
   else if (semantic.asksCharacterView && intent !== "unknown") confidence = Math.max(confidence, 0.78);
   else if (["ask_character_state", "ask_character_preference", "ask_relationship"].includes(intent) && question.isQuestion) confidence = Math.max(confidence, 0.74);

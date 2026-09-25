@@ -89,6 +89,19 @@ Flirting should feel relational, not canned.
 
 Relationship, intimacy, consent and boundary state come from Character Brain/romance logic. Templates may only express the level already allowed by that state. A romantic variant must never raise the relationship level by itself.
 
+## Visual / pose requests (v0.17.3)
+
+A direct request to change pose, angle or visible attitude is a request to Yuzuki, not a UI command. The visible scene must remain an expression of her current state and agency.
+
+- A generic request such as “смени позу” may be accepted, ignored or refused. If accepted, prefer another available variant without inventing a new emotional state.
+- A requested mood/attitude is approximate. She can choose a nearby version that fits her real emotion instead of matching the user literally.
+- Strong irritation, hurt, anxiety or unresolved tension may override a cheerful/flirty visual request. Do not switch a visibly angry Yuzuki into a seductive pose just because the user asked.
+- A suggestive pose request requires Adult Mode for mature visuals and still depends on relationship closeness, comfort and current boundaries.
+- If she is already irritated or tense, a pushy suggestive request may increase irritation/tension and be refused.
+- `accepted` means she chose to comply roughly; `partial` means she chose her own softer/different version; `refused` means the visual stays state-led and dialogue must not pretend she complied.
+- Visual requests never create consent and never override pause/stop/hesitation.
+- When no matching asset exists, use the closest allowed visual emotion/variant; never fabricate a scene description that is not actually selected.
+
 ## Content review checklist
 
 Before adding a template or fragment, verify that it:

@@ -193,6 +193,9 @@ const { guardCharacterReply, guardCloudCharacterReply } = await import("../src/d
 const { deriveAvatarCue, resolveAvatarVisualState } = await import(
   "../src/avatar/avatar-model.ts"
 );
+const { resolveAppearanceRequest } = await import(
+  "../src/avatar/appearance-request.ts"
+);
 const { mergeChatMessages, replyForFailedMessage, replyTargets } = await import(
   "../src/app/app-utils.ts"
 );
@@ -264,6 +267,114 @@ function cognitionFor(text, emotion = initialEmotionalState, relationship = init
   );
   return { perception, interpretation, decision, plan };
 }
+await test("romance planning sees same-turn emotion and relationship updates", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  assert.match(
+    runtimeSource,
+    /const romance = planRomance\(\{[\s\S]{0,260}character: defaultCharacter, emotion, relationship,[\s\S]{0,120}world: before\.world/iu,
+  );
+  assert.doesNotMatch(
+    runtimeSource,
+    /planRomance\(\{[\s\S]{0,260}emotion: before\.emotion, relationship: before\.relationship/iu,
+  );
+});
+
+await test("suggestive pose pressure can intensify anger instead of overriding it", () => {
+  const angryEmotion = {
+    ...initialEmotionalState,
+    irritation: 0.74,
+    anxiety: 0.18,
+    updatedAt: now,
+  };
+  angryEmotion.mood = deriveMood(angryEmotion);
+  const tenseRelationship = {
+    ...initialRelationshipState,
+    stage: "close",
+    trust: 0.7,
+    closeness: 0.7,
+    attachment: 0.62,
+    security: 0.58,
+    respect: 0.72,
+    unresolvedTension: 0.48,
+    updatedAt: now,
+  };
+  const { perception, decision } = cognitionFor(
+    "покажи более сексуальную позу",
+    angryEmotion,
+    tenseRelationship,
+  );
+  const effects = inferStateEffects(
+    perception,
+    decision,
+    "request_action",
+    angryEmotion,
+    tenseRelationship,
+    { requested: true, suggestive: true, strength: 0.92, vibe: "seductive" },
+  );
+  assert.ok((effects.emotion.irritation ?? 0) > 0, "irritation should rise");
+  assert.ok((effects.relationship.unresolvedTension ?? 0) > 0, "tension should rise");
+  assert.ok((effects.relationship.security ?? 0) < 0, "security should not increase under pressure");
+});
+
+await test("pose arbitration respects emotion and relationship instead of obeying blindly", () => {
+  const world = { ...createInitialWorldState(now), isAwake: true, availability: "free", currentLocation: "bedroom" };
+  const adultIntimacy = {
+    ...createInitialIntimacyState(now),
+    adultModeEnabled: true,
+    comfort: 0.78,
+    interest: 0.72,
+    arousal: 0.46,
+    interactionStatus: "open",
+  };
+  const angryRuntime = {
+    revision: 1,
+    emotion: { ...initialEmotionalState, irritation: 0.76, happiness: 0.2, updatedAt: now },
+    relationship: { ...initialRelationshipState, stage: "close", trust: 0.72, closeness: 0.7, attachment: 0.62, security: 0.64, unresolvedTension: 0.42, updatedAt: now },
+    world,
+    intimacy: adultIntimacy,
+  };
+  const angryResult = resolveAppearanceRequest(
+    angryRuntime,
+    { emotion: "angry", intensity: 8, confidence: 0.9, changeStrength: 0.8 },
+    { requested: true, vibe: "seductive", strength: 0.92, explicit: true, suggestive: true, wantsDifferentVariant: true },
+    "angry-pose",
+  );
+  assert.equal(angryResult.outcome, "refused");
+  assert.ok(["angry", "annoyed"].includes(angryResult.selectedEmotion));
+  assert.notEqual(angryResult.selectedEmotion, "seductive");
+
+  const closeRuntime = {
+    revision: 1,
+    emotion: { ...initialEmotionalState, happiness: 0.68, affection: 0.78, romanticInterest: 0.72, irritation: 0.04, updatedAt: now },
+    relationship: { ...initialRelationshipState, stage: "deep", trust: 0.9, closeness: 0.9, attachment: 0.84, security: 0.86, respect: 0.84, unresolvedTension: 0.02, updatedAt: now },
+    world,
+    intimacy: adultIntimacy,
+  };
+  const closeResult = resolveAppearanceRequest(
+    closeRuntime,
+    { emotion: "affectionate", intensity: 7, confidence: 0.8, changeStrength: 0.7 },
+    { requested: true, vibe: "seductive", strength: 0.9, explicit: true, suggestive: true, wantsDifferentVariant: true },
+    "close-pose",
+  );
+  assert.ok(["accepted", "partial"].includes(closeResult.outcome));
+  assert.ok(["seductive", "flirty", "shy"].includes(closeResult.selectedEmotion));
+  assert.equal(closeResult.forceVariantChange, true);
+
+  let genericAccepted = null;
+  for (let i = 0; i < 64 && !genericAccepted; i += 1) {
+    const result = resolveAppearanceRequest(
+      closeRuntime,
+      { emotion: "happy", intensity: 6, confidence: 0.7, changeStrength: 0.5 },
+      { requested: true, vibe: "different", strength: 0.8, explicit: true, suggestive: false, wantsDifferentVariant: true },
+      `variant-${i}`,
+    );
+    if (result.outcome === "accepted") genericAccepted = result;
+  }
+  assert.ok(genericAccepted, "generic pose request should sometimes be accepted");
+  assert.equal(genericAccepted.forceVariantChange, true);
+  assert.equal(genericAccepted.selectedEmotion, "happy");
+});
+
 await test("legacy state/world documents migrate in memory", () => {
   const migratedState = decodeCompanionSnapshot({
     revision: 3,

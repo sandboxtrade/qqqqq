@@ -8,12 +8,22 @@ export interface CognitionStateEffects {
   relationship: RelationshipDelta;
 }
 
+export interface AppearanceRequestEffectInput {
+  requested: boolean;
+  suggestive: boolean;
+  strength: number;
+  vibe?: string;
+}
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
 export function inferStateEffects(
   perception: Perception,
   decision: CharacterDecision,
   sourceIntent?: string,
   currentEmotion?: EmotionalState,
   currentRelationship?: RelationshipState,
+  appearanceRequest?: AppearanceRequestEffectInput,
 ): CognitionStateEffects {
   const emotion: EmotionDelta = { curiosity: 0.005 };
   const relationship: RelationshipDelta = {};
@@ -80,6 +90,48 @@ export function inferStateEffects(
   } else if (sourceIntent === "compliment_character") {
     emotion.romanticInterest = (emotion.romanticInterest ?? 0) + 0.003 + bond * 0.006;
     emotion.happiness = (emotion.happiness ?? 0) + 0.006 + bond * 0.005;
+  }
+
+  // A direct visual/pose request is still a social act, not a UI command. A
+  // suggestive request can feel playful in an established, safe bond, but the
+  // same request while she is angry, tense or not yet close enough can annoy
+  // her and deepen the current tension. Arousal itself remains owned by the
+  // intimacy engine; this block only changes ordinary emotion/relationship.
+  if (appearanceRequest?.requested && appearanceRequest.suggestive && currentEmotion && currentRelationship) {
+    const strength = clamp01(appearanceRequest.strength);
+    const relationalComfort = clamp01(
+      currentRelationship.closeness * 0.34 +
+        currentRelationship.trust * 0.25 +
+        currentRelationship.attachment * 0.16 +
+        currentRelationship.security * 0.14 +
+        currentRelationship.respect * 0.11,
+    );
+    const negativeLoad = clamp01(
+      currentEmotion.irritation * 0.52 +
+        currentRelationship.unresolvedTension * 0.4 +
+        currentEmotion.anxiety * 0.08,
+    );
+    const resistance = clamp01(
+      negativeLoad * 1.05 + Math.max(0, 0.48 - relationalComfort) * 1.25,
+    );
+
+    if (resistance >= 0.18) {
+      emotion.irritation =
+        (emotion.irritation ?? 0) + 0.012 + resistance * 0.06 * strength;
+      relationship.unresolvedTension =
+        (relationship.unresolvedTension ?? 0) + 0.006 + resistance * 0.034 * strength;
+      relationship.security =
+        (relationship.security ?? 0) - resistance * 0.013 * strength;
+      if (resistance >= 0.55)
+        emotion.affection = (emotion.affection ?? 0) - resistance * 0.008 * strength;
+    } else if (relationalComfort >= 0.52) {
+      emotion.romanticInterest =
+        (emotion.romanticInterest ?? 0) + 0.004 + relationalComfort * 0.008 * strength;
+      emotion.happiness =
+        (emotion.happiness ?? 0) + 0.003 + relationalComfort * 0.005 * strength;
+      relationship.closeness =
+        (relationship.closeness ?? 0) + 0.001 + relationalComfort * 0.0015 * strength;
+    }
   }
 
   // Jealousy is an appraisal of a valued bond being threatened, not a global

@@ -25,6 +25,7 @@ registerHooks({
 const {
   analyzeLocalNLU,
   applyLocalNLUToPerception,
+  detectLocalAppearanceRequest,
   buildDialogueContext,
   buildDialogueFrame,
   buildCausalRelations,
@@ -304,6 +305,36 @@ await test("messy everyday Russian and one-two character typos are understood", 
     const result = analyzeLocalNLU(text);
     assert.equal(result.intent, expected, text);
     assert.ok(result.confidence >= 0.55, `${text}: confidence ${result.confidence}`);
+  }
+});
+
+await test("direct pose requests are recognized without turning the visual layer into a command", () => {
+  for (const text of [
+    "смени позу",
+    "покажи другую позу",
+    "сядь по-другому",
+    "можешь встать немного иначе?",
+  ]) {
+    const request = detectLocalAppearanceRequest(text);
+    const nlu = analyzeLocalNLU(text);
+    assert.equal(request.requested, true, text);
+    assert.equal(request.suggestive, false, text);
+    assert.equal(nlu.intent, "request_action", text);
+    assert.ok(nlu.confidence >= 0.8, `${text}: confidence ${nlu.confidence}`);
+  }
+
+  for (const text of [
+    "покажи более сексуальную позу",
+    "можешь принять пошлую позу?",
+  ]) {
+    const request = detectLocalAppearanceRequest(text);
+    const nlu = analyzeLocalNLU(text);
+    assert.equal(request.requested, true, text);
+    assert.equal(request.suggestive, true, text);
+    assert.equal(request.vibe, "seductive", text);
+    assert.equal(nlu.intent, "request_action", text);
+    assert.equal(nlu.semantic.intimacy.kind, "flirt", text);
+    assert.equal(nlu.semantic.intimacy.intimacyContext, true, text);
   }
 });
 

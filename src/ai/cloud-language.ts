@@ -17,6 +17,13 @@ export interface CloudLanguageInput {
   goal: string;
   tone: string;
   length: string;
+  sceneMechanic?: {
+    mode: string;
+    family?: string;
+    step?: number;
+    maxStep?: number;
+    heat?: number;
+  };
   semantic: {
     topic?: string;
     focus?: string;
@@ -29,6 +36,13 @@ export interface CloudLanguageInput {
     wantsAdvice: boolean;
     wantsListening: boolean;
     confidence: number;
+    appearanceRequest?: {
+      requestedVibe: string;
+      outcome: string;
+      reason: string;
+      selectedEmotion: string;
+      suggestive: boolean;
+    };
   };
   decision: {
     action: string;

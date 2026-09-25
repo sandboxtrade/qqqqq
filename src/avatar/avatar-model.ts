@@ -271,17 +271,103 @@ export function parseVisualEmotionFilename(filename: string) {
   };
 }
 
+export type ActivitySceneName =
+  | "idle"
+  | "reading"
+  | "phone"
+  | "texting"
+  | "scrolling"
+  | "sleeping"
+  | "falling_asleep"
+  | "waking_up"
+  | "resting"
+  | "lying"
+  | "daydreaming"
+  | "thinking_activity"
+  | "listening_music"
+  | "watching"
+  | "drinking"
+  | "eating"
+  | "working"
+  | "writing"
+  | "drawing"
+  | "stretching"
+  | "fixing_hair"
+  | "getting_ready"
+  | "looking_window"
+  | "bored_idle"
+  | "waiting"
+  | "putting_phone_away"
+  | "putting_book_away"
+  | "sitting_up"
+  | "ready_to_chat";
+
+const activitySceneNames = new Set<ActivitySceneName>([
+  "idle",
+  "reading",
+  "phone",
+  "texting",
+  "scrolling",
+  "sleeping",
+  "falling_asleep",
+  "waking_up",
+  "resting",
+  "lying",
+  "daydreaming",
+  "thinking_activity",
+  "listening_music",
+  "watching",
+  "drinking",
+  "eating",
+  "working",
+  "writing",
+  "drawing",
+  "stretching",
+  "fixing_hair",
+  "getting_ready",
+  "looking_window",
+  "bored_idle",
+  "waiting",
+  "putting_phone_away",
+  "putting_book_away",
+  "sitting_up",
+  "ready_to_chat",
+]);
+
+export interface SequenceSceneInfo {
+  kind: "sx" | "sxfin";
+  step: number;
+  variant: number;
+}
+
+function parseActivitySceneFilename(filename: string) {
+  const name = filename.split(/[\\/]/u).at(-1) ?? filename;
+  const match = /^([a-z_]+)\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/iu.exec(name);
+  if (!match || !activitySceneNames.has(match[1] as ActivitySceneName)) return null;
+  return {
+    activity: match[1] as ActivitySceneName,
+    variant: Number(match[2]),
+  };
+}
+
+function parseSequenceSceneFilename(filename: string): SequenceSceneInfo | null {
+  const name = filename.split(/[\\/]/u).at(-1) ?? filename;
+  const match = /^(sxfin|sx)\.?([1-9]\d*)\.([1-9]\d*)\.(?:png|jpe?g|webp|mp4|webm|mov)$/iu.exec(name);
+  if (!match) return null;
+  return {
+    kind: match[1].toLowerCase() as "sx" | "sxfin",
+    step: Number(match[2]),
+    variant: Number(match[3]),
+  };
+}
+
 // Full-scene media only. The old background + transparent-overlay system is removed.
 // Add images or looping videos directly to src/assets/character/scenes using
-// emotion.intensity.variant.(png|jpg|jpeg|webp|mp4|webm|mov). File extensions
-// may use either upper or lower case. No single concrete file is hard-required:
-// the catalog discovers the scene pack at build time and chooses a neutral still
-// when available. This prevents a renamed .jpg/.png from breaking the whole UI.
+// either emotion.intensity.variant.(png|jpg|jpeg|webp|mp4|webm|mov),
+// activity.variant.(png|...), sx1.1.(png|...) / sx.1.1.(png|...), or
+// sxfin1.1.(png|...) / sxfin.1.1.(png|...). File extensions may use either
+// upper or lower case.
 let sceneMediaModules: Record<string, string> = {};
-// Vite transforms import.meta.glob at build time; it is not a normal runtime
-// function. Guard the browser branch instead of probing import.meta.glob itself,
-// otherwise production may silently fall back to an empty catalog. Node tests
-// skip this branch while the browser receives the fully expanded scene map.
 if (typeof window !== "undefined") {
   sceneMediaModules = import.meta.glob("../assets/character/scenes/*", {
     eager: true,
@@ -298,6 +384,38 @@ const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale
     pose: "bedroom-sitting",
     description: "Yuzuki sitting on the bed in her room",
   },
+};
+
+const activityDescriptions: Record<ActivitySceneName, string> = {
+  idle: "Yuzuki is quietly sitting with nothing special in her hands",
+  reading: "Yuzuki is reading a book",
+  phone: "Yuzuki is looking at her phone",
+  texting: "Yuzuki is texting on her phone",
+  scrolling: "Yuzuki is scrolling through her phone",
+  sleeping: "Yuzuki is sleeping",
+  falling_asleep: "Yuzuki is falling asleep",
+  waking_up: "Yuzuki is waking up",
+  resting: "Yuzuki is resting",
+  lying: "Yuzuki is lying down",
+  daydreaming: "Yuzuki is daydreaming",
+  thinking_activity: "Yuzuki is lost in thought",
+  listening_music: "Yuzuki is listening to music",
+  watching: "Yuzuki is watching something",
+  drinking: "Yuzuki is having a drink",
+  eating: "Yuzuki is having a snack",
+  working: "Yuzuki is busy with something",
+  writing: "Yuzuki is writing something",
+  drawing: "Yuzuki is drawing",
+  stretching: "Yuzuki is stretching",
+  fixing_hair: "Yuzuki is fixing her hair",
+  getting_ready: "Yuzuki is getting ready",
+  looking_window: "Yuzuki is looking out the window",
+  bored_idle: "Yuzuki looks a little bored",
+  waiting: "Yuzuki is waiting",
+  putting_phone_away: "Yuzuki is putting her phone away and turning her attention to you",
+  putting_book_away: "Yuzuki is putting her book away and turning her attention to you",
+  sitting_up: "Yuzuki is sitting up to focus on you",
+  ready_to_chat: "Yuzuki is free now and ready to talk",
 };
 
 function mediaTypeFromPath(path: string): CharacterAsset["mediaType"] {
@@ -339,15 +457,75 @@ function createSceneAsset(
   };
 }
 
-function buildSceneEmotionAssets(): CharacterAsset[] {
-  return Object.entries(sceneMediaModules).flatMap(([path, src]) => {
-    const parsed = parseVisualEmotionFilename(path);
-    if (!parsed || typeof src !== "string") return [];
-    const mediaType = mediaTypeFromPath(path);
-    return [createSceneAsset(src, parsed.emotion, parsed.intensity, parsed.variant, mediaType)];
-  }).sort((a, b) => a.id.localeCompare(b.id));
+function createActivitySceneAsset(
+  src: string,
+  activity: ActivitySceneName,
+  variant: number,
+  mediaType: CharacterAsset["mediaType"] = "image",
+): CharacterAsset {
+  return {
+    id: `activity.${activity}.${variant}${mediaType === "video" ? ".video" : ""}`,
+    src,
+    description: activityDescriptions[activity],
+    pose: `activity-${activity}`,
+    outfit: "scene-set",
+    expression: activity === "sleeping" || activity === "falling_asleep" ? "guarded" : "neutral",
+    contexts: activity === "ready_to_chat" || activity === "putting_phone_away" || activity === "putting_book_away" || activity === "sitting_up"
+      ? ["everyday", "playful", "romantic"]
+      : ["everyday", "resting"],
+    locations: [],
+    transitionGroup: `activity-${activity}`,
+    focalPoint: [50, 50],
+    motion: mediaType === "video" ? "loop_video" : "still",
+    mediaType,
+    sceneFit: "contain",
+    sceneScale: 0.98,
+    scenePosition: [50, 50],
+  };
 }
 
+function createSequenceSceneAsset(
+  src: string,
+  info: SequenceSceneInfo,
+  mediaType: CharacterAsset["mediaType"] = "image",
+): CharacterAsset {
+  return {
+    id: `scene.${info.kind}.${info.step}.${info.variant}${mediaType === "video" ? ".video" : ""}`,
+    src,
+    description: info.kind === "sx"
+      ? `Yuzuki intimacy sequence step ${info.step}, variant ${info.variant}`
+      : `Yuzuki intimacy afterglow frame ${info.step}, variant ${info.variant}`,
+    pose: `${info.kind}-${info.step}`,
+    outfit: "scene-set",
+    expression: "playful",
+    contexts: ["romantic"],
+    locations: [],
+    transitionGroup: info.kind === "sx" ? "sx-sequence" : "sx-finish",
+    focalPoint: [50, 50],
+    motion: mediaType === "video" ? "loop_video" : "still",
+    mediaType,
+    sceneFit: "contain",
+    sceneScale: 0.98,
+    scenePosition: [50, 50],
+  };
+}
+
+function buildSceneEmotionAssets(): CharacterAsset[] {
+  return Object.entries(sceneMediaModules).flatMap(([path, src]) => {
+    if (typeof src !== "string") return [];
+    const mediaType = mediaTypeFromPath(path);
+    const parsedEmotion = parseVisualEmotionFilename(path);
+    if (parsedEmotion)
+      return [createSceneAsset(src, parsedEmotion.emotion, parsedEmotion.intensity, parsedEmotion.variant, mediaType)];
+    const parsedActivity = parseActivitySceneFilename(path);
+    if (parsedActivity)
+      return [createActivitySceneAsset(src, parsedActivity.activity, parsedActivity.variant, mediaType)];
+    const parsedSequence = parseSequenceSceneFilename(path);
+    if (parsedSequence)
+      return [createSequenceSceneAsset(src, parsedSequence, mediaType)];
+    return [];
+  }).sort((a, b) => a.id.localeCompare(b.id));
+}
 const placeholderAsset: CharacterAsset = {
   id: "placeholder.neutral",
   src: "assets/character/placeholder-avatar.png",
@@ -528,6 +706,180 @@ function chooseVariant(candidates: CharacterAsset[], recentAssetIds: readonly st
   if (!pool.length) pool = candidates;
   const ordered = [...pool].sort((a, b) => a.id.localeCompare(b.id));
   return ordered[hashString(seed) % ordered.length];
+}
+
+export function parseActivitySceneId(assetId?: string): { activity: ActivitySceneName; variant: number } | null {
+  if (!assetId) return null;
+  const match = /^activity\.([a-z_]+)\.([1-9]\d*)(?:\.video)?$/u.exec(assetId);
+  if (!match || !activitySceneNames.has(match[1] as ActivitySceneName)) return null;
+  return { activity: match[1] as ActivitySceneName, variant: Number(match[2]) };
+}
+
+export function parseSequenceSceneId(assetId?: string): SequenceSceneInfo | null {
+  if (!assetId) return null;
+  const match = /^scene\.(sxfin|sx)\.([1-9]\d*)\.([1-9]\d*)(?:\.video)?$/u.exec(assetId);
+  if (!match) return null;
+  return {
+    kind: match[1] as "sx" | "sxfin",
+    step: Number(match[2]),
+    variant: Number(match[3]),
+  };
+}
+
+function activityAssets(activity: ActivitySceneName, assets: readonly CharacterAsset[]) {
+  return assets.filter((asset) => parseActivitySceneId(asset.id)?.activity === activity);
+}
+
+function sequenceAssets(kind: "sx" | "sxfin", assets: readonly CharacterAsset[]) {
+  return assets.filter((asset) => parseSequenceSceneId(asset.id)?.kind === kind);
+}
+
+function directAppearance(selected: CharacterAsset, previous: AppearanceState | undefined, current: CharacterAsset | undefined, now: number): AppearanceState {
+  return {
+    version: 1,
+    assetId: selected.id,
+    selectedAt: now,
+    outfitChangedAt: previous && current?.outfit === selected.outfit ? previous.outfitChangedAt : now,
+  };
+}
+
+const ambientFamiliesByWorldActivity: Record<string, readonly ActivitySceneName[]> = {
+  sleeping: ["sleeping", "lying"],
+  waking_up: ["waking_up", "sitting_up"],
+  breakfast: ["drinking", "eating"],
+  personal_project: ["working", "writing", "drawing", "thinking_activity"],
+  reading: ["reading"],
+  music: ["listening_music", "daydreaming"],
+  walk: ["waiting", "phone", "looking_window"],
+  cooking: ["working", "drinking"],
+  errands: ["phone", "scrolling", "waiting"],
+  cafe_break: ["drinking", "watching", "daydreaming"],
+  relaxing: ["resting", "lying", "daydreaming"],
+  chatting: ["ready_to_chat", "idle"],
+  idle: ["idle", "bored_idle", "thinking_activity", "phone"],
+};
+
+function pickAmbientFamilies(runtime: RuntimeState): readonly ActivitySceneName[] {
+  const fromWorld = ambientFamiliesByWorldActivity[runtime.world.currentActivity] ?? [];
+  if (fromWorld.length) return fromWorld;
+  if (!runtime.world.isAwake) return ["sleeping"];
+  if (runtime.world.availability === "resting") return ["resting", "lying"];
+  if (runtime.world.availability === "occupied") return ["working", "phone", "reading"];
+  return ["idle", "phone", "thinking_activity"];
+}
+
+export function selectAmbientAppearance(
+  runtime: RuntimeState,
+  now: number,
+  options: AppearanceSelectionOptions = {},
+): AppearanceState | null {
+  const assets = options.assets ?? characterAssets;
+  const previous = runtime.appearance;
+  const current = assets.find((asset) => asset.id === previous?.assetId);
+  const recent = [...(options.recentAssetIds ?? []), ...(previous ? [previous.assetId] : [])];
+  const families = pickAmbientFamilies(runtime).filter((family) => activityAssets(family, assets).length > 0);
+  if (!families.length) return null;
+  const family = families[hashString(`${options.seed ?? "ambient"}|${runtime.world.currentActivity}|${runtime.world.timeOfDay}|${runtime.world.availability}`) % families.length]!;
+  const candidates = activityAssets(family, assets);
+  if (!candidates.length) return null;
+  const selected = chooseVariant(candidates, recent, `${options.seed ?? "ambient"}|${family}|${runtime.world.currentLocation}|${Math.floor(now / 60_000)}`);
+  if (previous && selected.id === previous.assetId) return previous;
+  return directAppearance(selected, previous, current, now);
+}
+
+export function selectReadyToChatAppearance(
+  runtime: RuntimeState,
+  now: number,
+  options: AppearanceSelectionOptions = {},
+): AppearanceState | null {
+  const assets = options.assets ?? characterAssets;
+  const previous = runtime.appearance;
+  const current = assets.find((asset) => asset.id === previous?.assetId);
+  const previousActivity = parseActivitySceneId(previous?.assetId)?.activity;
+  const preferredFamilies: ActivitySceneName[] = [];
+  if (previousActivity && ["phone", "texting", "scrolling"].includes(previousActivity)) preferredFamilies.push("putting_phone_away");
+  if (previousActivity === "reading") preferredFamilies.push("putting_book_away");
+  if (previousActivity && ["lying", "resting", "sleeping", "falling_asleep"].includes(previousActivity)) preferredFamilies.push("sitting_up");
+  if (runtime.world.currentActivity === "waking_up") preferredFamilies.push("waking_up", "sitting_up");
+  preferredFamilies.push("ready_to_chat", "fixing_hair", "stretching");
+  const families = preferredFamilies.filter((family, index) => preferredFamilies.indexOf(family) === index && activityAssets(family, assets).length > 0);
+  if (!families.length) return null;
+  const family = families[0]!;
+  const recent = [...(options.recentAssetIds ?? []), ...(previous ? [previous.assetId] : [])];
+  const candidates = activityAssets(family, assets);
+  const selected = chooseVariant(candidates, recent, `${options.seed ?? "ready"}|${family}|${Math.floor(now / 30_000)}`);
+  if (previous && selected.id === previous.assetId) return previous;
+  return directAppearance(selected, previous, current, now);
+}
+
+export interface SequenceAppearanceSelection {
+  appearance: AppearanceState;
+  kind: "sx" | "sxfin";
+  step: number;
+  maxStep: number;
+  heat: number;
+  completed: boolean;
+}
+
+export function selectSequenceAppearance(
+  runtime: RuntimeState,
+  now: number,
+  options: AppearanceSelectionOptions = {},
+): SequenceAppearanceSelection | null {
+  const assets = options.assets ?? characterAssets;
+  const previous = runtime.appearance;
+  const current = assets.find((asset) => asset.id === previous?.assetId);
+  const previousSeq = parseSequenceSceneId(previous?.assetId);
+  const sxAssets = sequenceAssets("sx", assets);
+  if (!sxAssets.length) return null;
+  const steps = [...new Set(sxAssets.map((asset) => parseSequenceSceneId(asset.id)?.step ?? 0).filter(Boolean))].sort((a, b) => a - b);
+  if (!steps.length) return null;
+  const maxStep = steps[steps.length - 1]!;
+  if (previousSeq?.kind === "sxfin") return null;
+
+  const orderedByVariant = (step: number) => sxAssets
+    .filter((asset) => parseSequenceSceneId(asset.id)?.step === step)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  if (previousSeq?.kind === "sx") {
+    if (previousSeq.step < maxStep) {
+      const nextStep = steps.find((step) => step > previousSeq.step) ?? maxStep;
+      const next = orderedByVariant(nextStep)[0];
+      if (!next) return null;
+      return {
+        appearance: directAppearance(next, previous, current, now),
+        kind: "sx",
+        step: nextStep,
+        maxStep,
+        heat: Math.max(0.28, nextStep / Math.max(1, maxStep)),
+        completed: false,
+      };
+    }
+    const finals = sequenceAssets("sxfin", assets).sort((a, b) => a.id.localeCompare(b.id));
+    if (!finals.length) return null;
+    const selected = chooseVariant(finals, options.recentAssetIds ?? [], `${options.seed ?? "sxfin"}|${Math.floor(now / 10_000)}`);
+    const info = parseSequenceSceneId(selected.id)!;
+    return {
+      appearance: directAppearance(selected, previous, current, now),
+      kind: "sxfin",
+      step: info.step,
+      maxStep,
+      heat: 1,
+      completed: true,
+    };
+  }
+
+  const firstStep = steps[0]!;
+  const first = orderedByVariant(firstStep)[0];
+  if (!first) return null;
+  return {
+    appearance: directAppearance(first, previous, current, now),
+    kind: "sx",
+    step: firstStep,
+    maxStep,
+    heat: Math.max(0.2, firstStep / Math.max(1, maxStep)),
+    completed: firstStep >= maxStep,
+  };
 }
 
 type VisualEmotionProfile = readonly [

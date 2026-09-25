@@ -50,14 +50,21 @@ import {
 } from "../intimacy/intimacy";
 
 import {
+  parseActivitySceneId,
+  parseSequenceSceneId,
   resolveVisualEmotionState,
+  selectAmbientAppearance,
   selectAppearance,
+  selectReadyToChatAppearance,
+  selectSequenceAppearance,
   type AppearanceState,
 } from "../avatar/avatar-model";
+import { resolveAppearanceRequest } from "../avatar/appearance-request";
 
 import {
   analyzeLocalNLU,
   applyLocalNLUToPerception,
+  detectLocalAppearanceRequest,
   applyRetrospectiveNLU,
   buildCausalRelations,
   buildDialogueContext,
@@ -107,6 +114,13 @@ export interface RuntimeTrace {
   localRenderer?: RenderDebug;
   cloudLanguage?: CloudLanguageResult;
   intimacy?: { enabled: boolean; phase: IntimacyState["phase"]; action: string };
+  appearanceRequest?: {
+    requested: boolean;
+    outcome: string;
+    requestedVibe: string;
+    selectedEmotion: string;
+    reason: string;
+  };
   memoryContext: { memories: string[]; facts: string[]; openThreads: string[] };
   reasoning?: { retrospective: boolean; recovered: boolean; scannedLines: number; causalRelations: number };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
@@ -224,6 +238,53 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         : [];
     });
 }
+
+function recentCharacterAppearanceIds(lines: ConversationLine[], limit = 6) {
+  return lines
+    .filter((line) => line.role === "character" && line.appearanceAssetId)
+    .slice(-limit)
+    .map((line) => line.appearanceAssetId!);
+}
+
+const SX_TURN_PATTERN = /(поцел|целу|обними|раздень|возьми|ласкай|трогай|горяч|возбуд|секс|sex|эрот|интим|пошл|хочу тебя|хочу тебя|давай продолжим|продолжай|кончи|конч)/iu;
+
+function shouldTriggerSequence(
+  nlu: LocalNLUResult,
+  text: string,
+  intimacy?: IntimacyState,
+) {
+  if (!intimacy?.adultModeEnabled) return false;
+  const arousal = intimacy.arousal ?? 0;
+  const highPhase = intimacy.phase === "intimate" || intimacy.phase === "high_intimacy";
+  if (arousal < 0.72 && !highPhase) return false;
+  const kind = nlu.semantic.intimacy.kind;
+  if (["stop", "pause", "hesitant", "aftercare"].includes(kind)) return false;
+  if (["flirt", "approach", "consent", "resume"].includes(kind)) return true;
+  return nlu.semantic.intimacy.intimacyContext === true && SX_TURN_PATTERN.test(text);
+}
+
+function shouldShowReadyToChat(state: RuntimeState, now: number) {
+  const currentActivityAsset = parseActivitySceneId(state.appearance?.assetId);
+  if (currentActivityAsset) return true;
+  if (state.world.currentActivity !== "chatting") return true;
+  return Math.max(0, now - state.world.lastUserInteractionAt) > 90_000;
+}
+
+function normalizeAmbientAppearance(
+  state: RuntimeState,
+  history: ConversationLine[],
+  now = runtimeNow(state),
+): RuntimeState {
+  if (parseSequenceSceneId(state.appearance?.assetId)) return state;
+  const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
+  if (state.world.currentActivity === "chatting" && sinceLastInteraction < 90_000 && state.appearance?.assetId)
+    return state;
+  const ambient = selectAmbientAppearance(state, now, {
+    recentAssetIds: recentCharacterAppearanceIds(history),
+    seed: `ambient|${state.world.currentActivity}|${state.world.timeOfDay}|${state.revision}`,
+  });
+  return ambient ? { ...state, appearance: ambient } : state;
+}
 export async function bootstrapRuntime(
   uid: string | null,
   signal: AbortSignal,
@@ -253,18 +314,20 @@ export async function bootstrapRuntime(
   };
   const effectiveNow = now ?? runtimeNow(state);
   const advanced = advance(state, effectiveNow);
-  return {
-    state: {
-      ...advanced.state,
-      pendingWorldEvents: worldEvents(advanced.simulation),
-    },
-    recentConversation: conversationFrom(
-      [...new Map(
-        [...conversationPage.events, ...pendingTurns].map((event) => [event.id, event]),
-      ).values()].sort(
-        (a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id),
-      ),
+  const recentConversation = conversationFrom(
+    [...new Map(
+      [...conversationPage.events, ...pendingTurns].map((event) => [event.id, event]),
+    ).values()].sort(
+      (a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id),
     ),
+  );
+  const bootState = normalizeAmbientAppearance({
+    ...advanced.state,
+    pendingWorldEvents: worldEvents(advanced.simulation),
+  }, recentConversation, effectiveNow);
+  return {
+    state: bootState,
+    recentConversation,
     pendingTurnIds: pendingTurns.map((event) => event.id),
     historyCursor: conversationPage.nextCursor,
     hasOlderConversation: conversationPage.hasMore,
@@ -340,7 +403,7 @@ export async function refreshRuntimeFromPersistence(
   const stateChanged = Boolean(snapshot && world && revision > current.revision);
   const intimacyChanged = Boolean(intimacy && intimacy.revision > (current.intimacy?.revision ?? -1));
   if (!stateChanged && !intimacyChanged) return current;
-  return reconcileRuntimeState({
+  const refreshed = reconcileRuntimeState({
     pendingWorldEvents: current.pendingWorldEvents,
     revision: stateChanged ? revision : current.revision,
     romance: stateChanged ? snapshot!.romance : current.romance,
@@ -350,6 +413,7 @@ export async function refreshRuntimeFromPersistence(
     relationship: stateChanged ? snapshot!.relationship : current.relationship,
     world: stateChanged ? world! : current.world,
   });
+  return normalizeAmbientAppearance(refreshed, [], runtimeNow(refreshed));
 }
 
 export async function setIntimacyAdultMode(
@@ -628,8 +692,14 @@ export async function handleUserMessage(
     before.relationship,
     before.world,
   );
+  const appearanceRequest = detectLocalAppearanceRequest(input.text);
   const effects = inferStateEffects(
-    perception, preliminary, nlu.intent, before.emotion, before.relationship,
+    perception,
+    preliminary,
+    nlu.intent,
+    before.emotion,
+    before.relationship,
+    appearanceRequest,
   );
   const emotion = applyEmotionDelta(before.emotion, effects.emotion, now);
   const relationship = applyRelationshipDelta(
@@ -701,7 +771,7 @@ export async function handleUserMessage(
     before.world,
   );
   const romance = planRomance({ text: input.text, previous: before.romance, now,
-    character: defaultCharacter, emotion: before.emotion, relationship: before.relationship,
+    character: defaultCharacter, emotion, relationship,
     world: before.world, decision, plan: responsePlan });
   decision = romance.decision;
   responsePlan = romance.plan;
@@ -754,8 +824,15 @@ export async function handleUserMessage(
     causalRelations,
   });
   const localPlan = planLocalDialogue(dialogueContext, romance.localText);
-  const visualEmotion = resolveVisualEmotionState(
-    { ...before, emotion, relationship, romance: romance.state, intimacy: intimacy.state },
+  const visualRuntime = {
+    ...before,
+    emotion,
+    relationship,
+    romance: romance.state,
+    intimacy: intimacy.state,
+  };
+  const baseVisualEmotion = resolveVisualEmotionState(
+    visualRuntime,
     {
       decision,
       responsePlan,
@@ -764,16 +841,40 @@ export async function handleUserMessage(
       eventIntensity: nlu.intensity,
     },
   );
-  const recentAppearanceIds = history
-    .filter((line) => line.role === "character" && line.appearanceAssetId)
-    .slice(-6)
-    .map((line) => line.appearanceAssetId!);
-  const appearance = selectAppearance(
-    { ...before, emotion, relationship, romance: romance.state, intimacy: intimacy.state },
+  const appearanceResolution = resolveAppearanceRequest(
+    visualRuntime,
+    baseVisualEmotion,
+    appearanceRequest,
+    input.id,
+  );
+  const visualEmotion = appearanceResolution.visualEmotion;
+  const recentAppearanceIds = recentCharacterAppearanceIds(history);
+  const sequenceAppearance = shouldTriggerSequence(nlu, input.text, intimacy.state)
+    ? selectSequenceAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
+    : null;
+  const readyAppearance = !sequenceAppearance && shouldShowReadyToChat(visualRuntime, now)
+    ? selectReadyToChatAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
+    : null;
+  const appearance = sequenceAppearance?.appearance ?? readyAppearance ?? selectAppearance(
+    visualRuntime,
     visualEmotion,
     now,
     { recentAssetIds: recentAppearanceIds, seed: input.id },
   );
+  const sceneMechanic = sequenceAppearance
+    ? {
+        mode: sequenceAppearance.kind === "sxfin" ? "sx_finish" : "sx_sequence",
+        family: sequenceAppearance.kind,
+        step: sequenceAppearance.step,
+        maxStep: sequenceAppearance.maxStep,
+        heat: sequenceAppearance.heat,
+      }
+    : readyAppearance
+      ? {
+          mode: "ready_to_chat",
+          family: parseActivitySceneId(readyAppearance.assetId)?.activity ?? "ready_to_chat",
+        }
+      : undefined;
   const rendered = await localDialogueRenderer.render(localPlan, dialogueContext);
   logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
   checkSignal(signal);
@@ -790,6 +891,7 @@ export async function handleUserMessage(
       goal: localPlan.goal,
       tone: responsePlan.tone,
       length: responsePlan.length,
+      sceneMechanic,
       semantic: {
         topic: nlu.topic,
         focus: nlu.semantic.focus,
@@ -802,6 +904,15 @@ export async function handleUserMessage(
         wantsAdvice: nlu.semantic.wantsAdvice,
         wantsListening: nlu.semantic.wantsListening,
         confidence: nlu.confidence,
+        appearanceRequest: appearanceResolution.requested
+          ? {
+              requestedVibe: appearanceResolution.requestedVibe,
+              outcome: appearanceResolution.outcome,
+              reason: appearanceResolution.reason,
+              selectedEmotion: appearanceResolution.selectedEmotion,
+              suggestive: appearanceResolution.suggestive,
+            }
+          : undefined,
       },
       decision: {
         action: decision.action,
@@ -1129,6 +1240,13 @@ export async function handleUserMessage(
     localRenderer: rendered.debug,
     cloudLanguage,
     intimacy: { enabled: savedIntimacy.adultModeEnabled, phase: savedIntimacy.phase, action: intimacy.action },
+    appearanceRequest: {
+      requested: appearanceResolution.requested,
+      outcome: appearanceResolution.outcome,
+      requestedVibe: appearanceResolution.requestedVibe,
+      selectedEmotion: appearanceResolution.selectedEmotion,
+      reason: appearanceResolution.reason,
+    },
     responseGuardFallback: guarded.usedFallback,
     responseGuardReason: guarded.reason,
     decision,
