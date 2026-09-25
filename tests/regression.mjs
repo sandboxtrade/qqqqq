@@ -122,7 +122,7 @@ const { consolidateEvents, recoverMemory } = await import(
   "../src/memory/memory-consolidation.ts"
 );
 const { decodeCharacterViewValue, characterViewTopicKey } = await import("../src/memory/model.ts");
-const { rankFacts, rankMemories } = await import("../src/memory/retrieval.ts");
+const { rankFacts, rankMemories, isBroadRecallQuery, isMemoryRecallQuery, topicQueryTerms } = await import("../src/memory/retrieval.ts");
 const { retrieveMemoryContext } = await import("../src/memory/retrieval.ts");
 const { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } = await import("../src/initiative/initiative.ts");
 const { createInitialWorldState, simulateWorld, markUserInteraction } = await import(
@@ -163,7 +163,7 @@ const {
   encodeIntimacyPreferences,
   decodeIntimacyPreferences,
 } = await import("../src/storage/persistence-schema.ts");
-const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode } = await import(
+const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance } = await import(
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
@@ -718,6 +718,88 @@ await test("broad recall returns stored memories and facts without lexical overl
   const context = await retrieveMemoryContext("Что ты помнишь?", r, now);
   assert.ok(context.facts.some(f => f.key === "user.name" && f.value === "Степан"));
   assert.ok(context.memories.length > 0);
+});
+
+
+await test("specific remember-about query stays targeted instead of becoming broad recall", async () => {
+  const r = new InMemoryCompanionRepository();
+  await consolidateEvents([
+    ev("memory-max", "Максим вчера предложил мне вместе доделать проект.", now - 20_000),
+    ev("memory-other", "Мне очень важно не забыть купить новый монитор.", now - 10_000),
+  ], r);
+  assert.equal(isBroadRecallQuery("Помнишь про Максима?"), false);
+  assert.equal(isMemoryRecallQuery("Помнишь про Максима?"), true);
+  assert.equal(isMemoryRecallQuery("Что я тебе рассказывал про Максима?"), true);
+  assert.ok(topicQueryTerms("Помнишь про Максима?").some((term) => term.includes("максим")));
+  const context = await retrieveMemoryContext("Помнишь про Максима?", r, now);
+  assert.equal(context.memories[0]?.id, "memory_memory-max");
+});
+
+await test("memory concepts connect natural job wording across different words", async () => {
+  const r = new InMemoryCompanionRepository();
+  await consolidateEvents([ev("work-concept", "Я устроился в автомалярку.", now - 10_000)], r);
+  const stored = await r.getMemory("memory_work-concept");
+  assert.equal(stored.kind, "episodic");
+  assert.ok(stored.topics.includes("concept:work"));
+  const context = await retrieveMemoryContext("Помнишь про мою работу?", r, now);
+  assert.ok(context.memories.some((memory) => memory.id === "memory_work-concept"));
+  assert.ok(context.facts.some((fact) => fact.key === "user.work" && /автомаляр/u.test(fact.value)));
+});
+
+await test("generic recall prefers memories about the user over Yuzuki's own old replies", async () => {
+  const r = new InMemoryCompanionRepository();
+  await consolidateEvents([
+    ev("user-recall-source", "Мне важно: я учусь на дизайнера.", now - 20_000),
+    ev("character-recall-source", "Мне очень важно иногда побыть одной и подумать.", now - 10_000, "character"),
+  ], r);
+  const context = await retrieveMemoryContext("Что ты вообще помнишь обо мне?", r, now);
+  assert.ok(context.memories.length > 0);
+  assert.match(context.memories[0].summary, /^Пользователь:/u);
+  assert.ok(context.facts.every((fact) => fact.subject === "user"));
+});
+
+await test("memory processor upgrade can promote an old archived personal detail", async () => {
+  const r = new InMemoryCompanionRepository();
+  const event = ev("promote-study", "Я учусь на архитектора.", now - 50_000);
+  await r.saveMemory({
+    id: "memory_promote-study",
+    kind: "short_term",
+    summary: "Пользователь: Я учусь на архитектора.",
+    sourceEventIds: [event.id],
+    topics: ["архитектора"],
+    importance: 0.35,
+    confidence: 1,
+    emotionalWeight: 0.24,
+    retrievalStrength: 0.41,
+    accessCount: 3,
+    createdAt: event.timestamp,
+    updatedAt: event.timestamp,
+    lastAccessedAt: event.timestamp,
+    validFrom: event.timestamp,
+    status: "archived",
+  });
+  await consolidateEvents([event], r);
+  const upgraded = await r.getMemory("memory_promote-study");
+  assert.equal(upgraded.kind, "episodic");
+  assert.equal(upgraded.status, "active");
+  assert.equal(upgraded.accessCount, 3);
+  assert.ok(upgraded.topics.includes("concept:study"));
+});
+
+await test("direct recall flushes pending memory before answering", async () => {
+  const r = new InMemoryCompanionRepository();
+  await r.appendEvent(ev("pending-job", "Я устроился в автосервис на кузовные работы.", now - 5_000));
+  repository = r;
+  const c = new AbortController();
+  const boot = await bootstrapRuntime("A", c.signal, now);
+  assert.equal((await r.listKnowledgeFacts()).length, 0);
+  const result = await handleUserMessage(
+    { id: "ask-pending-job", text: "Где я работаю?", timestamp: now },
+    boot.state,
+    { uid: "A", signal: c.signal, history: boot.recentConversation },
+  );
+  assert.ok(result.trace.memoryContext.facts.some((fact) => /автосервис/u.test(fact)));
+  assert.ok((await r.listKnowledgeFacts()).some((fact) => fact.key === "user.work" && /автосервис/u.test(fact.value)));
 });
 
 await test("proactive character actions become durable memories", async () => {
@@ -2056,11 +2138,15 @@ await test("sleep routine keeps an awakened conversation alive briefly, then let
   assert.equal(quiet.world.isAwake, false);
   assert.equal(quiet.world.availability, "sleeping");
 });
-await test("sleep wake flow requires a second recent user message before the normal dialogue world is used", () => {
+await test("sleep wake flow uses the second recent message as the wake signal without regressing GPT-first", () => {
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
   assert.match(runtimeSource, /previousUserLine[\s\S]*recentSleepPing/);
   assert.match(runtimeSource, /recentSleepPing[\s\S]*currentActivity: "chatting"[\s\S]*isAwake: true/);
   assert.match(runtimeSource, /engaged: !silent && turnWorld\.availability !== "sleeping"/);
+  assert.doesNotMatch(runtimeSource, /localDraft:\s*localGuarded\.text/);
+  assert.match(runtimeSource, /lastCharacterTopic: dialogueFrame\.lastCharacterTopic/);
+  assert.match(runtimeSource, /await recoverRecentMemory\(repository, 120\)/);
+  assert.match(runtimeSource, /return normalizeAmbientAppearance\(reconciled, \[\], now\)/);
 });
 await test("character stage uses one full-scene media pack and ignores the old overlay pack", () => {
   const assetSceneSource = readFileSync(new URL("../src/avatar/AssetScene.tsx", import.meta.url), "utf8");
@@ -2846,7 +2932,7 @@ await test("Firestore snapshot codec preserves romance in the committed turn", a
   assert.equal(await r.getEvent("romance_conflict_reply"), null);
 });
 
-const { selectAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
+const { selectAppearance, selectAmbientAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, parseActivitySceneFilename, parseSequenceSceneFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
 const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
 const visualAssets = [baseAsset,
@@ -2861,6 +2947,65 @@ await test("full-scene catalog keeps a stable neutral still fallback without har
   assert.match(characterAssets[0]?.src ?? "", /(?:neutral\.1\.1\.(?:png|jpe?g|webp)|placeholder-avatar\.png)/iu);
   assert.notEqual(characterAssets[0]?.id, "placeholder.neutral");
 });
+await test("ready-to-chat is a one-turn bridge and releases control back to emotion photos", () => {
+  const r = visualRuntime();
+  r.world.currentActivity = "chatting";
+  r.world.lastUserInteractionAt = now - 5_000;
+  r.appearance = { version: 1, assetId: "activity.ready_to_chat.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
+  assert.equal(shouldShowReadyToChat(r, now), false);
+
+  r.appearance = { ...r.appearance, assetId: "activity.reading.1" };
+  assert.equal(shouldShowReadyToChat(r, now), true);
+});
+
+await test("current scene filename formats accept the real mixed-case photo pack", () => {
+  assert.deepEqual(parseVisualEmotionFilename("amused.1.1.PNG"), { emotion: "amused", intensity: 1, variant: 1 });
+  assert.deepEqual(parseActivitySceneFilename("reading.1.png"), { activity: "reading", variant: 1 });
+  assert.deepEqual(parseSequenceSceneFilename("sx10.1.PNG"), { kind: "sx", step: 10, variant: 1 });
+  assert.deepEqual(parseSequenceSceneFilename("sxfin1.1.PNG"), { kind: "sxfin", step: 1, variant: 1 });
+});
+
+await test("ambient selector can replace a stale chat emotion with the current activity photo", () => {
+  const r = visualRuntime();
+  r.world.currentActivity = "reading";
+  r.world.lastUserInteractionAt = now - 5 * 60_000;
+  r.appearance = { version: 1, assetId: "scene.happy.4.2", selectedAt: now - 5 * 60_000, outfitChangedAt: now - 5 * 60_000 };
+  const readingAsset = {
+    ...baseAsset,
+    id: "activity.reading.1",
+    src: "assets/character/scenes/reading.1.png",
+    visualEmotion: undefined,
+    transitionGroup: "activity-reading",
+  };
+  const next = selectAmbientAppearance(r, now, { assets: [baseAsset, readingAsset], seed: "reading-test" });
+  assert.equal(next?.assetId, "activity.reading.1");
+});
+
+await test("intimacy sequence photos are held only while the scene is actually current", () => {
+  const r = visualRuntime();
+  r.intimacy = {
+    ...createInitialIntimacyState(now - 60_000),
+    adultModeEnabled: true,
+    phase: "high_intimacy",
+    interactionStatus: "open",
+    arousal: 0.9,
+    lastInteractionAt: now - 30_000,
+  };
+  r.appearance = { version: 1, assetId: "scene.sx.4.1", selectedAt: now - 60_000, outfitChangedAt: now - 60_000 };
+  assert.equal(shouldHoldSequenceAppearance(r, now), true);
+  assert.equal(shouldHoldSequenceAppearance(r, now + 11 * 60_000), false);
+  r.appearance = { ...r.appearance, assetId: "scene.sxfin.1.1", selectedAt: now - 121_000 };
+  assert.equal(shouldHoldSequenceAppearance(r, now), false);
+  r.appearance = { ...r.appearance, selectedAt: now - 30_000 };
+  r.intimacy = { ...r.intimacy, interactionStatus: "paused" };
+  assert.equal(shouldHoldSequenceAppearance(r, now), false);
+});
+
+await test("periodic runtime reconciliation now normalizes ambient appearance", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  assert.match(runtimeSource, /return normalizeAmbientAppearance\(reconciled, \[\], now\)/);
+});
+
 await test("appearance chooses available expression without a user command", () => {
   const r = visualRuntime();
   assert.equal(selectAppearance(r, "playful", now, visualAssets).assetId, "smile");
@@ -3505,7 +3650,9 @@ await test("GPT-first chat can use weighted memory, visible affect and several s
   assert.match(workerSource, /function deriveAffectProfile/);
   assert.match(workerSource, /\["memoryEcho", rawThought\.memoryEcho/);
   assert.match(workerSource, /messages:\s*\{[\s\S]*maxItems:\s*3/);
-  assert.match(runtimeSource, /const memoryQuery = input\.text\.trim\(\)\.split/);
+  assert.match(runtimeSource, /const explicitMemoryLookup =/);
+  assert.match(runtimeSource, /await recoverRecentMemory\(repository, 120\)/);
+  assert.match(runtimeSource, /const memoryQuery = explicitMemoryLookup/);
   assert.match(runtimeSource, /const characterEvents = \(silent \? \[""\] : replyParts\)/);
   assert.match(runtimeSource, /messagePart:\s*\{ index: index \+ 1, count: all\.length \}/);
   assert.match(storeSource, /result\.replyMessages\?\.length/);
