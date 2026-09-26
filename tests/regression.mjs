@@ -163,7 +163,7 @@ const {
   encodeIntimacyPreferences,
   decodeIntimacyPreferences,
 } = await import("../src/storage/persistence-schema.ts");
-const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance, selectBalancedRecentHistory, applyBoundedCloudReaction } = await import(
+const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance, selectBalancedRecentHistory, applyBoundedCloudReaction, applyBoundedCloudIntimacyReaction } = await import(
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
@@ -2310,8 +2310,8 @@ await test("v0.19.3 GPT emotional reaction is bounded by engine inertia", () => 
   );
   assert.equal(reacted.source, "gpt");
   assert.ok(reacted.emotion.irritation - baseEmotion.irritation <= 0.100001);
-  assert.ok(reacted.emotion.affection - baseEmotion.affection <= 0.025001);
-  assert.ok(reacted.emotion.romanticInterest - baseEmotion.romanticInterest <= 0.020001);
+  assert.ok(reacted.emotion.affection - baseEmotion.affection <= 0.035001);
+  assert.ok(reacted.emotion.romanticInterest - baseEmotion.romanticInterest <= 0.040001);
   assert.ok(baseRelationship.trust - reacted.relationship.trust <= 0.008001);
   assert.ok(reacted.relationship.unresolvedTension - baseRelationship.unresolvedTension <= 0.025001);
 });
@@ -2329,6 +2329,34 @@ await test("v0.19.3 cloud failure does not invoke a second local emotional inter
   assert.equal(reacted.source, "unchanged-fallback");
   assert.deepEqual(reacted.emotion, baseEmotion);
   assert.deepEqual(reacted.relationship, baseRelationship);
+});
+
+await test("GPT intimacy reaction updates desire state but cannot change consent mechanics", () => {
+  const t = Date.now();
+  const base = {
+    ...createInitialIntimacyState(t),
+    adultModeEnabled: true,
+    phase: "close",
+    interactionStatus: "open",
+    comfort: 0.5, interest: 0.5, arousal: 0.45, initiativeDrive: 0.3,
+  };
+  const reacted = applyBoundedCloudIntimacyReaction(base, {
+    attempted: true, used: true,
+    intimacyReaction: { comfort: 1, interest: 1, arousal: 1, initiativeDrive: 1 },
+  }, t + 1_000);
+  assert.equal(reacted.phase, "close");
+  assert.equal(reacted.interactionStatus, "open");
+  assert.ok(reacted.comfort - base.comfort <= 0.035001);
+  assert.ok(reacted.interest - base.interest <= 0.070001);
+  assert.ok(reacted.arousal - base.arousal <= 0.110001);
+  assert.ok(reacted.initiativeDrive - base.initiativeDrive <= 0.080001);
+  const stopped = applyBoundedCloudIntimacyReaction(
+    { ...base, interactionStatus: "stopped" },
+    { attempted: true, used: true, intimacyReaction: { comfort: 1, interest: 1, arousal: 1, initiativeDrive: 1 } },
+    t + 2_000,
+    "intimacy_stop",
+  );
+  assert.equal(stopped.arousal, base.arousal);
 });
 
 await test("sleep wake flow uses the second recent message as the wake signal without regressing GPT-first", () => {
@@ -2674,7 +2702,7 @@ await test("intimacy mind separates inward desire, outward expression and cautio
     emotion, relationship, world,
   });
   assert.equal(intimate.inwardArousal, true);
-  assert.equal(intimate.outwardArousal, false, "internal arousal must not automatically become outward horny behavior");
+  assert.equal(intimate.outwardArousal, true, "strong comfortable adult desire may be expressed outwardly without another artificial gate");
   assert.equal(intimate.active, true);
 
   const hesitant = buildIntimacyMind({
@@ -3910,9 +3938,10 @@ await test("chat only auto-scrolls while the reader is near the bottom", () => {
 
 await test("loaded photos survive Safari decode optimization failures", () => {
   const source = readFileSync(new URL("../src/avatar/AssetScene.tsx", import.meta.url), "utf8");
-  assert.match(source, /img\.decode\(\)\.then\(\(\) => finish\(\), \(\) => finish\(\)\)/);
+  assert.match(source, /img\.onload = \(\) => \{[\s\S]{0,260}finish\(\);/);
+  assert.match(source, /void img\.decode\(\)\.catch/);
   assert.doesNotMatch(source, /finish\(new Error\("image-decode"\)\)/);
-  assert.match(source, /image-timeout"\)\), 20000/);
+  assert.match(source, /image-timeout"\)\), 12000/);
   assert.match(source, /video-timeout"\)\), 25000/);
 });
 
@@ -4066,6 +4095,21 @@ await test("v0.19.4 full-screen settings, context editors and unobscured photo s
   assert.match(settingsSource, /if \(ok\) setView\("home"\)/);
   assert.match(workerSource, /Не перезапускай беседу generic-фразами/);
   assert.match(workerSource, /Эмодзи используй редко/);
+});
+
+await test("v0.19.8 direct intimacy and ordinary visual sync are wired without weakening hard boundaries", () => {
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  const cloudSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
+  const avatarSource = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  assert.match(workerSource, /не нужно искусственно смягчать каждую взрослую тему эвфемизмами/);
+  assert.match(workerSource, /intimacyReaction/);
+  assert.match(workerSource, /"amused", "bashful", "shy", "surprised", "confused"/);
+  assert.match(cloudSource, /CloudIntimacyReaction/);
+  assert.match(runtimeSource, /applyBoundedCloudIntimacyReaction/);
+  assert.match(runtimeSource, /\["intimacy_stop", "intimacy_pause"\]/);
+  assert.match(avatarSource, /directTurnVisualStates/);
+  assert.match(avatarSource, /findWarmNeighborAssets/);
 });
 
 console.log(

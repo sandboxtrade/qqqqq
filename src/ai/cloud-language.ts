@@ -161,6 +161,13 @@ export interface CloudRelationshipReaction {
   unresolvedTension: number;
 }
 
+export interface CloudIntimacyReaction {
+  comfort: number;
+  interest: number;
+  arousal: number;
+  initiativeDrive: number;
+}
+
 export interface CloudLanguageResult {
   attempted: boolean;
   used: boolean;
@@ -178,6 +185,7 @@ export interface CloudLanguageResult {
   /** Raw model-requested deltas. Runtime clamps them before persistence. */
   emotionReaction?: CloudEmotionReaction;
   relationshipReaction?: CloudRelationshipReaction;
+  intimacyReaction?: CloudIntimacyReaction;
   reason?: string;
 }
 
@@ -202,6 +210,7 @@ interface WorkerReply {
   shouldInitiate?: unknown;
   emotionReaction?: Record<string, unknown>;
   relationshipReaction?: Record<string, unknown>;
+  intimacyReaction?: Record<string, unknown>;
   usage?: {
     inputTokens?: unknown;
     cachedInputTokens?: unknown;
@@ -323,6 +332,16 @@ function parseRelationshipReaction(raw: WorkerReply["relationshipReaction"]): Cl
     security: boundedDelta(raw.security),
     respect: boundedDelta(raw.respect),
     unresolvedTension: boundedDelta(raw.unresolvedTension),
+  };
+}
+
+function parseIntimacyReaction(raw: WorkerReply["intimacyReaction"]): CloudIntimacyReaction | undefined {
+  if (!raw) return undefined;
+  return {
+    comfort: boundedDelta(raw.comfort),
+    interest: boundedDelta(raw.interest),
+    arousal: boundedDelta(raw.arousal),
+    initiativeDrive: boundedDelta(raw.initiativeDrive),
   };
 }
 
@@ -478,6 +497,7 @@ export async function renderCloudLanguage(
       const shouldInitiate = typeof data.shouldInitiate === "boolean" ? data.shouldInitiate : undefined;
       const emotionReaction = parseEmotionReaction(data.emotionReaction);
       const relationshipReaction = parseRelationshipReaction(data.relationshipReaction);
+      const intimacyReaction = parseIntimacyReaction(data.intimacyReaction);
       const reason = responseReason(data, response.status);
 
       // Firebase ID/App Check tokens can expire between acquisition and Worker
@@ -501,6 +521,7 @@ export async function renderCloudLanguage(
             shouldInitiate,
             emotionReaction,
             relationshipReaction,
+            intimacyReaction,
           };
         }
       }
@@ -508,7 +529,7 @@ export async function renderCloudLanguage(
       if (!response.ok) {
         const duration = circuitDuration(response.status);
         if (duration) unavailableUntil = Date.now() + duration;
-        return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction };
+        return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction, intimacyReaction };
       }
 
       if (data.skipped === true) {
@@ -526,6 +547,7 @@ export async function renderCloudLanguage(
           shouldInitiate,
           emotionReaction,
           relationshipReaction,
+          intimacyReaction,
         };
       }
 
@@ -540,7 +562,7 @@ export async function renderCloudLanguage(
           messages: [],
           shouldInitiate: false,
           model, usage, budget, conversation, signals,
-          emotionReaction, relationshipReaction,
+          emotionReaction, relationshipReaction, intimacyReaction,
         };
       }
       if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
@@ -556,6 +578,7 @@ export async function renderCloudLanguage(
           shouldInitiate,
           emotionReaction,
           relationshipReaction,
+          intimacyReaction,
         };
       }
 
@@ -573,6 +596,7 @@ export async function renderCloudLanguage(
         shouldInitiate,
         emotionReaction,
         relationshipReaction,
+        intimacyReaction,
       };
     } catch (error) {
       if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };

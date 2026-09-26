@@ -4,6 +4,7 @@ import {
   characterAssets,
   findCharacterAsset,
   findRenderFallbackAsset,
+  findWarmNeighborAssets,
   parseSequenceSceneId,
   type CharacterAsset,
 } from "./avatar-model";
@@ -29,15 +30,14 @@ function preloadImage(asset: CharacterAsset, signal: AbortSignal): Promise<void>
       error ? reject(error) : resolve();
     };
     const abort = () => finish(new Error("cancelled"));
-    const timer = window.setTimeout(() => finish(new Error("image-timeout")), 20000);
+    const timer = window.setTimeout(() => finish(new Error("image-timeout")), 12000);
     signal.addEventListener("abort", abort, { once: true });
     img.onload = () => {
-      // Safari can reject decode() for a perfectly displayable image (notably
-      // large/cached PNGs). onload already proves the resource is usable, so a
-      // decode optimization failure must not throw away a valid Yuzuki frame.
-      if (typeof img.decode === "function")
-        img.decode().then(() => finish(), () => finish());
-      else finish();
+      // Do not block a scene change on PNG decode. onload already means the
+      // bytes are available; keep decode as a best-effort cache warm-up while
+      // the previous frame crossfades underneath the new one.
+      finish();
+      if (typeof img.decode === "function") void img.decode().catch(() => undefined);
     };
     img.onerror = () => finish(new Error("image-load"));
     if (signal.aborted) abort(); else img.src = url(asset);
@@ -286,12 +286,21 @@ export function AssetScene({
   }, [requested.id, retry]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      findWarmNeighborAssets(requested.id, warmIntimacy, 4).forEach((asset, index) => {
+        window.setTimeout(() => warmAsset(asset), index * 140);
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [requested.id, warmIntimacy]);
+
+  useEffect(() => {
     if (!warmIntimacy) return;
     const timer = window.setTimeout(() => {
       intimacyWarmAssets().forEach((asset, index) => {
-        window.setTimeout(() => warmAsset(asset), index * 120);
+        window.setTimeout(() => warmAsset(asset), index * 180);
       });
-    }, 900);
+    }, 1_100);
     return () => window.clearTimeout(timer);
   }, [warmIntimacy]);
 

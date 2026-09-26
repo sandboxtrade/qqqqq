@@ -464,7 +464,7 @@ export function buildIntimacyMind(input: {
     state.phase !== "normal" || state.interactionStatus !== "inactive" || Boolean(input.signal?.intimacyContext)
   );
   const reciprocal = Math.max(0, intimacyPreferenceWeight(preferences, "reciprocity_matters", 0.9));
-  const gradual = Math.max(0, intimacyPreferenceWeight(preferences, "gradual_build_matters", 0.72));
+  const gradual = Math.max(0, intimacyPreferenceWeight(preferences, "gradual_build_matters", 0.55));
   const playfulPreference = Math.max(0, intimacyPreferenceWeight(preferences, "playful_teasing", 0));
   const closenessPreference = Math.max(0, intimacyPreferenceWeight(preferences, "affectionate_closeness", 0.2));
   const directPreference = Math.max(0, intimacyPreferenceWeight(preferences, "direct_desire", 0));
@@ -487,17 +487,18 @@ export function buildIntimacyMind(input: {
   );
   const confidence = clampIntimacy(state.comfort * 0.48 + relationship.trust * 0.3 + reciprocal * 0.12 + (1 - caution) * 0.1);
   const conflicted = active && desire >= 0.48 && caution >= 0.42;
-  const preferredPace: IntimacyPace = caution > 0.48 || gradual > 0.62
+  const preferredPace: IntimacyPace = caution > 0.58 || gradual > 0.9
     ? "slow"
-    : directPreference > 0.54 && confidence > 0.68
+    : directPreference > 0.5 && confidence > 0.62
       ? "bold"
       : "responsive";
-  const bonded = ["close", "deep"].includes(relationship.stage) &&
-    relationship.closeness >= 0.54 && relationship.trust >= 0.54;
-  const inwardArousal = active && state.arousal >= 0.48 && bonded;
+  const bonded =
+    (relationship.closeness >= 0.38 && relationship.trust >= 0.38) ||
+    (state.comfort >= 0.48 && state.interest >= 0.5);
+  const inwardArousal = active && state.arousal >= 0.4 && bonded;
   const outwardArousal = active && bonded &&
-    state.arousal >= 0.7 && state.comfort >= 0.6 && state.interest >= 0.62 &&
-    caution < 0.42 && !["paused", "stopped", "hesitant"].includes(state.interactionStatus);
+    state.arousal >= 0.62 && state.comfort >= 0.48 && state.interest >= 0.5 &&
+    caution < 0.5 && !["paused", "stopped", "hesitant"].includes(state.interactionStatus);
   const wantsCloseness = active && tenderness >= 0.52 && caution < 0.72;
   const wantsMore = active && desire >= 0.6 && confidence >= 0.56 && caution < 0.46;
   const activePreferenceKeys = (preferences?.items ?? [])
@@ -627,6 +628,8 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
   );
   state.comfort = clampIntimacy(state.comfort * 0.68 + (comfortBase + emotionalClosenessPreference * 0.045 + reciprocityPreference * 0.025) * 0.32);
   state.interest = clampIntimacy(state.interest * 0.72 + interestBase * 0.28);
+  const effectiveComfort = Math.max(state.comfort, comfortBase * 0.82);
+  const effectiveInterest = Math.max(state.interest, interestBase * 0.82);
 
   if (signal.kind === "none") return finish();
 
@@ -700,11 +703,11 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     );
     const mutuality = clampIntimacy(state.comfort * 0.5 + state.interest * 0.34 + bondHeat * 0.16);
     const closeEnoughForArousal =
-      ["close", "deep"].includes(input.relationship.stage) &&
-      input.relationship.closeness >= 0.54 &&
-      input.relationship.trust >= 0.54 &&
-      state.comfort >= 0.42 &&
-      input.relationship.unresolvedTension < 0.28;
+      isPrivate &&
+      effectiveComfort >= 0.28 &&
+      effectiveInterest >= 0.3 &&
+      input.relationship.unresolvedTension < 0.38 &&
+      input.emotion.irritation < 0.44;
 
     state.comfort = clampIntimacy(
       state.comfort + (signal.kind === "affection" ? 0.055 : 0.028) * strength,
@@ -716,7 +719,7 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
 
     const affectionArousal = 0.024 * strength * (0.65 + mutuality * 0.35);
     const flirtArousal = closeEnoughForArousal
-      ? (0.085 + bondHeat * 0.11) * strength * (0.72 + mutuality * 0.28)
+      ? (0.105 + bondHeat * 0.12) * strength * (0.72 + mutuality * 0.28)
       : (0.018 + bondHeat * 0.028) * strength;
     state.arousal = clampIntimacy(
       state.arousal + (signal.kind === "flirt" ? flirtArousal : affectionArousal),
@@ -727,7 +730,7 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
       : 0.9 + emotionalClosenessPreference * 0.1;
     state.initiativeDrive = clampIntimacy(
       state.initiativeDrive +
-        (signal.kind === "flirt" ? 0.082 : 0.044) *
+        (signal.kind === "flirt" ? 0.1 : 0.05) *
           strength *
           (0.52 + mutuality * 0.48) *
           paceFactor *
@@ -747,9 +750,9 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
       ? "close"
       : !isPrivate
         ? "close"
-        : state.comfort >= 0.68 && state.interest >= 0.62 && input.relationship.trust >= 0.62
+        : effectiveComfort >= 0.5 && effectiveInterest >= 0.5 && input.relationship.trust >= 0.35
           ? "high_intimacy"
-          : state.comfort >= 0.5 && state.interest >= 0.48
+          : effectiveComfort >= 0.32 && effectiveInterest >= 0.34
             ? "intimate"
             : "close";
     state.phase = nextIntimacyPhase(state.phase, ceiling);
@@ -757,9 +760,9 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     const mutuality = clampIntimacy(state.comfort * 0.58 + state.interest * 0.42);
     state.comfort = clampIntimacy(state.comfort + (signal.kind === "consent" ? 0.035 : 0.05) * strength);
     state.interest = clampIntimacy(state.interest + 0.1 * strength);
-    state.arousal = clampIntimacy(state.arousal + (signal.kind === "consent" ? 0.18 : 0.075) * strength * (0.68 + mutuality * 0.32));
+    state.arousal = clampIntimacy(state.arousal + (signal.kind === "consent" ? 0.22 : 0.085) * strength * (0.68 + mutuality * 0.32));
     const desireFactor = signal.kind === "consent" ? 0.9 + directPreference * 0.14 : 0.9;
-    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.085 * strength * (0.55 + mutuality * 0.45) * desireFactor * (1 - gradualPreference * 0.1));
+    state.initiativeDrive = clampIntimacy(state.initiativeDrive + 0.105 * strength * (0.55 + mutuality * 0.45) * desireFactor * (1 - gradualPreference * 0.1));
     state.lastInteractionAt = input.now;
     if (state.phase === "intimate" || state.phase === "high_intimacy")
       state.activeScene = neutralScene(state.phase, input.now);

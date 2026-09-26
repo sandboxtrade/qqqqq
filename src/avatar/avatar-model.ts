@@ -138,6 +138,12 @@ interface EmotionCandidate {
   magnitude: number;
 }
 
+const directTurnVisualStates = new Set<VisualEmotionName>([
+  "neutral", "happy", "amused", "bashful", "shy", "surprised", "confused",
+  "thinking", "focused", "skeptical", "bored", "comfortable", "annoyed", "sad", "sleepy",
+  "jealous", "welcoming",
+]);
+
 /**
  * Visuals are derived from persisted mechanical state plus the very small set
  * of cloud/mechanical turn signals above. Dialogue planning, intent labels,
@@ -170,6 +176,10 @@ export function resolveVisualEmotionState(
   const lowEnergy = 1 - e.energy;
 
   add("neutral", 0.34, 0.25);
+  const directTurnEmotion = directTurnVisualStates.has(emotionTone as VisualEmotionName)
+    ? emotionTone as VisualEmotionName
+    : null;
+  if (directTurnEmotion) add(directTurnEmotion, 0.985, Math.max(eventIntensity, 0.58));
   add("happy", 0.24 + e.happiness * 0.68 + (emotionTone === "warm" ? 0.08 : 0), e.happiness);
   add("excited", e.happiness * 0.42 + e.energy * 0.48, e.energy * e.happiness);
   add("gentle", e.affection * 0.36 + (1 - tension) * 0.25 + (1 - e.energy) * 0.18 + (relationshipEvent === "repair" ? 0.22 : 0), e.affection * 0.55);
@@ -242,6 +252,7 @@ export function resolveVisualEmotionState(
   add("mischievous", 0.04 + (romance === "playful" ? 0.25 : 0) + e.energy * 0.1, Math.max(e.energy, e.happiness));
   add("teasing", romance === "playful" ? 0.42 : 0.02, eventIntensity);
   add("flirty", (flirtSignal ? 0.52 : 0.02) + romanticDrive * 0.38, romanticDrive);
+  if (intimacyTone === "flirty") add("flirty", 0.985, Math.max(0.64, romanticDrive));
   add("shy", (flirtSignal ? 0.24 : 0.02) + e.anxiety * 0.34 + e.affection * 0.2, Math.max(e.anxiety, romanticDrive * 0.7));
   add("bashful", (flirtSignal ? 0.28 : 0) + e.anxiety * 0.24 + romanticDrive * 0.3, Math.max(e.anxiety, romanticDrive));
   add("embarrassed", (flirtSignal && e.anxiety > 0.3 ? 0.32 : 0.02) + e.anxiety * 0.32, e.anxiety);
@@ -266,16 +277,18 @@ export function resolveVisualEmotionState(
     // reachable instead of being permanently outscored by generic warm/flirty
     // states. "hornys" remains the outward/high-intimacy state.
     const outwardHigh = phaseHigh && (intimacySignal === "consent" || intimacyTone === "high_arousal");
+    const explicitArousedReply = intimacyTone === "aroused" || intimacyTone === "high_arousal";
     add("horny",
-      outwardHigh
-        ? 0.86
-        : (phaseHigh ? 0.74 : phaseIntimate ? 0.62 : phaseClose ? 0.24 : 0) +
-          Math.max(0, arousal - 0.58) * 0.9 +
-          (intimacyTone === "aroused" ? 0.36 : intimacyTone === "high_arousal" ? 0.46 : 0),
-      Math.max(arousal, intimacyTone === "aroused" || intimacyTone === "high_arousal" ? 0.72 : 0),
+      explicitArousedReply
+        ? (intimacyTone === "high_arousal" ? 0.995 : 0.985)
+        : outwardHigh
+          ? 0.86
+          : (phaseHigh ? 0.74 : phaseIntimate ? 0.62 : phaseClose ? 0.24 : 0) +
+            Math.max(0, arousal - 0.58) * 0.9,
+      Math.max(arousal, explicitArousedReply ? 0.78 : 0),
     );
     add("hornys",
-      (outwardHigh ? 0.98 : 0) +
+      (outwardHigh && intimacyTone === "high_arousal" ? 1 : outwardHigh ? 0.98 : 0) +
         Math.max(0, arousal - 0.8) * (outwardHigh ? 0.5 : 0.18),
       outwardHigh ? Math.max(arousal, 0.92) : arousal,
     );
@@ -1086,6 +1099,28 @@ function visualEmotionDistance(a: VisualEmotionName, b: VisualEmotionName) {
   return Math.sqrt(sum);
 }
 
+/** Small browser warm-cache set around the currently displayed portrait. */
+export function findWarmNeighborAssets(assetId?: string, includeMature = false, limit = 4) {
+  const current = characterAssets.find((asset) => asset.id === assetId);
+  const target = current?.visualEmotion?.emotion ?? "neutral";
+  const intensity = current?.visualEmotion?.intensity ?? 3;
+  return characterAssets
+    .filter((asset) => {
+      if (!asset.visualEmotion || asset.id === assetId) return false;
+      if (!includeMature && matureVisualStates.has(asset.visualEmotion.emotion)) return false;
+      if (asset.visualEmotion.emotion === "hornys" && target !== "hornys") return false;
+      return true;
+    })
+    .map((asset) => ({
+      asset,
+      score: visualEmotionDistance(target, asset.visualEmotion!.emotion) +
+        Math.abs(intensity - asset.visualEmotion!.intensity) * 0.04,
+    }))
+    .sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id))
+    .slice(0, Math.max(0, limit))
+    .map((entry) => entry.asset);
+}
+
 export function resolveAvailableVisualEmotion(
   requested: VisualEmotionName,
   assets: readonly CharacterAsset[],
@@ -1221,12 +1256,12 @@ export function selectAppearance(
     const age = Math.max(0, now - previous.selectedAt);
     // Keep micro-fluctuations from turning the portrait into a slideshow, but
     // rotate noticeably sooner than before so a long chat does not look static.
-    if (sameEmotion && intensityShift <= 1 && request.changeStrength < 0.88 && age < 8_000)
+    if (sameEmotion && intensityShift <= 1 && request.changeStrength < 0.88 && age < 5_000)
       return previous;
     // Only hold a cross-emotion reinterpretation for a few seconds when the
     // requested emotion actually exists. If it does not exist, switch straight
     // to the nearest semantic fallback instead of leaving an unrelated old photo.
-    if (exactEmotionAvailable && !sameEmotion && request.changeStrength < 0.54 && intensityShift < 2 && age < 2_000)
+    if (exactEmotionAvailable && !sameEmotion && request.changeStrength < 0.54 && intensityShift < 2 && age < 1_000)
       return previous;
   }
 

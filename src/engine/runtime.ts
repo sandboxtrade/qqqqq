@@ -95,6 +95,7 @@ export interface RuntimeTrace {
     intimacySignal: IntimacySignal["kind"];
     hardConstraint?: string;
     reactionSource?: "gpt" | "unchanged-fallback";
+    intimacyReactionSource?: "gpt" | "mechanical";
   };
   manualContext?: { personalityChars: number; memoryChars: number; recentMessages: number };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
@@ -244,8 +245,8 @@ const EMOTION_REACTION_LIMITS = {
   anxiety: 0.08,
   curiosity: 0.05,
   boredom: 0.05,
-  affection: 0.025,
-  romanticInterest: 0.02,
+  affection: 0.035,
+  romanticInterest: 0.04,
 } as const;
 
 const RELATIONSHIP_REACTION_LIMITS = {
@@ -260,6 +261,53 @@ const RELATIONSHIP_REACTION_LIMITS = {
 function normalizedReaction(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.max(-1, Math.min(1, value));
+}
+
+const INTIMACY_REACTION_LIMITS = {
+  comfort: 0.035,
+  interest: 0.07,
+  arousal: 0.11,
+  initiativeDrive: 0.08,
+} as const;
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+/**
+ * GPT may describe Yuzuki as more/less interested or aroused, but it cannot
+ * grant consent, change phase/status or bypass a mechanical boundary. The
+ * engine only accepts small bounded deltas to the existing intimacy state.
+ */
+export function applyBoundedCloudIntimacyReaction(
+  state: IntimacyState,
+  cloud: CloudLanguageResult,
+  now: number,
+  hardConstraint?: string,
+) {
+  if (
+    !state.adultModeEnabled ||
+    !cloud.used ||
+    !cloud.intimacyReaction ||
+    ["intimacy_stop", "intimacy_pause"].includes(hardConstraint ?? "") ||
+    ["paused", "stopped"].includes(state.interactionStatus)
+  ) return state;
+
+  const hesitant = state.interactionStatus === "hesitant";
+  const delta = (key: keyof typeof INTIMACY_REACTION_LIMITS) => {
+    const raw = normalizedReaction(cloud.intimacyReaction?.[key]);
+    const limited = hesitant && raw > 0 ? raw * 0.2 : raw;
+    return limited * INTIMACY_REACTION_LIMITS[key];
+  };
+  const next = {
+    ...state,
+    comfort: clamp01(state.comfort + delta("comfort")),
+    interest: clamp01(state.interest + delta("interest")),
+    arousal: clamp01(state.arousal + delta("arousal")),
+    initiativeDrive: clamp01(state.initiativeDrive + delta("initiativeDrive")),
+    updatedAt: now,
+  };
+  const changed = next.comfort !== state.comfort || next.interest !== state.interest ||
+    next.arousal !== state.arousal || next.initiativeDrive !== state.initiativeDrive;
+  return changed ? next : state;
 }
 
 /**
@@ -1021,7 +1069,14 @@ export async function handleUserMessage(
   );
   emotion = stateReaction.emotion;
   relationship = stateReaction.relationship;
-  romance = syncRomanceState(romance, emotion, relationship, intimacy.state, intimacy.action, intimacySignal, now);
+  const reactedIntimacyState = applyBoundedCloudIntimacyReaction(
+    intimacy.state,
+    cloudLanguage,
+    now,
+    constraintKind,
+  );
+  const intimacyChangedByCloud = reactedIntimacyState !== intimacy.state;
+  romance = syncRomanceState(romance, emotion, relationship, reactedIntimacyState, intimacy.action, intimacySignal, now);
 
   if (!sequenceAppearance && !appearanceResolution.requested) {
     const reactedVisualRuntime: RuntimeState = {
@@ -1029,11 +1084,11 @@ export async function handleUserMessage(
       emotion,
       relationship,
       romance,
-      intimacy: intimacy.state,
+      intimacy: reactedIntimacyState,
     };
     const cloudIntimacyTone = cloudLanguage.signals?.intimacyTone;
     const replySequence = shouldTriggerReplySequence(
-      intimacy.state,
+      reactedIntimacyState,
       cloudIntimacyTone,
       constraintKind,
     )
@@ -1090,7 +1145,7 @@ export async function handleUserMessage(
         romanceAction: index === 0 && ["intimacy_stop", "intimacy_pause"].includes(constraintKind ?? "") ? "pause" : "none",
         romancePhase: romance.phase,
         intimacyAction: index === 0 ? intimacy.action : "none",
-        intimacyPhase: intimacy.state.phase,
+        intimacyPhase: reactedIntimacyState.phase,
         appearanceAssetId: appearance.assetId,
         language: {
           source: cloudLanguage.used ? "gpt" : "local",
@@ -1144,10 +1199,10 @@ export async function handleUserMessage(
     };
   }
 
-  let savedIntimacy = intimacy.state;
-  if (intimacy.changed) {
+  let savedIntimacy = reactedIntimacyState;
+  if (intimacy.changed || intimacyChangedByCloud) {
     try {
-      savedIntimacy = await repository.commitIntimacyState(intimacy.state, intimacy.state.revision);
+      savedIntimacy = await repository.commitIntimacyState(reactedIntimacyState, reactedIntimacyState.revision);
     } catch (error) {
       const latest = await repository.loadIntimacyState();
       if (latest) savedIntimacy = latest;
@@ -1196,6 +1251,7 @@ export async function handleUserMessage(
       intimacySignal: intimacySignal.kind,
       hardConstraint: constraintKind,
       reactionSource: stateReaction.source,
+      intimacyReactionSource: intimacyChangedByCloud ? "gpt" : "mechanical",
     },
     manualContext: {
       personalityChars: editableContext.personality.length,

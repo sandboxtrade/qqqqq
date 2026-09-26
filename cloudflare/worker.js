@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.19.7 Intimacy Visual Sync + Faster Scene Switching
+// v0.19.8 Intimacy Dynamics + Visual State
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -79,6 +79,9 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - relationship — медленный фон отношений, а не команда обязательно быть ласковой.
 - world — фактическое текущее состояние. Если Yuzuki спит или занята, не выдумывай несовместимое действие.
 - intimacy доступна только в соответствии с текущим состоянием, отношениями и взаимностью. Stop/pause/boundary всегда важнее желания продолжать.
+- Если adult intimacy включена, нет stop/pause/boundary и разговор уже реально интимный, не нужно искусственно смягчать каждую взрослую тему эвфемизмами. Yuzuki может прямо называть секс, возбуждение, желание, части тела и конкретные интимные действия обычными словами, если именно так она естественно сказала бы в этой ситуации. Не заменяй автоматически прямую фразу на расплывчатые «близость», «момент», «продолжить это» только потому, что тема сексуальная.
+- Не превращай каждую следующую реплику внутри уже открытого взаимного интимного разговора в формальную повторную проверку согласия. Если нет нового сомнения, отказа, паузы или границы, продолжай естественно. При любом новом stop/pause/hesitant/boundary сразу подстраивайся под него.
+- Прямота не означает постоянную грубость или максимальную откровенность: степень прямоты должна соответствовать PERSONALITY, текущему желанию Yuzuki и конкретной теме.
 - appearanceRequest/sceneMechanic — механические факты сцены. Не говори про asset, файл, движок или интерфейс.
 - constraint.locked=true — жёсткая локальная граница/отказ/сонное ограничение; её смысл нельзя нарушать. В остальных обычных случаях именно ты решаешь, что и как сказать.
 
@@ -87,9 +90,12 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - Не завышай реакцию на обычную бытовую фразу. Сильные значения нужны для действительно сильных событий: серьёзной обиды, признания, конфликта, примирения и т.п.
 - affection/romanticInterest и особенно relationship меняются медленнее обычного настроения. Не превращай один комплимент в резкую любовь или одно раздражение в потерю доверия.
 - unresolvedTension: положительное значение добавляет напряжение, отрицательное снимает его.
-- В mode=initiative все reaction-поля должны быть 0: собственное исходящее сообщение не должно само по себе менять её чувства к пользователю.
+- intimacyReaction отдельно описывает, как ТЕКУЩЕЕ сообщение пользователя изменило внутреннее интимное состояние Yuzuki: comfort, interest, arousal, initiativeDrive от -1 до 1. Это тоже относительные изменения, не абсолютные значения. Не меняй phase/status и не кодируй согласие через эти числа.
+- Если Yuzuki в своём ответе прямо признаёт, что её заметно возбудило текущее сообщение, arousal обычно должен быть положительным; если ей стало некомфортно или она остыла — отрицательным. Не завышай значения на обычный флирт.
+- В mode=initiative все reaction-поля, включая intimacyReaction, должны быть 0: собственное исходящее сообщение не должно само по себе менять её чувства к пользователю.
 
-Визуальный интимный тон:
+Визуальное состояние:
+- signals.emotionTone выбирай по фактическому тону самой Yuzuki в текущем ответе. Если она явно amused/bashful/shy/surprised/confused/thinking/focused/skeptical/annoyed/jealous и т.п., используй конкретный вариант из schema вместо generic neutral/warm. Это напрямую синхронизирует обычную фотографию с ответом.
 - signals.intimacyTone описывает НЕ слова пользователя, а то, как сама Yuzuki реально проявляется в ТВОИХ сгенерированных messages этого хода.
 - none — обычный разговор, нежность без флирта или отсутствие внешнего интимного проявления.
 - flirty — лёгкий явный флирт/дразнение со стороны Yuzuki.
@@ -148,7 +154,7 @@ const RESPONSE_FORMAT = {
           memoryUsed: { type: "boolean" },
           emotionTone: {
             type: "string",
-            enum: ["neutral", "warm", "curious", "low_energy", "bored", "irritated", "sad", "anxious", "hurt", "jealous", "tender"],
+            enum: ["neutral", "warm", "happy", "amused", "bashful", "shy", "surprised", "confused", "thinking", "focused", "skeptical", "bored", "comfortable", "annoyed", "irritated", "sad", "sleepy", "low_energy", "anxious", "hurt", "jealous", "welcoming", "tender", "curious"],
           },
           intimacyTone: {
             type: "string",
@@ -186,8 +192,19 @@ const RESPONSE_FORMAT = {
         required: ["trust", "closeness", "attachment", "security", "respect", "unresolvedTension"],
         additionalProperties: false,
       },
+      intimacyReaction: {
+        type: "object",
+        properties: {
+          comfort: { type: "number", minimum: -1, maximum: 1 },
+          interest: { type: "number", minimum: -1, maximum: 1 },
+          arousal: { type: "number", minimum: -1, maximum: 1 },
+          initiativeDrive: { type: "number", minimum: -1, maximum: 1 },
+        },
+        required: ["comfort", "interest", "arousal", "initiativeDrive"],
+        additionalProperties: false,
+      },
     },
-    required: ["shouldInitiate", "messages", "conversation", "signals", "emotionReaction", "relationshipReaction"],
+    required: ["shouldInitiate", "messages", "conversation", "signals", "emotionReaction", "relationshipReaction", "intimacyReaction"],
     additionalProperties: false,
   },
 };
@@ -527,6 +544,9 @@ function parseStructuredTurn(value, mode) {
     relationshipReaction: reactionObject(parsed.relationshipReaction, [
       "trust", "closeness", "attachment", "security", "respect", "unresolvedTension",
     ]),
+    intimacyReaction: reactionObject(parsed.intimacyReaction, [
+      "comfort", "interest", "arousal", "initiativeDrive",
+    ]),
   };
 }
 
@@ -818,6 +838,7 @@ async function callOpenAI(env, uid, prepared) {
       signals: structured.signals,
       emotionReaction: structured.emotionReaction,
       relationshipReaction: structured.relationshipReaction,
+      intimacyReaction: structured.intimacyReaction,
       model: MODEL,
       usage,
       budget: prepared.budget,
