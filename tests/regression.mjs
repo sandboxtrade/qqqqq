@@ -3870,11 +3870,9 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(clientSource, /Authorization:\s*`Bearer \${idToken}`/);
   assert.match(clientSource, /"X-Firebase-AppCheck": appCheckToken/);
   assert.match(clientSource, /getFirebaseAppCheckToken\(forceRefresh\)/);
-  assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 7_500/);
-  assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 17_000/);
-  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 13_000/);
-  assert.match(clientSource, /isRetryableCloudFailure/);
-  assert.match(clientSource, /TRANSIENT_RETRY_DELAY_MS = 180/);
+  assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 4_000/);
+  assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 12_000/);
+  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 9_500/);
   assert.match(clientSource, /response\.status === 401 && attempt === 0/);
   assert.match(workerSource, /APP_CHECK_JWKS_URL[\s\S]*signal: controller\.signal/);
   assert.doesNotMatch(clientSource, /api\.openai\.com|OPENAI_API_KEY/);
@@ -3960,9 +3958,9 @@ await test("v0.19.4 full-screen settings, context editors and unobscured photo s
   assert.match(settingsSource, /Память Yuzuki/);
   assert.match(settingsSource, /settings-editor-view/);
   assert.match(settingsSource, /settings-full-editor/);
-  assert.match(settingsSource, /Вставить из буфера/);
+  assert.match(settingsSource, /Вставить/);
   assert.match(settingsSource, /Весь диалог/);
-  assert.match(settingsSource, /Скопировать/);
+  assert.match(settingsSource, /Копировать/);
   assert.match(settingsSource, /Скачать \.txt/);
   assert.match(appSource, /settingsOpen = activeTab === "settings"/);
   assert.match(appSource, /!settingsOpen && \(/);

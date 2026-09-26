@@ -627,7 +627,14 @@ function cloudPartsOrFallback(cloud: CloudLanguageResult, kind?: string) {
     if (parts.length && !INTERNAL_LANGUAGE_LEAK_RE.test(joined) && !hardMismatch)
       return { parts, usedCloud: true };
   }
-  return { parts: [fallbackReply(kind)], usedCloud: false };
+  if (kind) return { parts: [fallbackReply(kind)], usedCloud: false };
+  const reason = cloud.reason?.trim() || "cloud-language-unavailable";
+  // Local/dev/test environments may intentionally have no cloud transport. In
+  // production Firebase mode, an unavailable GPT path is a transport failure,
+  // not something Yuzuki should pretend was her own reply.
+  if (!cloud.attempted && ["non-browser", "firebase-disabled", "local-route", "test-local"].includes(reason))
+    return { parts: [fallbackReply(kind)], usedCloud: false };
+  throw new Error(`Не удалось получить ответ Yuzuki от GPT: ${reason}. Нажми «Повторить».`);
 }
 
 function syncRomanceState(

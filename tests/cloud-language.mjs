@@ -306,14 +306,15 @@ assert.deepEqual(appCheckTokenForces.slice(-2), [false, true]);
 assert.equal(fetchCalls.at(-1).options.headers.Authorization, "Bearer firebase-id-token-refresh");
 assert.equal(fetchCalls.at(-1).options.headers["X-Firebase-AppCheck"], "app-check-token-refresh");
 
-const callsBeforeTransientRetry = fetchCalls.length;
+const callsBeforeTransientFailure = fetchCalls.length;
 replySequence = [
   { status: 200, body: { skipped: true, reason: "openai-timeout", model: "gpt-6-luna" } },
   { status: 200, body: successfulBody },
 ];
-const recoveredTransient = await renderCloudLanguage({ ...base, userText: base.userText + " после сбоя" });
-assert.equal(recoveredTransient.used, true);
-assert.equal(fetchCalls.length - callsBeforeTransientRetry, 2);
+const transientFailure = await renderCloudLanguage({ ...base, userText: base.userText + " после сбоя" });
+assert.equal(transientFailure.used, false);
+assert.equal(transientFailure.reason, "openai-timeout");
+assert.equal(fetchCalls.length - callsBeforeTransientFailure, 1);
 
 const cloudSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
 const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
@@ -324,7 +325,7 @@ assert.match(workerSource, /\.slice\(-30\)/);
 assert.match(workerSource, /MEMORY — единственная каноническая долговременная память/);
 assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
 assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
-assert.match(cloudSource, /isRetryableCloudFailure/);
+assert.doesNotMatch(cloudSource, /isRetryableCloudFailure/);
 assert.match(workerSource, /Не перезапускай беседу generic-фразами/);
 
-console.log("PASS cloud dialogue: manual personality/memory, GPT-first routing, multi-bubble replies, 30-message context, Cloudflare transport, token refresh, Auth, App Check and local fallback");
+console.log("PASS cloud dialogue: manual personality/memory, GPT-first routing, multi-bubble replies, 30-message context, Cloudflare transport, token refresh, fail-fast transient handling, Auth, App Check and local fallback");

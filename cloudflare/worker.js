@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.19.4 Home Reality + Dialogue Polish
+// v0.19.5 Transport Reliability
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -22,7 +22,7 @@ const MAX_PACKET_CHARS = 60_000;
 const TARGET_PACKET_CHARS = 56_000;
 const MAX_OUTPUT_TOKENS = 320;
 const MAX_ESTIMATED_TURN_COST_USD = 0.008;
-const OPENAI_TIMEOUT_MS = 13_000;
+const OPENAI_TIMEOUT_MS = 9_500;
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
 const PRICE_INPUT = 0.10;
