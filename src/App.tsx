@@ -114,19 +114,21 @@ export default function App() {
 
   return (
     <main className={`app-shell${settingsOpen ? " settings-mode" : ""}`}>
-      <header className="topbar">
-        <div className="brand-block">
-          <span className="mini-avatar">{defaultCharacter.name.slice(0, 1)}</span>
-          <div>
-            <strong>{defaultCharacter.name}</strong>
-            <small>{companionStatus}</small>
+      {!settingsOpen && (
+        <header className="topbar">
+          <div className="brand-block">
+            <span className="mini-avatar">{defaultCharacter.name.slice(0, 1)}</span>
+            <div>
+              <strong>{defaultCharacter.name}</strong>
+              <small>{companionStatus}</small>
+            </div>
           </div>
-        </div>
-        <div className={`top-status top-status-${transportKind}`}>
-          <span className={ready ? "status-dot online" : "status-dot"} />
-          <span>{transportLabel}</span>
-        </div>
-      </header>
+          <div className={`top-status top-status-${transportKind}`}>
+            <span className={ready ? "status-dot online" : "status-dot"} />
+            <span>{transportLabel}</span>
+          </div>
+        </header>
+      )}
 
       {!settingsOpen && (
         <CharacterStage
@@ -179,6 +181,7 @@ export default function App() {
         {activeTab === "settings" && (
           <SettingsScreen
             firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
+            onClose={() => setActiveTab("chat")}
             appCheckState={appCheckState}
             user={user}
             trace={lastTrace}
@@ -204,7 +207,7 @@ export default function App() {
         )}
       </div>
 
-      <BottomNav active={activeTab} onChange={setActiveTab} />
+      {!settingsOpen && <BottomNav active={activeTab} onChange={setActiveTab} />}
     </main>
   );
 }

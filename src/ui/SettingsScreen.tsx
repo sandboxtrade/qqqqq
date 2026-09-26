@@ -49,7 +49,7 @@ function downloadText(text: string) {
   URL.revokeObjectURL(url);
 }
 
-function compactPreview(text: string, max = 155) {
+function compactPreview(text: string, max = 92) {
   const clean = text.replace(/\s+/gu, " ").trim();
   if (!clean) return "Пока пусто";
   return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
@@ -60,6 +60,7 @@ export function SettingsScreen({
   appCheckState,
   user,
   trace,
+  onClose,
   onSignOut,
   onClearConversationAndMemory,
   clearingData,
@@ -83,6 +84,7 @@ export function SettingsScreen({
   appCheckState: AppCheckState;
   user: AuthProfile | null;
   trace: RuntimeTrace | null;
+  onClose: () => void;
   onSignOut: () => void;
   onClearConversationAndMemory: () => Promise<void>;
   clearingData: boolean;
@@ -171,8 +173,8 @@ export function SettingsScreen({
     const max = editingPersonality ? MAX_PERSONALITY_CHARS : MAX_MEMORY_CHARS;
     const title = editingPersonality ? "Личность Yuzuki" : "Память Yuzuki";
     const note = editingPersonality
-      ? "Характер, голос, привычки и границы. Этот текст стабилен и читается перед каждым ответом."
-      : "Совместная история и важные воспоминания. Можно целиком заменить текст новой сводкой из ChatGPT.";
+      ? "Характер, манера речи, привычки и границы. Этот текст читается перед каждым ответом."
+      : "Совместная история и важные воспоминания. Сюда можно вставить обновлённую сводку целиком.";
 
     const save = async () => {
       const ok = editingPersonality
@@ -189,17 +191,17 @@ export function SettingsScreen({
     };
 
     return (
-      <section className="panel-screen settings-screen settings-editor-view">
+      <section className="settings-screen settings-editor-view">
         <div className="settings-editor-toolbar">
           <button className="settings-back-button" type="button" onClick={cancel} disabled={contextBusy}>
-            ← Назад
+            Назад
           </button>
           <div>
             <strong>{title}</strong>
             <span>{draft.length.toLocaleString("ru-RU")} / {max.toLocaleString("ru-RU")}</span>
           </div>
           <button className="settings-save-button" type="button" onClick={() => void save()} disabled={contextBusy || draft === saved}>
-            {contextBusy ? "Сохраняем…" : "Сохранить"}
+            {contextBusy ? "…" : "Сохранить"}
           </button>
         </div>
 
@@ -222,10 +224,10 @@ export function SettingsScreen({
 
         <div className="settings-editor-footer">
           <button type="button" disabled={contextBusy} onClick={() => void pasteIntoEditor(view)}>
-            Вставить из буфера
+            Вставить
           </button>
           <span>
-            {pasteState === "ok" ? "Вставлено" : pasteState === "error" ? "Не удалось прочитать буфер" : "Переносы строк сохраняются"}
+            {pasteState === "ok" ? "Вставлено" : pasteState === "error" ? "Буфер недоступен" : "Переносы строк сохраняются"}
           </span>
         </div>
       </section>
@@ -234,18 +236,18 @@ export function SettingsScreen({
 
   if (view === "export") {
     return (
-      <section className="panel-screen settings-screen settings-editor-view settings-export-view">
+      <section className="settings-screen settings-editor-view settings-export-view">
         <div className="settings-editor-toolbar">
-          <button className="settings-back-button" type="button" onClick={() => setView("home")}>← Назад</button>
+          <button className="settings-back-button" type="button" onClick={() => setView("home")}>Назад</button>
           <div>
             <strong>Экспорт диалога</strong>
             <span>{exportLabel}</span>
           </div>
           <button className="settings-save-button" type="button" onClick={() => void copyExport()}>
-            {copyState === "ok" ? "Скопировано" : copyState === "error" ? "Ошибка" : "Скопировать"}
+            {copyState === "ok" ? "Готово" : copyState === "error" ? "Ошибка" : "Копировать"}
           </button>
         </div>
-        <p className="settings-editor-note">Чистая переписка USER/YUZUKI без технических событий. Её можно передать ChatGPT для обновления Personality и Memory.</p>
+        <p className="settings-editor-note">Чистая переписка USER/YUZUKI без технических событий.</p>
         <textarea className="settings-full-editor settings-export-editor" value={exportText} readOnly />
         <div className="settings-editor-footer">
           <button type="button" onClick={() => downloadText(exportText)}>Скачать .txt</button>
@@ -256,136 +258,170 @@ export function SettingsScreen({
   }
 
   return (
-    <section className="panel-screen settings-screen settings-home">
-      <div className="settings-page-head">
+    <section className="settings-screen settings-home">
+      <header className="settings-topbar">
+        <button className="settings-icon-button" type="button" onClick={onClose} aria-label="Закрыть настройки">
+          ←
+        </button>
         <div>
-          <span className="eyebrow">YUZUKI</span>
-          <h2>Настройки</h2>
-          <p>Личность и память вынесены в отдельные полноэкранные редакторы — без тесного окна поверх фотографии.</p>
+          <strong>Настройки</strong>
+          <span>Yuzuki</span>
         </div>
-        <button type="button" disabled={contextBusy} onClick={() => void onReloadContext()}>
-          {contextBusy ? "…" : "Обновить"}
+        <button
+          className="settings-icon-button"
+          type="button"
+          disabled={contextBusy}
+          onClick={() => void onReloadContext()}
+          aria-label="Обновить данные"
+        >
+          {contextBusy ? "…" : "↻"}
         </button>
-      </div>
+      </header>
 
-      <div className="settings-section-card">
-        <div className="settings-section-title">
-          <strong>Личность и память</strong>
-          <span>обновлено: {contextDate}</span>
-        </div>
-        <button className="settings-entry" type="button" onClick={() => setView("personality")}>
-          <div>
-            <strong>Личность Yuzuki</strong>
-            <span>{compactPreview(personality)}</span>
+      <div className="settings-scroll">
+        <section className="settings-group">
+          <div className="settings-group-head">
+            <h3>Личность и память</h3>
+            <span>{contextDate}</span>
           </div>
-          <small>{personality.length.toLocaleString("ru-RU")} / {MAX_PERSONALITY_CHARS.toLocaleString("ru-RU")} ›</small>
-        </button>
-        <button className="settings-entry" type="button" onClick={() => setView("memory")}>
-          <div>
-            <strong>Память Yuzuki</strong>
-            <span>{compactPreview(memory)}</span>
-          </div>
-          <small>{memory.length.toLocaleString("ru-RU")} / {MAX_MEMORY_CHARS.toLocaleString("ru-RU")} ›</small>
-        </button>
-      </div>
-
-      <div className="settings-section-card">
-        <div className="settings-section-title">
-          <strong>Экспорт диалога</strong>
-          <span>для ручного обновления памяти</span>
-        </div>
-        <p className="settings-section-copy">Выбери объём. Результат откроется на весь экран, откуда его можно скопировать или скачать.</p>
-        <div className="export-choice-row settings-export-choices">
-          {exportOptions.map((option) => (
-            <button
-              type="button"
-              key={String(option.value)}
-              disabled={exportBusy}
-              onClick={() => void runExport(option.value, option.label)}
-            >
-              {exportBusy ? "…" : option.label}
+          <div className="settings-list-card">
+            <button className="settings-row" type="button" onClick={() => setView("personality")}>
+              <div className="settings-row-copy">
+                <strong>Личность Yuzuki</strong>
+                <span>{compactPreview(personality)}</span>
+              </div>
+              <div className="settings-row-side">
+                <small>{personality.length.toLocaleString("ru-RU")} / {MAX_PERSONALITY_CHARS.toLocaleString("ru-RU")}</small>
+                <b>›</b>
+              </div>
             </button>
-          ))}
-        </div>
-      </div>
+            <button className="settings-row" type="button" onClick={() => setView("memory")}>
+              <div className="settings-row-copy">
+                <strong>Память Yuzuki</strong>
+                <span>{compactPreview(memory)}</span>
+              </div>
+              <div className="settings-row-side">
+                <small>{memory.length.toLocaleString("ru-RU")} / {MAX_MEMORY_CHARS.toLocaleString("ru-RU")}</small>
+                <b>›</b>
+              </div>
+            </button>
+          </div>
+        </section>
 
-      <div className="settings-section-card">
-        <div className="settings-section-title">
-          <strong>Интимный режим 18+</strong>
-          <span>{intimacyEnabled ? `включён · ${intimacyPhaseLabels[intimacyPhase]}` : "выключен"}</span>
-        </div>
-        <p className="settings-section-copy">Стоп, пауза и границы всегда имеют приоритет над текущим состоянием близости.</p>
-        {intimacyEnabled ? (
-          <button className="settings-wide-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => void onSetIntimacyEnabled(false)}>
-            {intimacyUpdating ? "Сохраняем…" : "Выключить"}
-          </button>
-        ) : !confirmAdultMode ? (
-          <button className="settings-wide-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => setConfirmAdultMode(true)}>
-            Включить
-          </button>
-        ) : (
-          <div className="settings-inline-confirmation" role="alert">
-            <span>Режим предназначен только для взрослых пользователей.</span>
-            <div>
-              <button type="button" disabled={intimacyUpdating} onClick={() => setConfirmAdultMode(false)}>Отмена</button>
-              <button type="button" disabled={intimacyUpdating} onClick={() => void onSetIntimacyEnabled(true).finally(() => setConfirmAdultMode(false))}>
-                {intimacyUpdating ? "Сохраняем…" : "Мне 18+ · включить"}
-              </button>
+        <section className="settings-group">
+          <div className="settings-group-head">
+            <h3>Экспорт диалога</h3>
+            <span>для обновления памяти</span>
+          </div>
+          <div className="settings-list-card settings-export-card">
+            <p>Сколько последних сообщений выгрузить?</p>
+            <div className="settings-export-grid">
+              {exportOptions.map((option) => (
+                <button
+                  type="button"
+                  key={String(option.value)}
+                  disabled={exportBusy}
+                  onClick={() => void runExport(option.value, option.label)}
+                >
+                  {exportBusy ? "…" : option.label}
+                </button>
+              ))}
             </div>
           </div>
-        )}
-      </div>
+        </section>
 
-      <details className="settings-details-card">
-        <summary>Диагностика и подключение</summary>
-        <div className="settings-list">
-          <div className="setting-row"><span>Аккаунт</span><strong>{user?.email ?? "Локальный пользователь"}</strong></div>
-          <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "подключён" : "локальный режим"}</strong></div>
-          <div className="setting-row"><span>App Check</span><strong>{appCheckLabels[appCheckState]}</strong></div>
-          <div className="setting-row"><span>Диалог</span><strong>{dialogueEngineLabel}</strong></div>
-          <div className="setting-row"><span>Контекст GPT</span><strong>Personality + Memory + 15/15</strong></div>
-        </div>
-        {trace?.timings && (
-          <div className="settings-list timings-list">
-            <div className="setting-row"><span>До первого текста</span><strong>{trace.timings.firstTextMs === null ? "без реплики" : `${(trace.timings.firstTextMs / 1000).toFixed(1)} с`}</strong></div>
-            <div className="setting-row"><span>Контекст</span><strong>{((trace.timings.preflightMs + trace.timings.contextMs) / 1000).toFixed(1)} с</strong></div>
-            <div className="setting-row"><span>Формулировка ответа</span><strong>{(trace.timings.generationMs / 1000).toFixed(1)} с</strong></div>
-            <div className="setting-row"><span>Сохранение</span><strong>{(trace.timings.saveMs / 1000).toFixed(1)} с</strong></div>
-            <div className="setting-row"><span>Всего</span><strong>{(trace.timings.totalMs / 1000).toFixed(1)} с</strong></div>
+        <section className="settings-group">
+          <div className="settings-group-head">
+            <h3>Близость</h3>
           </div>
-        )}
-        {maintenanceError && <div className="error-card">Фоновое состояние: {maintenanceError}</div>}
-        <DebugPanel trace={trace} />
-      </details>
-
-      <div className="settings-section-card settings-danger-card">
-        <div className="settings-section-title">
-          <strong>Очистить диалог и память</strong>
-          <span>личность сохранится</span>
-        </div>
-        <p className="settings-section-copy">Удалит историю общения и ручную Memory. Personality Yuzuki останется.</p>
-        {!confirmReset ? (
-          <button className="danger-button settings-wide-button" type="button" disabled={resetDisabled} onClick={() => setConfirmReset(true)}>
-            Очистить диалог и память
-          </button>
-        ) : (
-          <div className="settings-inline-confirmation" role="alert">
-            <span>Это действие необратимо.</span>
-            <div>
-              <button type="button" disabled={clearingData} onClick={() => setConfirmReset(false)}>Отмена</button>
-              <button className="danger-button" type="button" disabled={resetDisabled} onClick={() => void onClearConversationAndMemory().finally(() => setConfirmReset(false))}>
-                {clearingData ? "Очищаем…" : "Удалить всё"}
-              </button>
+          <div className="settings-list-card settings-mode-card">
+            <div className="settings-mode-row">
+              <div>
+                <strong>Интимный режим 18+</strong>
+                <span>Стоп, пауза и границы всегда имеют приоритет.</span>
+              </div>
+              <span className={intimacyEnabled ? "settings-state-pill active" : "settings-state-pill"}>
+                {intimacyEnabled ? intimacyPhaseLabels[intimacyPhase] : "выкл"}
+              </span>
             </div>
+            {intimacyEnabled ? (
+              <button className="settings-action-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => void onSetIntimacyEnabled(false)}>
+                {intimacyUpdating ? "Сохраняем…" : "Выключить"}
+              </button>
+            ) : !confirmAdultMode ? (
+              <button className="settings-action-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => setConfirmAdultMode(true)}>
+                Включить
+              </button>
+            ) : (
+              <div className="settings-confirmation" role="alert">
+                <span>Только для пользователей 18+.</span>
+                <div>
+                  <button type="button" disabled={intimacyUpdating} onClick={() => setConfirmAdultMode(false)}>Отмена</button>
+                  <button type="button" disabled={intimacyUpdating} onClick={() => void onSetIntimacyEnabled(true).finally(() => setConfirmAdultMode(false))}>
+                    {intimacyUpdating ? "…" : "Мне 18+"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
+        </section>
+
+        <section className="settings-group">
+          <details className="settings-details-card">
+            <summary>
+              <span>Диагностика и подключение</span>
+              <b>›</b>
+            </summary>
+            <div className="settings-diagnostics-body">
+              <div className="setting-row"><span>Аккаунт</span><strong>{user?.email ?? "Локальный пользователь"}</strong></div>
+              <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "подключён" : "локальный режим"}</strong></div>
+              <div className="setting-row"><span>App Check</span><strong>{appCheckLabels[appCheckState]}</strong></div>
+              <div className="setting-row"><span>Диалог</span><strong>{dialogueEngineLabel}</strong></div>
+              <div className="setting-row"><span>Контекст GPT</span><strong>Personality + Memory + 15/15</strong></div>
+              {trace?.timings && (
+                <>
+                  <div className="settings-diagnostics-divider" />
+                  <div className="setting-row"><span>До первого текста</span><strong>{trace.timings.firstTextMs === null ? "без реплики" : `${(trace.timings.firstTextMs / 1000).toFixed(1)} с`}</strong></div>
+                  <div className="setting-row"><span>Формулировка</span><strong>{(trace.timings.generationMs / 1000).toFixed(1)} с</strong></div>
+                  <div className="setting-row"><span>Всего</span><strong>{(trace.timings.totalMs / 1000).toFixed(1)} с</strong></div>
+                </>
+              )}
+              {maintenanceError && <div className="error-card">Фоновое состояние: {maintenanceError}</div>}
+              <DebugPanel trace={trace} />
+            </div>
+          </details>
+        </section>
+
+        <section className="settings-group">
+          <div className="settings-list-card settings-danger-card">
+            <div className="settings-danger-copy">
+              <strong>Очистить диалог и память</strong>
+              <span>История и Memory удалятся. Personality останется.</span>
+            </div>
+            {!confirmReset ? (
+              <button className="settings-danger-button" type="button" disabled={resetDisabled} onClick={() => setConfirmReset(true)}>
+                Очистить
+              </button>
+            ) : (
+              <div className="settings-confirmation" role="alert">
+                <span>Это действие необратимо.</span>
+                <div>
+                  <button type="button" disabled={clearingData} onClick={() => setConfirmReset(false)}>Отмена</button>
+                  <button className="settings-danger-button" type="button" disabled={resetDisabled} onClick={() => void onClearConversationAndMemory().finally(() => setConfirmReset(false))}>
+                    {clearingData ? "Очищаем…" : "Удалить всё"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {user && (
+          <button className="settings-signout" type="button" onClick={onSignOut} disabled={clearingData}>
+            Выйти из Google
+          </button>
         )}
       </div>
-
-      {user && (
-        <button className="secondary-button settings-signout" type="button" onClick={onSignOut} disabled={clearingData}>
-          Выйти из Google
-        </button>
-      )}
     </section>
   );
 }

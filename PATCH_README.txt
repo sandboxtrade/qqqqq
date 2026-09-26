@@ -1,21 +1,19 @@
-Yuzuki v0.19.4 patch
-Base: virtual-companion-current-full-v0.19.3-no-photos.zip
-SCHEMA_VERSION remains 4.
+Yuzuki settings layout fix
 
-What changed:
-- Yuzuki's routine is home-bound: no walk/cafe/errands scheduling. Existing world enum values remain for persistence compatibility.
-- Settings hide the character photo and use the full remaining screen.
-- Personality and Memory open in dedicated full-screen mobile editors with 16px text and paste/save controls.
-- Conversation export opens in a dedicated full-screen viewer.
-- Mid-conversation generic starter chips are hidden; they only appear before the first message.
-- Cloud dialogue performs one rescue retry for transient Worker/OpenAI failures before showing the technical local fallback.
-- Worker OpenAI timeout raised from 10s to 13s.
-- Dialogue prompt hardened against generic assistant-like questions, paraphrase-first replies, habitual emojis and overly polished wording.
-- ENGINE_VERSION/package version -> 0.19.4. SCHEMA_VERSION stays 4.
+Replace only these files in the current project:
+- src/App.tsx
+- src/ui/SettingsScreen.tsx
+- src/styles.css
 
-Important:
-1) Replace/add only the files present in this patch. Do NOT replace src/assets/character/scenes/ and do not delete any photos.
-2) cloudflare/worker.js does not deploy automatically with GitHub Pages. After updating GitHub, copy this worker.js into Worker shy-unit-ebfb and press Deploy.
-3) OPENAI_API_KEY remains only a Cloudflare Production Secret. Do not put it in GitHub/runtime-config/frontend.
-4) Local verification: npm test PASS (210 regression checks, 120 canonical NLU scenarios, 400-turn stress, AI transport, cloud dialogue). Changed TS/TSX files parse/transpile PASS; Worker syntax PASS.
-5) GitHub Actions should still be checked for test -> typecheck -> build because the audit container does not contain the project's node_modules.
+What changes:
+- Settings become a real full-screen page: character photo, Yuzuki top bar and bottom navigation are hidden while settings are open.
+- A dedicated settings header with Back and Refresh is used.
+- The main settings screen is one clean scrollable page instead of a large card squeezed between app chrome.
+- Personality and Memory are always two separate visible rows.
+- Export buttons no longer get clipped by the next block and become 2 columns on narrow phones.
+- Diagnostics gets a normal visible collapsed row.
+- Personality/Memory/export editors remain full-screen and use safe-area padding on iPhone.
+- No Firebase/Auth/App Check/Firestore/Worker/runtime logic is changed.
+- No character photos are included or touched.
+
+No Cloudflare Worker deploy is required for this patch.
