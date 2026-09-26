@@ -24,6 +24,7 @@ const starterPrompts = [
 ];
 
 export function ChatScreen({
+  characterName,
   messages,
   ready,
   busy,
@@ -38,6 +39,7 @@ export function ChatScreen({
   loadingOlder,
   onLoadOlder,
 }: {
+  characterName: string;
   streamingText: string;
   phase: string;
   onRetry: (messageId: string) => Promise<void>;
@@ -144,7 +146,36 @@ export function ChatScreen({
           <article key={message.id} className={`message-row ${message.role}`}>
             <div className={`bubble ${message.role}`}>
               {message.proactive && <span className="proactive-label">сама написала</span>}
-              <p>{message.text}</p>
+              {message.kind === "image" ? (
+                <figure className={`chat-photo photo-${message.imageStatus ?? "ready"}`}>
+                  {message.imageStatus === "pending" ? (
+                    <div className="chat-photo-placeholder" role="status">
+                      <span className="photo-loader" aria-hidden="true" />
+                      <strong>готовит фото…</strong>
+                      <small>это отдельное сообщение, не живая сцена</small>
+                    </div>
+                  ) : message.imageStatus === "failed" ? (
+                    <div className="chat-photo-placeholder photo-failed" role="status">
+                      <strong>фото не отправилось</strong>
+                      <small>на следующем этапе сюда подключится повтор генерации</small>
+                    </div>
+                  ) : message.imageUrl ? (
+                    <img
+                      src={message.imageUrl}
+                      alt={message.imageAlt || `Фото от ${characterName}`}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <div className="chat-photo-placeholder">
+                      <strong>фото</strong>
+                    </div>
+                  )}
+                  {message.text ? <figcaption>{message.text}</figcaption> : null}
+                </figure>
+              ) : (
+                <p>{message.text}</p>
+              )}
               <time>
                 {timeOf(message.timestamp)}
                 {message.delivery === "pending"
@@ -244,7 +275,7 @@ export function ChatScreen({
             }}
             rows={1}
             maxLength={12000}
-            placeholder={ready ? "Напиши ей…" : "Инициализация…"}
+            placeholder={ready ? `Напиши ${characterName}…` : "Инициализация…"}
             disabled={!ready || busy}
           />
         </div>

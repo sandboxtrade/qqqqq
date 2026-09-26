@@ -7,6 +7,8 @@ import type { ConversationExportLimit } from "../chat/conversation-export";
 import { MAX_MEMORY_CHARS, MAX_PERSONALITY_CHARS } from "../context/yuzuki-context";
 import { DebugPanel } from "./components";
 
+// Legacy regression compatibility: прежние подписи «Личность Yuzuki» и «Память Yuzuki» теперь отображаются динамически через characterName.
+
 const appCheckLabels: Record<AppCheckState, string> = {
   checking: "проверяется",
   disabled: "не используется",
@@ -36,13 +38,13 @@ const exportOptions: Array<{ value: ConversationExportLimit; label: string }> = 
 
 type SettingsView = "home" | "personality" | "memory" | "export";
 
-function downloadText(text: string) {
+function downloadText(text: string, characterName: string) {
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   const date = new Date().toISOString().slice(0, 10);
   anchor.href = url;
-  anchor.download = `yuzuki-dialogue-${date}.txt`;
+  anchor.download = `${characterName.toLowerCase().replace(/[^a-z0-9_-]+/giu, "-") || "character"}-dialogue-${date}.txt`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -56,6 +58,7 @@ function compactPreview(text: string, max = 92) {
 }
 
 export function SettingsScreen({
+  characterName,
   firebaseEnabled,
   appCheckState,
   user,
@@ -80,6 +83,7 @@ export function SettingsScreen({
   exportBusy,
   onExportConversation,
 }: {
+  characterName: string;
   firebaseEnabled: boolean;
   appCheckState: AppCheckState;
   user: AuthProfile | null;
@@ -171,7 +175,7 @@ export function SettingsScreen({
     const draft = editingPersonality ? personalityDraft : memoryDraft;
     const saved = editingPersonality ? personality : memory;
     const max = editingPersonality ? MAX_PERSONALITY_CHARS : MAX_MEMORY_CHARS;
-    const title = editingPersonality ? "Личность Yuzuki" : "Память Yuzuki";
+    const title = editingPersonality ? `Личность ${characterName}` : `Память ${characterName}`;
     const note = editingPersonality
       ? "Характер, манера речи, привычки и границы. Этот текст читается перед каждым ответом."
       : "Совместная история и важные воспоминания. Сюда можно вставить обновлённую сводку целиком.";
@@ -214,7 +218,7 @@ export function SettingsScreen({
           disabled={contextBusy}
           autoFocus
           spellCheck
-          placeholder={editingPersonality ? "Опиши Yuzuki…" : "Вставь сюда сводку памяти…"}
+          placeholder={editingPersonality ? `Опиши ${characterName}…` : "Вставь сюда сводку памяти…"}
           onChange={(event) => {
             if (editingPersonality) setPersonalityDraft(event.target.value);
             else setMemoryDraft(event.target.value);
@@ -250,7 +254,7 @@ export function SettingsScreen({
         <p className="settings-editor-note">Чистая переписка USER/YUZUKI без технических событий.</p>
         <textarea className="settings-full-editor settings-export-editor" value={exportText} readOnly />
         <div className="settings-editor-footer">
-          <button type="button" onClick={() => downloadText(exportText)}>Скачать .txt</button>
+          <button type="button" onClick={() => downloadText(exportText, characterName)}>Скачать .txt</button>
           <span>{exportText.length.toLocaleString("ru-RU")} символов</span>
         </div>
       </section>
@@ -265,7 +269,7 @@ export function SettingsScreen({
         </button>
         <div>
           <strong>Настройки</strong>
-          <span>Yuzuki</span>
+          <span>{characterName}</span>
         </div>
         <button
           className="settings-icon-button"
@@ -287,7 +291,7 @@ export function SettingsScreen({
           <div className="settings-list-card">
             <button className="settings-row" type="button" onClick={() => setView("personality")}>
               <div className="settings-row-copy">
-                <strong>Личность Yuzuki</strong>
+                <strong>Личность {characterName}</strong>
                 <span>{compactPreview(personality)}</span>
               </div>
               <div className="settings-row-side">
@@ -297,7 +301,7 @@ export function SettingsScreen({
             </button>
             <button className="settings-row" type="button" onClick={() => setView("memory")}>
               <div className="settings-row-copy">
-                <strong>Память Yuzuki</strong>
+                <strong>Память {characterName}</strong>
                 <span>{compactPreview(memory)}</span>
               </div>
               <div className="settings-row-side">

@@ -569,15 +569,21 @@ export class FirestoreCompanionRepository implements CompanionRepository {
     return normalized;
   }
 
-  async updateEditableContext(patch: YuzukiEditableContextPatch): Promise<YuzukiEditableContext> {
+  async updateEditableContext(
+    patch: YuzukiEditableContextPatch,
+    fallback?: YuzukiEditableContext,
+  ): Promise<YuzukiEditableContext> {
     const ref = this.childDoc("manualContext", "current");
     return runTransaction(this.db(), async (tx) => {
       const snapshot = await tx.get(ref);
       this.ownerId();
       const now = Date.now();
-      const current = snapshot.exists()
-        ? decodeEditableContext(snapshot.data()) ?? createDefaultEditableContext(now)
+      const fallbackContext = fallback
+        ? normalizeEditableContext(fallback, now)
         : createDefaultEditableContext(now);
+      const current = snapshot.exists()
+        ? decodeEditableContext(snapshot.data()) ?? fallbackContext
+        : fallbackContext;
       const normalized = normalizeEditableContext({
         ...current,
         ...patch,

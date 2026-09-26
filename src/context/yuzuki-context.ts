@@ -55,11 +55,15 @@ function normalizeMultiline(value: unknown, max: number) {
   return clean.length <= max ? clean : clean.slice(0, max).trimEnd();
 }
 
-export function createDefaultEditableContext(now = 0): YuzukiEditableContext {
+export function createDefaultEditableContext(
+  now = 0,
+  defaultPersonality = DEFAULT_YUZUKI_PERSONALITY,
+  defaultMemory = "",
+): YuzukiEditableContext {
   return {
     version: YUZUKI_CONTEXT_VERSION,
-    personality: DEFAULT_YUZUKI_PERSONALITY,
-    memory: "",
+    personality: normalizeMultiline(defaultPersonality, MAX_PERSONALITY_CHARS) || DEFAULT_YUZUKI_PERSONALITY,
+    memory: normalizeMultiline(defaultMemory, MAX_MEMORY_CHARS),
     updatedAt: now,
   };
 }
@@ -67,8 +71,10 @@ export function createDefaultEditableContext(now = 0): YuzukiEditableContext {
 export function normalizeEditableContext(
   raw: Partial<YuzukiEditableContext> | null | undefined,
   now = Date.now(),
+  defaultPersonality = DEFAULT_YUZUKI_PERSONALITY,
+  defaultMemory = "",
 ): YuzukiEditableContext {
-  const fallback = createDefaultEditableContext(now);
+  const fallback = createDefaultEditableContext(now, defaultPersonality, defaultMemory);
   return {
     version: YUZUKI_CONTEXT_VERSION,
     personality: normalizeMultiline(raw?.personality, MAX_PERSONALITY_CHARS) || fallback.personality,

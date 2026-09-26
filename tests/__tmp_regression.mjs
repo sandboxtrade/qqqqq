@@ -2095,7 +2095,7 @@ await test("v0.19.3 proactive GPT messages select and surface a matching visual 
   const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
   assert.match(runtimeSource, /proactiveVisualEmotion = resolveVisualEmotionState/);
   assert.match(runtimeSource, /appearanceAssetId: proactiveAppearance\?\.assetId/);
-  assert.match(runtimeSource, /return \{ message, photoMessage, appearance: proactiveAppearance \}/);
+  assert.match(runtimeSource, /return \{ message, appearance: proactiveAppearance \}/);
   assert.match(storeSource, /runtime: result\.appearance && state\.runtime/);
 });
 
@@ -3659,7 +3659,7 @@ await test("visual emotion hysteresis is brief instead of freezing a scene", () 
   ];
   const recent = visualRuntime();
   recent.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
-  assert.equal(selectAppearance(recent, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.5.1");
+  assert.equal(selectAppearance(recent, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.6.1");
 
   const settled = visualRuntime();
   settled.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 15_000, outfitChangedAt: now - 15_000 };
@@ -3996,7 +3996,7 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(workerSource, /store:\s*false/);
   assert.match(workerSource, /X-Firebase-AppCheck/);
   assert.match(workerSource, /Authorization/);
-  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 480);
+  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 320);
   assert.match(workerSource, /format:\s*RESPONSE_FORMAT/);
   assert.match(workerSource, /name:\s*"yuzuki_dialogue_turn"/);
   assert.match(workerSource, /slice\(-30\)/);

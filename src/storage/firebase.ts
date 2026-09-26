@@ -111,33 +111,18 @@ export function getFirebaseDb(): Firestore | null {
   return db;
 }
 
-let pendingToken: Promise<string> | null = null;
+let pendingToken: Promise<void> | null = null;
 
-export async function getFirebaseAppCheckToken(forceRefresh = false): Promise<string> {
+export async function verifyAppCheck() {
   assertRuntimeConfiguration();
   initializeFirebaseAppCheck();
   if (!appCheck)
     throw new Error("App Check не настроен: проверь reCAPTCHA site key.");
-
-  const readToken = () =>
-    bounded(getToken(appCheck!, forceRefresh), 6000, "App Check").then((result) => {
-      if (!result.token) throw new Error("App Check не вернул токен.");
-      return result.token;
-    });
-
-  if (forceRefresh) return readToken();
-
   if (!pendingToken) {
-    const request = readToken();
+    const request = bounded(getToken(appCheck, false), 6000, "App Check").then(() => {});
     pendingToken = request;
-    void request.then(
-      () => { if (pendingToken === request) pendingToken = null; },
-      () => { if (pendingToken === request) pendingToken = null; },
-    );
+    void request.then(() => { if (pendingToken === request) pendingToken = null; },
+      () => { if (pendingToken === request) pendingToken = null; });
   }
-  return pendingToken;
-}
-
-export async function verifyAppCheck() {
-  await getFirebaseAppCheckToken(false);
+  await pendingToken;
 }

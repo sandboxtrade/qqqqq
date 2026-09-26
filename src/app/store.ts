@@ -9,6 +9,7 @@ import {
   refreshRuntimeFromPersistence,
   loadOlderConversation,
   conversationFrom,
+  persistGeneratedPhotoMessage,
   runtimeNow,
   setIntimacyAdultMode as updateIntimacyAdultModeRuntime,
   type RuntimeState,
@@ -38,16 +39,20 @@ import { maintenanceRetryDelay, nextInitiativeCheckAt } from "./app-utils";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 import { subscribeCharacterLiveSync } from "../storage/live-sync";
 import { defaultCharacter } from "../character/character";
+import { getCharacterProfile, isKnownCharacterId } from "../character/character-registry";
 import { mergeChatMessages, replyForFailedMessage, replyTargets } from "./app-utils";
-import { loadYuzukiEditableContext, updateYuzukiEditableContext } from "../context/context-service";
+import { loadCharacterEditableContext, updateCharacterEditableContext } from "../context/context-service";
 import { createDefaultEditableContext } from "../context/yuzuki-context";
 import { exportConversationText } from "../chat/conversation-export-service";
 import type { ConversationExportLimit } from "../chat/conversation-export";
+import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-language";
+import { loadLocalPhoto } from "../storage/local-photo-cache";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
 }
 export type AuthStatus = "local" | "checking" | "signed_out" | "signed_in";
 interface AppStore {
+  activeCharacterId: string;
   ready: boolean;
   initializing: boolean;
   busy: boolean;
@@ -74,6 +79,7 @@ interface AppStore {
   editableContextBusy: boolean;
   exportBusy: boolean;
   initialize: () => Promise<void>;
+  selectCharacter: (characterId: string) => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   clearConversationAndMemory: () => Promise<void>;
@@ -89,6 +95,16 @@ interface AppStore {
   loadOlder: () => Promise<void>;
   reconcileWorld: (runMaintenance?: boolean) => void;
   clearError: () => void;
+}
+const ACTIVE_CHARACTER_KEY = "yuzuki.social.active-character";
+function initialCharacterId() {
+  if (typeof window === "undefined") return defaultCharacter.id;
+  const stored = window.localStorage.getItem(ACTIVE_CHARACTER_KEY) ?? "";
+  return isKnownCharacterId(stored) ? stored : defaultCharacter.id;
+}
+function defaultContextFor(characterId: string) {
+  const profile = getCharacterProfile(characterId);
+  return createDefaultEditableContext(0, profile.defaultPersonality, profile.defaultMemory);
 }
 let epoch = 0;
 let active: AbortController | null = null;
@@ -157,7 +173,118 @@ function invalidate() {
   stopLiveSync();
   return epoch;
 }
-function startLiveSync(version: number, user: AuthProfile | null) {
+
+function queueGeneratedPhotoDelivery(
+  version: number,
+  uid: string | null,
+  characterId: string,
+  decision: CloudPhotoDecision,
+  parentReplyId: string,
+  timestamp: number,
+  runtime: RuntimeState | null,
+  signals?: Pick<CloudLanguageSignals, "emotionTone" | "intimacyTone">,
+) {
+  if (!decision.shouldSendPhoto || !decision.intent) return;
+  const pendingId = `pending_photo_${parentReplyId}`;
+  const pending: ChatMessage = {
+    id: pendingId,
+    role: "character",
+    text: decision.caption ?? "",
+    timestamp,
+    kind: "image",
+    imageStatus: "pending",
+    photoReason: decision.reason,
+    photoIntent: decision.intent,
+    contextText: "[Готовит фотографию]",
+    delivery: "pending",
+  };
+  useAppStore.setState((state) => {
+    if (version !== epoch || state.activeCharacterId !== characterId) return state;
+    return { messages: mergeChatMessages(state.messages, [pending]) };
+  });
+
+  window.setTimeout(() => {
+    const controller = new AbortController();
+    void persistGeneratedPhotoMessage(
+      uid,
+      controller.signal,
+      characterId,
+      decision,
+      parentReplyId,
+      timestamp + 900,
+      runtime ?? undefined,
+      signals,
+    )
+      .then((photo) => {
+        if (!photo || version !== epoch) return;
+        useAppStore.setState((state) => {
+          if (state.activeCharacterId !== characterId) return state;
+          const withoutPending = state.messages.filter((message) => message.id !== pendingId);
+          return {
+            messages: mergeChatMessages(withoutPending, [
+              { ...photo, delivery: "saved" as const },
+            ]),
+          };
+        });
+      })
+      .catch((error) => {
+        if (version !== epoch) return;
+        useAppStore.setState((state) => {
+          if (state.activeCharacterId !== characterId) return state;
+          return {
+            messages: state.messages.map((message) =>
+              message.id === pendingId
+                ? {
+                    ...message,
+                    imageStatus: "failed" as const,
+                    delivery: "failed" as const,
+                  }
+                : message,
+            ),
+            maintenanceError: errorText(error),
+          };
+        });
+      })
+      .finally(() => controller.abort());
+  }, 900);
+}
+async function hydrateMissingPhotoMessages(characterId: string) {
+  const state = useAppStore.getState();
+  if (state.activeCharacterId !== characterId) return;
+  const pending = state.messages.filter((message) =>
+    message.kind === "image" &&
+    message.imageStatus !== "pending" &&
+    message.imageStatus !== "failed" &&
+    !message.imageUrl &&
+    Boolean(message.localPhotoId),
+  );
+  if (!pending.length) return;
+  const hydrated = await Promise.all(
+    pending.map(async (message) => ({
+      id: message.id,
+      photo: await loadLocalPhoto(message.localPhotoId!).catch(() => null),
+    })),
+  );
+  const patch = new Map(
+    hydrated
+      .filter((item) => item.photo?.dataUrl)
+      .map((item) => [item.id, item.photo!.dataUrl]),
+  );
+  if (!patch.size) return;
+  useAppStore.setState((current) => {
+    if (current.activeCharacterId !== characterId) return current;
+    let changed = false;
+    const messages = current.messages.map((message) => {
+      const imageUrl = patch.get(message.id);
+      if (!imageUrl || message.imageUrl) return message;
+      changed = true;
+      return { ...message, imageUrl };
+    });
+    return changed ? { messages } : current;
+  });
+}
+
+function startLiveSync(version: number, user: AuthProfile | null, characterId: string) {
   stopLiveSync();
   if (!isFirebaseConfigured || !user) return;
 
@@ -176,7 +303,7 @@ function startLiveSync(version: number, user: AuthProfile | null) {
     const controller = new AbortController();
     liveRefresh = controller;
     void bounded(
-      refreshRuntimeFromPersistence(user.uid, controller.signal, state.runtime),
+      refreshRuntimeFromPersistence(user.uid, controller.signal, state.runtime, characterId),
       9000,
       "Синхронизация состояния",
       controller.signal,
@@ -203,7 +330,7 @@ function startLiveSync(version: number, user: AuthProfile | null) {
   flushLiveRevision = () => refreshRuntime(pendingLiveRevision);
   const newestConversation = [...useAppStore.getState().messages]
     .sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id))[0];
-  liveUnsubscribe = subscribeCharacterLiveSync(defaultCharacter.id, user.uid, {
+  liveUnsubscribe = subscribeCharacterLiveSync(characterId, user.uid, {
     onEvents: (events) => {
       if (version !== epoch) return;
       const incoming = conversationFrom(events)
@@ -231,6 +358,7 @@ function startLiveSync(version: number, user: AuthProfile | null) {
               : state.error,
         };
       });
+      void hydrateMissingPhotoMessages(characterId);
     },
     onRevision: refreshRuntime,
     onError: (error) => {
@@ -321,6 +449,7 @@ async function runMaintenance(allowInitiative: boolean, version = epoch) {
     const result = await bounded(
       maintainRuntime(store.user?.uid ?? null, controller.signal, store.runtime, {
         allowInitiative,
+        characterId: store.activeCharacterId,
         initiativeSignal: initiativeController?.signal,
         canSurfaceInitiative: () => canSurfaceInitiative(version),
       }),
@@ -336,10 +465,13 @@ async function runMaintenance(allowInitiative: boolean, version = epoch) {
       lastTrace: state.lastTrace
         ? { ...state.lastTrace, maintenance: result }
         : null,
-      messages: result.message
-        ? mergeChatMessages(state.messages, [
-            { ...result.message, delivery: "saved" as const },
-          ])
+      messages: result.message || result.photoMessage
+        ? mergeChatMessages(
+            state.messages,
+            [result.message, result.photoMessage]
+              .filter((item): item is NonNullable<typeof item> => Boolean(item))
+              .map((item) => ({ ...item, delivery: "saved" as const })),
+          )
         : state.messages,
       runtime: result.appearance && state.runtime
         ? { ...state.runtime, appearance: result.appearance }
@@ -377,18 +509,18 @@ async function runMaintenance(allowInitiative: boolean, version = epoch) {
     }
   }
 }
-async function boot(version: number, user: AuthProfile | null) {
+async function boot(version: number, user: AuthProfile | null, characterId = useAppStore.getState().activeCharacterId) {
   const controller = new AbortController();
   active = controller;
   try {
     const result = await bounded(
-      bootstrapRuntime(user?.uid ?? null, controller.signal),
+      bootstrapRuntime(user?.uid ?? null, controller.signal, undefined, characterId),
       12000,
       "Запуск",
       controller.signal,
     );
     if (version !== epoch) return;
-    const editableContext = await loadYuzukiEditableContext(user?.uid ?? null, controller.signal);
+    const editableContext = await loadCharacterEditableContext(characterId, user?.uid ?? null, controller.signal);
     if (version !== epoch) return;
     const failedMessageIds = [...new Set(result.pendingTurnIds)];
     const failedSet = new Set(failedMessageIds);
@@ -421,7 +553,7 @@ async function boot(version: number, user: AuthProfile | null) {
       phase: "",
       appCheckState: getAppCheckState(),
     });
-    startLiveSync(version, user);
+    startLiveSync(version, user, characterId);
     scheduleMaintenance();
   } finally {
     controller.abort();
@@ -457,8 +589,8 @@ function watchAuth() {
       loadingOlder: false,
       resettingData: false,
       updatingIntimacyMode: false,
-      editablePersonality: createDefaultEditableContext().personality,
-      editableMemory: "",
+      editablePersonality: defaultContextFor(state.activeCharacterId).personality,
+      editableMemory: defaultContextFor(state.activeCharacterId).memory,
       editableContextUpdatedAt: 0,
       editableContextBusy: false,
       exportBusy: false,
@@ -518,6 +650,7 @@ async function sendTurn(message: ChatMessage) {
     );
     const turnOptions = (history: ChatMessage[]) => ({
       uid: store.user?.uid ?? null,
+      characterId: store.activeCharacterId,
       signal: controller.signal,
       history,
       onChunk: (text: string) => {
@@ -545,7 +678,7 @@ async function sendTurn(message: ChatMessage) {
       // Same immutable message id is intentionally reused. appendEvent and
       // handleUserMessage are idempotent, so this recovers state conflicts
       // without duplicating the user's message or relationship effects.
-      const recovered = await bootstrapRuntime(store.user?.uid ?? null, controller.signal);
+      const recovered = await bootstrapRuntime(store.user?.uid ?? null, controller.signal, undefined, store.activeCharacterId);
       if (version !== epoch || controller.signal.aborted) return;
       useAppStore.setState({ runtime: recovered.state, maintenanceError: null });
       result = await handleUserMessage(
@@ -556,7 +689,7 @@ async function sendTurn(message: ChatMessage) {
     }
     if (version !== epoch || controller.signal.aborted) return;
     useAppStore.setState((state) => {
-      const replyMessages = result.replyMessages?.length
+      const replyMessages: ConversationLine[] = result.replyMessages?.length
         ? result.replyMessages
         : [{
             id: result.replyId,
@@ -584,11 +717,25 @@ async function sendTurn(message: ChatMessage) {
           : mergeChatMessages(
               savedMessages,
               replyMessages
-                .filter((item) => !item.silent && item.text.trim())
+                .filter((item) => !item.silent && (item.kind === "image" || item.text.trim()))
                 .map((item) => ({ ...item, delivery: "saved" as const })),
             ),
       };
     });
+
+    if (result.photoDecision?.shouldSendPhoto) {
+      const replyCount = result.replyMessages?.length ?? 1;
+      queueGeneratedPhotoDelivery(
+        version,
+        store.user?.uid ?? null,
+        store.activeCharacterId,
+        result.photoDecision,
+        result.replyId,
+        result.replyTimestamp + replyCount * 700 + 250,
+        result.state,
+        result.trace.cloudLanguage?.signals,
+      );
+    }
   } catch (error) {
     if (version !== epoch) return;
     useAppStore.setState((state) => {
@@ -618,6 +765,7 @@ async function sendTurn(message: ChatMessage) {
   }
 }
 export const useAppStore = create<AppStore>((set, get) => ({
+  activeCharacterId: initialCharacterId(),
   ready: false,
   initializing: false,
   busy: false,
@@ -638,7 +786,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   loadingOlder: false,
   resettingData: false,
   updatingIntimacyMode: false,
-  editablePersonality: createDefaultEditableContext().personality,
+  editablePersonality: defaultContextFor(initialCharacterId()).personality,
   editableMemory: "",
   editableContextUpdatedAt: 0,
   editableContextBusy: false,
@@ -677,6 +825,43 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ready: false,
           error: errorText(error),
         });
+    }
+  },
+  selectCharacter: async (characterId) => {
+    if (!isKnownCharacterId(characterId)) return;
+    const state = get();
+    if (state.activeCharacterId === characterId && state.ready) return;
+    const version = invalidate();
+    const fallback = defaultContextFor(characterId);
+    if (typeof window !== "undefined")
+      window.localStorage.setItem(ACTIVE_CHARACTER_KEY, characterId);
+    set({
+      activeCharacterId: characterId,
+      ready: false,
+      initializing: true,
+      busy: false,
+      runtime: null,
+      messages: [],
+      lastTrace: null,
+      streamingText: "",
+      chatDraft: "",
+      failedMessageIds: [],
+      historyCursor: null,
+      hasOlderMessages: false,
+      loadingOlder: false,
+      editablePersonality: fallback.personality,
+      editableMemory: fallback.memory,
+      editableContextUpdatedAt: 0,
+      editableContextBusy: false,
+      error: null,
+      maintenanceError: null,
+      phase: "",
+    });
+    try {
+      await boot(version, state.user, characterId);
+    } catch (error) {
+      if (version === epoch)
+        set({ initializing: false, busy: false, ready: false, error: errorText(error) });
     }
   },
   signIn: async () => {
@@ -721,7 +906,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       loadingOlder: false,
       resettingData: false,
       updatingIntimacyMode: false,
-      editablePersonality: createDefaultEditableContext().personality,
+      editablePersonality: defaultContextFor(get().activeCharacterId).personality,
       editableMemory: "",
       editableContextUpdatedAt: 0,
       editableContextBusy: false,
@@ -762,7 +947,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
     try {
       await bounded(
-        resetConversationMemoryRuntime(user?.uid ?? null, controller.signal, current),
+        resetConversationMemoryRuntime(user?.uid ?? null, controller.signal, current, state.activeCharacterId),
         50000,
         "Очистка диалога и памяти",
         controller.signal,
@@ -806,7 +991,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ busy: true, updatingIntimacyMode: true, error: null, phase: enabled ? "Включаем интимный режим…" : "Выключаем интимный режим…" });
     try {
       const runtime = await bounded(
-        updateIntimacyAdultModeRuntime(state.user?.uid ?? null, controller.signal, state.runtime, enabled),
+        updateIntimacyAdultModeRuntime(state.user?.uid ?? null, controller.signal, state.runtime, enabled, state.activeCharacterId),
         12000,
         "Настройка интимного режима",
         controller.signal,
@@ -828,7 +1013,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const controller = new AbortController();
     set({ editableContextBusy: true, error: null });
     try {
-      const context = await loadYuzukiEditableContext(state.user?.uid ?? null, controller.signal);
+      const context = await loadCharacterEditableContext(state.activeCharacterId, state.user?.uid ?? null, controller.signal);
       if (version !== epoch || controller.signal.aborted) return;
       set({
         editablePersonality: context.personality,
@@ -850,7 +1035,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const controller = new AbortController();
     set({ editableContextBusy: true, error: null });
     try {
-      const saved = await updateYuzukiEditableContext(state.user?.uid ?? null, controller.signal, {
+      const saved = await updateCharacterEditableContext(state.activeCharacterId, state.user?.uid ?? null, controller.signal, {
         personality: text,
         updatedAt: Date.now(),
       });
@@ -877,7 +1062,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const controller = new AbortController();
     set({ editableContextBusy: true, error: null });
     try {
-      const saved = await updateYuzukiEditableContext(state.user?.uid ?? null, controller.signal, {
+      const saved = await updateCharacterEditableContext(state.activeCharacterId, state.user?.uid ?? null, controller.signal, {
         memory: text,
         updatedAt: Date.now(),
       });
@@ -905,7 +1090,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ exportBusy: true, error: null });
     try {
       const text = await bounded(
-        exportConversationText(state.user?.uid ?? null, controller.signal, limit),
+        exportConversationText(state.user?.uid ?? null, controller.signal, limit, state.activeCharacterId),
         60000,
         "Экспорт диалога",
         controller.signal,
@@ -946,7 +1131,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const controller = new AbortController();
     try {
       await bounded(
-        dismissPendingTurn(get().user?.uid ?? null, controller.signal, messageId),
+        dismissPendingTurn(get().user?.uid ?? null, controller.signal, messageId, get().activeCharacterId),
         8000,
         "Пропуск сообщения",
         controller.signal,
@@ -987,6 +1172,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           controller.signal,
           state.historyCursor,
           60,
+          state.activeCharacterId,
         ),
         10000,
         "Загрузка истории",
@@ -1029,3 +1215,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   clearError: () => set({ error: null, appCheckState: getAppCheckState() }),
 }));
+
+useAppStore.subscribe((state, previous) => {
+  if (state.messages === previous.messages) return;
+  void hydrateMissingPhotoMessages(state.activeCharacterId);
+});

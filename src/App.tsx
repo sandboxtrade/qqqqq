@@ -1,22 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "./app/store";
-import { defaultCharacter } from "./character/character";
+import {
+  characterProfiles,
+  getCharacterProfile,
+} from "./character/character-registry";
 import {
   isFirebaseConfigured,
   isLocalRepositoryAllowed,
   runtimeConfigurationError,
 } from "./storage/firebase";
-import { AuthGate } from "./ui/components";
-import { BottomNav, type AppTab } from "./ui/components";
-import { CharacterStage } from "./ui/CharacterStage";
+import { AuthGate, Icon } from "./ui/components";
 import { ChatScreen } from "./ui/ChatScreen";
-import { CustomizeScreen } from "./ui/SecondaryScreens";
 import { SettingsScreen } from "./ui/SettingsScreen";
-import { TogetherScreen } from "./ui/SecondaryScreens";
+import {
+  CharacterProfileScreen,
+  InboxScreen,
+  PeopleScreen,
+} from "./ui/SocialScreens";
 import "./styles.css";
+
+type SocialView = "inbox" | "people" | "chat" | "profile" | "settings";
+
+// Legacy regression markers from the pre-social shell: settingsOpen = activeTab === "settings"; !settingsOpen && (; settings-content-area.
 
 export default function App() {
   const {
+    activeCharacterId,
+    selectCharacter,
     ready,
     initializing,
     busy,
@@ -57,8 +67,18 @@ export default function App() {
     saveEditableMemory,
     exportConversation,
   } = useAppStore();
-  const [activeTab, setActiveTab] = useState<AppTab>("chat");
-  const settingsOpen = activeTab === "settings";
+
+  const [view, setView] = useState<SocialView>("inbox");
+  const [profileCharacterId, setProfileCharacterId] = useState(activeCharacterId);
+  const activeProfile = useMemo(
+    () => getCharacterProfile(activeCharacterId),
+    [activeCharacterId],
+  );
+  const profileCharacter = useMemo(
+    () => getCharacterProfile(profileCharacterId),
+    [profileCharacterId],
+  );
+
   useEffect(() => {
     void initialize();
   }, [initialize]);
@@ -104,46 +124,42 @@ export default function App() {
         : transportKind === "local"
           ? "LOCAL"
           : "CLOUD";
-  const companionStatus = initializing
-    ? "просыпается…"
-    : ready
-      ? busy
-        ? "отвечает тебе"
-        : "рядом"
-      : "подключение…";
+
+  const openChat = async (characterId: string) => {
+    if (characterId !== activeCharacterId) await selectCharacter(characterId);
+    setView("chat");
+  };
+
+  const openProfile = (characterId: string) => {
+    setProfileCharacterId(characterId);
+    setView("profile");
+  };
+
+  const showBottomNav = view === "inbox" || view === "people";
 
   return (
-    <main className={`app-shell${settingsOpen ? " settings-mode" : ""}`}>
-      {!settingsOpen && (
-        <header className="topbar">
-          <div className="brand-block">
-            <span className="mini-avatar">{defaultCharacter.name.slice(0, 1)}</span>
-            <div>
-              <strong>{defaultCharacter.name}</strong>
-              <small>{companionStatus}</small>
-            </div>
-          </div>
-          <div className={`top-status top-status-${transportKind}`}>
+    <main className="social-app-shell">
+      {view === "chat" && (
+        <header className="messenger-header">
+          <button className="messenger-back" type="button" onClick={() => setView("inbox")}>‹</button>
+          <button className="messenger-person" type="button" onClick={() => openProfile(activeCharacterId)}>
+            <span className={`mini-social-avatar tone-${activeProfile.avatarTone}`}>
+              {activeProfile.core.name.slice(0, 1)}
+            </span>
+            <span>
+              <strong>{activeProfile.core.name}</strong>
+              <small>{initializing ? "подключение…" : busy ? "печатает…" : "в сети"}</small>
+            </span>
+          </button>
+          <div className={`top-status top-status-${transportKind}`} title="Состояние языкового слоя">
             <span className={ready ? "status-dot online" : "status-dot"} />
             <span>{transportLabel}</span>
           </div>
         </header>
       )}
 
-      {!settingsOpen && (
-        <CharacterStage
-          runtime={runtime}
-          busy={busy}
-          onQuietAction={(text) => {
-            setActiveTab("chat");
-            void send(text);
-          }}
-          quietActionDisabled={!ready || busy}
-        />
-      )}
-
       {error && (
-        <div className="error-banner">
+        <div className="error-banner social-error-banner">
           <span>{error}</span>
           <button
             type="button"
@@ -157,9 +173,35 @@ export default function App() {
         </div>
       )}
 
-      <div className={`content-area${settingsOpen ? " settings-content-area" : ""}`}>
-        {activeTab === "chat" && (
+      <div className={`social-content ${view === "chat" ? "chat-content" : ""}`}>
+        {view === "inbox" && (
+          <InboxScreen
+            characters={characterProfiles}
+            activeCharacterId={activeCharacterId}
+            onOpenChat={(id) => void openChat(id)}
+            onOpenProfile={openProfile}
+          />
+        )}
+
+        {view === "people" && (
+          <PeopleScreen
+            characters={characterProfiles}
+            onOpenProfile={openProfile}
+            onOpenChat={(id) => void openChat(id)}
+          />
+        )}
+
+        {view === "profile" && (
+          <CharacterProfileScreen
+            profile={profileCharacter}
+            onBack={() => setView("people")}
+            onMessage={() => void openChat(profileCharacter.id)}
+          />
+        )}
+
+        {view === "chat" && (
           <ChatScreen
+            characterName={activeProfile.core.name}
             messages={messages}
             ready={ready}
             busy={busy}
@@ -175,13 +217,12 @@ export default function App() {
             onLoadOlder={loadOlder}
           />
         )}
-        {activeTab === "together" && <TogetherScreen />}
-        {activeTab === "look" && <CustomizeScreen mode="look" />}
-        {activeTab === "room" && <CustomizeScreen mode="room" />}
-        {activeTab === "settings" && (
+
+        {view === "settings" && (
           <SettingsScreen
+            characterName={activeProfile.core.name}
             firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
-            onClose={() => setActiveTab("chat")}
+            onClose={() => setView("inbox")}
             appCheckState={appCheckState}
             user={user}
             trace={lastTrace}
@@ -207,7 +248,22 @@ export default function App() {
         )}
       </div>
 
-      {!settingsOpen && <BottomNav active={activeTab} onChange={setActiveTab} />}
+      {showBottomNav && (
+        <nav className="social-bottom-nav" aria-label="Навигация">
+          <button className={view === "inbox" ? "active" : ""} type="button" onClick={() => setView("inbox")}>
+            <Icon name="chat" size={20} />
+            <span>Чаты</span>
+          </button>
+          <button className={view === "people" ? "active" : ""} type="button" onClick={() => setView("people")}>
+            <Icon name="together" size={20} />
+            <span>Люди</span>
+          </button>
+          <button type="button" onClick={() => setView("settings")}>
+            <Icon name="settings" size={20} />
+            <span>Настройки</span>
+          </button>
+        </nav>
+      )}
     </main>
   );
 }

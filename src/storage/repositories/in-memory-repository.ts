@@ -313,9 +313,12 @@ export class InMemoryCompanionRepository implements CompanionRepository {
     return structuredClone(normalized);
   }
 
-  async updateEditableContext(patch: YuzukiEditableContextPatch) {
+  async updateEditableContext(
+    patch: YuzukiEditableContextPatch,
+    fallback?: YuzukiEditableContext,
+  ) {
     const now = Date.now();
-    const current = this.editableContext ?? normalizeEditableContext(null, now);
+    const current = this.editableContext ?? (fallback ? normalizeEditableContext(fallback, now) : normalizeEditableContext(null, now));
     const normalized = normalizeEditableContext({
       ...current,
       ...patch,

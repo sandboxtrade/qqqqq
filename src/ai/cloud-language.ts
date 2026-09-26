@@ -11,6 +11,11 @@ export type CloudLanguageRole = "user" | "character";
 
 export interface CloudLanguageInput {
   mode?: "reply" | "initiative";
+  character?: {
+    id: string;
+    name: string;
+    age: number;
+  };
   /** Current user text. Initiative mode intentionally sends an empty string. */
   userText: string;
   /** User-editable stable character description. */
@@ -132,6 +137,26 @@ export interface CloudConversationMetadata {
   continuesPrevious?: boolean;
 }
 
+export type PhotoDecisionReason = "none" | "user_requested" | "self_initiated";
+export type PhotoFraming = "selfie" | "mirror" | "portrait" | "upper_body" | "full_body";
+export type PhotoSuggestiveLevel = "none" | "low" | "medium" | "high";
+
+export interface CloudPhotoIntent {
+  framing: PhotoFraming;
+  mood: string;
+  pose: string;
+  location: string;
+  outfit: string;
+  suggestiveLevel: PhotoSuggestiveLevel;
+}
+
+export interface CloudPhotoDecision {
+  shouldSendPhoto: boolean;
+  reason: PhotoDecisionReason;
+  caption?: string;
+  intent?: CloudPhotoIntent;
+}
+
 export interface CloudLanguageSignals {
   userTone?: string;
   relationshipEvent?: string;
@@ -186,6 +211,8 @@ export interface CloudLanguageResult {
   emotionReaction?: CloudEmotionReaction;
   relationshipReaction?: CloudRelationshipReaction;
   intimacyReaction?: CloudIntimacyReaction;
+  /** Semantic photo decision only. Actual image generation is a separate service. */
+  photoDecision?: CloudPhotoDecision;
   reason?: string;
 }
 
@@ -211,6 +238,19 @@ interface WorkerReply {
   emotionReaction?: Record<string, unknown>;
   relationshipReaction?: Record<string, unknown>;
   intimacyReaction?: Record<string, unknown>;
+  photoDecision?: {
+    shouldSendPhoto?: unknown;
+    reason?: unknown;
+    caption?: unknown;
+    intent?: {
+      framing?: unknown;
+      mood?: unknown;
+      pose?: unknown;
+      location?: unknown;
+      outfit?: unknown;
+      suggestiveLevel?: unknown;
+    };
+  };
   usage?: {
     inputTokens?: unknown;
     cachedInputTokens?: unknown;
@@ -342,6 +382,42 @@ function parseIntimacyReaction(raw: WorkerReply["intimacyReaction"]): CloudIntim
     interest: boundedDelta(raw.interest),
     arousal: boundedDelta(raw.arousal),
     initiativeDrive: boundedDelta(raw.initiativeDrive),
+  };
+}
+
+function parsePhotoDecision(raw: WorkerReply["photoDecision"]): CloudPhotoDecision | undefined {
+  if (!raw) return undefined;
+  const requested = raw.shouldSendPhoto === true;
+  const reasonValue = String(raw.reason ?? "");
+  const reason: PhotoDecisionReason =
+    requested && reasonValue === "user_requested"
+      ? "user_requested"
+      : requested && reasonValue === "self_initiated"
+        ? "self_initiated"
+        : "none";
+  const shouldSendPhoto = requested && reason !== "none";
+  const framingValue = String(raw.intent?.framing ?? "");
+  const framing = ["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(framingValue)
+    ? framingValue as PhotoFraming
+    : "selfie";
+  const suggestiveValue = String(raw.intent?.suggestiveLevel ?? "");
+  const suggestiveLevel = ["none", "low", "medium", "high"].includes(suggestiveValue)
+    ? suggestiveValue as PhotoSuggestiveLevel
+    : "none";
+
+  if (!shouldSendPhoto) return { shouldSendPhoto: false, reason: "none" };
+  return {
+    shouldSendPhoto: true,
+    reason,
+    caption: asOptionalString(raw.caption, 220),
+    intent: {
+      framing,
+      mood: asOptionalString(raw.intent?.mood, 80) ?? "natural",
+      pose: asOptionalString(raw.intent?.pose, 160) ?? "natural relaxed pose",
+      location: asOptionalString(raw.intent?.location, 100) ?? "current location",
+      outfit: asOptionalString(raw.intent?.outfit, 140) ?? "current outfit",
+      suggestiveLevel,
+    },
   };
 }
 
@@ -498,6 +574,7 @@ export async function renderCloudLanguage(
       const emotionReaction = parseEmotionReaction(data.emotionReaction);
       const relationshipReaction = parseRelationshipReaction(data.relationshipReaction);
       const intimacyReaction = parseIntimacyReaction(data.intimacyReaction);
+      const photoDecision = parsePhotoDecision(data.photoDecision);
       const reason = responseReason(data, response.status);
 
       // Firebase ID/App Check tokens can expire between acquisition and Worker
@@ -522,6 +599,7 @@ export async function renderCloudLanguage(
             emotionReaction,
             relationshipReaction,
             intimacyReaction,
+            photoDecision,
           };
         }
       }
@@ -529,7 +607,7 @@ export async function renderCloudLanguage(
       if (!response.ok) {
         const duration = circuitDuration(response.status);
         if (duration) unavailableUntil = Date.now() + duration;
-        return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction, intimacyReaction };
+        return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction, intimacyReaction, photoDecision };
       }
 
       if (data.skipped === true) {
@@ -548,6 +626,7 @@ export async function renderCloudLanguage(
           emotionReaction,
           relationshipReaction,
           intimacyReaction,
+          photoDecision,
         };
       }
 
@@ -562,7 +641,7 @@ export async function renderCloudLanguage(
           messages: [],
           shouldInitiate: false,
           model, usage, budget, conversation, signals,
-          emotionReaction, relationshipReaction, intimacyReaction,
+          emotionReaction, relationshipReaction, intimacyReaction, photoDecision,
         };
       }
       if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
@@ -579,6 +658,7 @@ export async function renderCloudLanguage(
           emotionReaction,
           relationshipReaction,
           intimacyReaction,
+          photoDecision,
         };
       }
 
@@ -597,6 +677,7 @@ export async function renderCloudLanguage(
         emotionReaction,
         relationshipReaction,
         intimacyReaction,
+        photoDecision,
       };
     } catch (error) {
       if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };

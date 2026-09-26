@@ -1,4 +1,5 @@
 import { defaultCharacter } from "../character/character";
+import { getCharacterProfile } from "../character/character-registry";
 import { createEvent, type CharacterEvent } from "../events/event-types";
 import {
   applyEmotionDelta,
@@ -12,6 +13,7 @@ import {
 import type { EmotionalState } from "../emotions/emotions";
 import type { RelationshipState } from "../relationship/relationship";
 import { getCompanionRepository } from "../storage/repository-factory";
+import { saveLocalPhoto, loadLocalPhoto } from "../storage/local-photo-cache";
 import {
   applyWorldSimulationEmotion,
   createInitialWorldState,
@@ -22,7 +24,16 @@ import type { WorldState, WorldSimulationResult } from "../world/world";
 import { describeWorldActivityDetail, worldClock } from "../world/world";
 import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
-import { renderCloudLanguage, type CloudConversationMetadata, type CloudLanguageResult } from "../ai/cloud-language";
+import {
+  renderCloudLanguage,
+  type CloudConversationMetadata,
+  type CloudLanguageResult,
+  type CloudLanguageSignals,
+  type CloudPhotoDecision,
+  type CloudPhotoIntent,
+  type PhotoDecisionReason,
+} from "../ai/cloud-language";
+import { generateCloudPhoto } from "../ai/cloud-photo";
 import { createDefaultEditableContext, normalizeEditableContext } from "../context/yuzuki-context";
 
 import { currentRomance, initialRomance, type RomanceState } from "../relationship/relationship";
@@ -79,6 +90,16 @@ export interface ConversationLine {
   languageSource?: "gpt" | "local";
   languageReason?: string;
   conversationHint?: CloudConversationMetadata;
+  kind?: "text" | "image";
+  imageUrl?: string;
+  imageAlt?: string;
+  imageStatus?: "pending" | "ready" | "failed";
+  localPhotoId?: string;
+  photoReason?: PhotoDecisionReason;
+  photoIntent?: CloudPhotoIntent;
+  /** Text representation used only for GPT continuity/export, not necessarily rendered as a caption. */
+  contextText?: string;
+  mockPhoto?: boolean;
 }
 export interface RuntimeTrace {
   cloudLanguage?: CloudLanguageResult;
@@ -101,8 +122,8 @@ export interface RuntimeTrace {
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
   maintenance?: Awaited<ReturnType<typeof maintainRuntime>>;
 }
-const repo = (uid: string | null, signal: AbortSignal) =>
-  getCompanionRepository(defaultCharacter.id, uid, signal);
+const repo = (characterId: string, uid: string | null, signal: AbortSignal) =>
+  getCompanionRepository(characterId, uid, signal);
 const SLEEP_WAKE_FOLLOWUP_MS = 10 * 60_000;
 function worldEvents(simulation: WorldSimulationResult) {
   return simulation.generatedEvents.map((e) =>
@@ -191,10 +212,26 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
         reason?: string;
         conversation?: CloudConversationMetadata;
       };
+      kind?: string;
+      imageUrl?: string;
+      imageAlt?: string;
+      imageStatus?: string;
+      localPhotoId?: string;
+      photoReason?: string;
+      photoIntent?: CloudPhotoIntent;
+      contextText?: string;
+      mockPhoto?: boolean;
     };
     const text = String(payload.text ?? "").trim();
     const silent = event.source === "character" && payload.silent === true;
-    if (!text && !silent) return [];
+    const imageUrl = typeof payload.imageUrl === "string" ? payload.imageUrl.trim() : "";
+    const kind = payload.kind === "image" ? "image" as const : "text" as const;
+    const imageStatus = payload.imageStatus === "pending" || payload.imageStatus === "failed"
+      ? payload.imageStatus
+      : kind === "image"
+        ? "ready"
+        : undefined;
+    if (!text && !silent && kind !== "image") return [];
     return [{
       id: event.id,
       role: event.source,
@@ -210,6 +247,19 @@ export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
       conversationHint: payload.language?.conversation && typeof payload.language.conversation === "object"
         ? payload.language.conversation
         : undefined,
+      kind,
+      imageUrl: imageUrl || undefined,
+      imageAlt: typeof payload.imageAlt === "string" ? payload.imageAlt : undefined,
+      imageStatus,
+      localPhotoId: typeof payload.localPhotoId === "string" ? payload.localPhotoId : undefined,
+      photoReason: ["none", "user_requested", "self_initiated"].includes(String(payload.photoReason ?? ""))
+        ? payload.photoReason as PhotoDecisionReason
+        : undefined,
+      photoIntent: payload.photoIntent && typeof payload.photoIntent === "object"
+        ? payload.photoIntent
+        : undefined,
+      contextText: typeof payload.contextText === "string" ? payload.contextText : undefined,
+      mockPhoto: payload.mockPhoto === true,
     }];
   });
 }
@@ -230,12 +280,115 @@ export function selectBalancedRecentHistory(
   lines: readonly ConversationLine[],
   perRole = 15,
 ) {
-  const users = lines.filter((line) => line.role === "user" && line.text.trim()).slice(-perRole);
-  const characters = lines.filter((line) => line.role === "character" && line.text.trim()).slice(-perRole);
+  const hasContext = (line: ConversationLine) => Boolean((line.contextText ?? line.text).trim());
+  const users = lines.filter((line) => line.role === "user" && hasContext(line)).slice(-perRole);
+  const characters = lines.filter((line) => line.role === "character" && hasContext(line)).slice(-perRole);
   const keep = new Set([...users, ...characters].map((line) => line.id));
   return lines
     .filter((line) => keep.has(line.id))
     .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+}
+
+function photoContextText(decision: CloudPhotoDecision) {
+  const intent = decision.intent;
+  if (!intent) return "[Отправила фотографию]";
+  return `[Отправила фотографию: ${intent.framing}; настроение ${intent.mood}; поза ${intent.pose}; место ${intent.location}; одежда ${intent.outfit}]`;
+}
+
+function escapeXml(value: string) {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&apos;");
+}
+
+function photoAltText(characterName: string, decision: CloudPhotoDecision) {
+  const mood = decision.intent?.mood ? `, настроение ${decision.intent.mood}` : "";
+  return `Фото от ${characterName}${mood}`;
+}
+
+export async function persistGeneratedPhotoMessage(
+  uid: string | null,
+  signal: AbortSignal,
+  characterId: string,
+  decision: CloudPhotoDecision,
+  parentReplyId: string,
+  timestamp: number,
+  state?: RuntimeState,
+  signals?: Pick<CloudLanguageSignals, "emotionTone" | "intimacyTone">,
+): Promise<ConversationLine | null> {
+  if (!decision.shouldSendPhoto || !decision.intent) return null;
+  checkSignal(signal);
+  const repository = repo(characterId, uid, signal);
+  const profile = getCharacterProfile(characterId);
+  const eventId = `photo_${parentReplyId}`;
+  const existing = await repository.getEvent(eventId);
+  if (existing) {
+    const existingLine = conversationFrom([existing])[0] ?? null;
+    if (!existingLine) return null;
+    const local = await loadLocalPhoto(eventId).catch(() => null);
+    return local?.dataUrl ? { ...existingLine, imageUrl: local.dataUrl } : existingLine;
+  }
+
+  const generated = await generateCloudPhoto({
+    character: { id: profile.id, name: profile.core.name, age: profile.core.age },
+    visualProfile: profile.visualProfile,
+    decision,
+    world: state ? {
+      timeOfDay: state.world.timeOfDay,
+      location: state.world.currentLocation,
+      activity: state.world.currentActivity,
+      availability: state.world.availability,
+    } : undefined,
+    relationship: state ? {
+      stage: state.relationship.stage,
+      closeness: state.relationship.closeness,
+      trust: state.relationship.trust,
+    } : undefined,
+    signals,
+  }, signal);
+  checkSignal(signal);
+  if (!generated.used || !generated.dataUrl) {
+    throw new Error(generated.reason || "photo-generation-failed");
+  }
+
+  await saveLocalPhoto({
+    id: eventId,
+    characterId,
+    messageId: eventId,
+    mimeType: generated.mimeType || "image/webp",
+    dataUrl: generated.dataUrl,
+    createdAt: timestamp,
+    promptSummary: generated.prompt,
+  });
+  checkSignal(signal);
+
+  const event = createEvent({
+    id: eventId,
+    type: decision.reason === "self_initiated" ? "character_action" : "message",
+    source: "character",
+    timestamp,
+    payload: {
+      kind: "image",
+      text: decision.caption ?? "",
+      imageAlt: photoAltText(profile.core.name, decision),
+      imageStatus: "ready",
+      localPhotoId: eventId,
+      photoReason: decision.reason,
+      photoIntent: decision.intent,
+      contextText: photoContextText(decision),
+      mockPhoto: false,
+      inReplyTo: parentReplyId,
+      imageModel: generated.model,
+    },
+    importance: decision.reason === "self_initiated" ? 0.3 : 0.22,
+  });
+  await repository.appendEvent(event);
+  checkSignal(signal);
+  const line = conversationFrom([event])[0] ?? null;
+  return line ? { ...line, imageUrl: generated.dataUrl } : null;
 }
 
 const EMOTION_REACTION_LIMITS = {
@@ -465,8 +618,9 @@ export async function bootstrapRuntime(
   uid: string | null,
   signal: AbortSignal,
   now?: number,
+  characterId = defaultCharacter.id,
 ) {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   const wallNow = now ?? Date.now();
   const [{ snapshot: stored, world }, conversationPage, pendingTurns, storedIntimacy] = await Promise.all([
     repository.loadRuntimeState(),
@@ -514,8 +668,9 @@ export async function clearConversationAndMemory(
   uid: string | null,
   signal: AbortSignal,
   current: RuntimeState,
+  characterId = defaultCharacter.id,
 ): Promise<RuntimeState> {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   const now = runtimeNow(current);
   const emotion: EmotionalState = { ...initialEmotionalState, updatedAt: now };
   const relationship: RelationshipState = { ...initialRelationshipState, updatedAt: now };
@@ -542,8 +697,9 @@ export async function dismissPendingTurn(
   uid: string | null,
   signal: AbortSignal,
   messageId: string,
+  characterId = defaultCharacter.id,
 ) {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   await repository.dismissPendingTurn(messageId);
   checkSignal(signal);
 }
@@ -553,8 +709,9 @@ export async function loadOlderConversation(
   signal: AbortSignal,
   before: ConversationCursor | null,
   limit = 60,
+  characterId = defaultCharacter.id,
 ) {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   const page = await repository.listConversationEvents({ before, limit });
   checkSignal(signal);
   return {
@@ -568,8 +725,9 @@ export async function refreshRuntimeFromPersistence(
   uid: string | null,
   signal: AbortSignal,
   current: RuntimeState,
+  characterId = defaultCharacter.id,
 ) {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   const [{ snapshot, world }, intimacy] = await Promise.all([
     repository.loadRuntimeState(),
     repository.loadIntimacyState(),
@@ -597,8 +755,9 @@ export async function setIntimacyAdultMode(
   signal: AbortSignal,
   current: RuntimeState,
   enabled: boolean,
+  characterId = defaultCharacter.id,
 ): Promise<RuntimeState> {
-  const repository = repo(uid, signal);
+  const repository = repo(characterId, uid, signal);
   const now = runtimeNow(current);
   const stored = await repository.loadIntimacyState();
   checkSignal(signal);
@@ -628,6 +787,7 @@ export interface TurnInput {
 }
 export interface TurnOptions {
   uid: string | null;
+  characterId?: string;
   signal: AbortSignal;
   history: ConversationLine[];
   onChunk?: (text: string) => void;
@@ -678,7 +838,7 @@ function hardConstraintKind(
 
 function hardConstraintSummary(kind: string | undefined) {
   if (kind === "sleeping")
-    return "Yuzuki сейчас спит. Ответ должен быть очень коротким и сонным; не изображай полностью бодрствующую беседу.";
+    return "Персонаж сейчас спит. Ответ должен быть очень коротким и сонным; не изображай полностью бодрствующую беседу.";
   if (kind === "intimacy_stop")
     return "Пользователь явно остановил интимное взаимодействие. Сразу остановись, не уговаривай и не продолжай интимный тон.";
   if (kind === "intimacy_pause")
@@ -712,7 +872,7 @@ function cloudPartsOrFallback(cloud: CloudLanguageResult, kind?: string) {
   // not something Yuzuki should pretend was her own reply.
   if (!cloud.attempted && ["non-browser", "firebase-disabled", "local-route", "test-local"].includes(reason))
     return { parts: [fallbackReply(kind)], usedCloud: false };
-  throw new Error(`Не удалось получить ответ Yuzuki от GPT: ${reason}. Нажми «Повторить».`);
+  throw new Error(`Не удалось получить ответ персонажа от GPT: ${reason}. Нажми «Повторить».`);
 }
 
 function syncRomanceState(
@@ -760,7 +920,9 @@ export async function handleUserMessage(
     options.onChunk?.(text);
   };
   const { uid, signal } = options;
-  const repository = repo(uid, signal);
+  const characterId = options.characterId ?? defaultCharacter.id;
+  const profile = getCharacterProfile(characterId);
+  const repository = repo(characterId, uid, signal);
   const replyId = `reply_${input.id}`;
 
   options.onPhase?.("Проверяем сохранение…");
@@ -775,8 +937,13 @@ export async function handleUserMessage(
 
   if (existing) {
     await repository.dismissPendingTurn(input.id);
-    const boot = await bootstrapRuntime(uid, signal);
-    const payload = existing.payload as { text?: string; silent?: boolean; appearanceAssetId?: string };
+    const boot = await bootstrapRuntime(uid, signal, undefined, characterId);
+    const payload = existing.payload as {
+      text?: string;
+      silent?: boolean;
+      appearanceAssetId?: string;
+      photoDecision?: CloudPhotoDecision;
+    };
     const recoveredReplies = boot.recentConversation
       .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
@@ -797,6 +964,7 @@ export async function handleUserMessage(
       replyId,
       replyTimestamp: existing.timestamp,
       appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
+      photoDecision: payload.photoDecision,
       state: boot.state,
       trace: null as RuntimeTrace | null,
     };
@@ -841,8 +1009,10 @@ export async function handleUserMessage(
   ]);
   checkSignal(signal);
   const editableContext = normalizeEditableContext(
-    storedEditableContext ?? createDefaultEditableContext(now),
+    storedEditableContext ?? createDefaultEditableContext(now, profile.defaultPersonality, profile.defaultMemory),
     now,
+    profile.defaultPersonality,
+    profile.defaultMemory,
   );
   const contextMs = Math.round(performance.now() - contextStarted);
   const stableHistory = history.filter((line) => line.id !== input.id);
@@ -875,7 +1045,7 @@ export async function handleUserMessage(
   let relationship = before.relationship;
 
   const intimacy = planIntimacyTurn({
-    character: defaultCharacter,
+    character: profile.core,
     previous: before.intimacy,
     preferences: intimacyPreferences,
     signal: intimacySignal,
@@ -968,6 +1138,7 @@ export async function handleUserMessage(
   if (!silent) {
     cloudLanguage = await renderCloudLanguage({
       mode: "reply",
+      character: { id: profile.id, name: profile.core.name, age: profile.core.age },
       userText: input.text,
       personality: editableContext.personality,
       memory: editableContext.memory,
@@ -1050,7 +1221,7 @@ export async function handleUserMessage(
           reflection: intimacyMind.reflection,
         },
       },
-      recentHistory: recentHistory.map((line) => ({ role: line.role, text: line.text })),
+      recentHistory: recentHistory.map((line) => ({ role: line.role, text: line.contextText ?? line.text })),
       silent: false,
     }, signal);
     checkSignal(signal);
@@ -1147,6 +1318,9 @@ export async function handleUserMessage(
         intimacyAction: index === 0 ? intimacy.action : "none",
         intimacyPhase: reactedIntimacyState.phase,
         appearanceAssetId: appearance.assetId,
+        photoDecision: index === 0 && cloudLanguage.photoDecision?.shouldSendPhoto
+          ? cloudLanguage.photoDecision
+          : undefined,
         language: {
           source: cloudLanguage.used ? "gpt" : "local",
           reason: cloudLanguage.used ? undefined : cloudLanguage.reason,
@@ -1182,8 +1356,13 @@ export async function handleUserMessage(
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "turn-already-committed") throw error;
     const saved = await repository.getEvent(replyId);
-    const boot = await bootstrapRuntime(uid, signal);
-    const savedPayload = saved!.payload as { text?: string; silent?: boolean; appearanceAssetId?: string };
+    const boot = await bootstrapRuntime(uid, signal, undefined, characterId);
+    const savedPayload = saved!.payload as {
+      text?: string;
+      silent?: boolean;
+      appearanceAssetId?: string;
+      photoDecision?: CloudPhotoDecision;
+    };
     const savedReplies = boot.recentConversation
       .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
@@ -1194,6 +1373,7 @@ export async function handleUserMessage(
       replyId,
       replyTimestamp: saved!.timestamp,
       appearanceAssetId: typeof savedPayload.appearanceAssetId === "string" ? savedPayload.appearanceAssetId : undefined,
+      photoDecision: savedPayload.photoDecision,
       state: boot.state,
       trace: null,
     };
@@ -1277,6 +1457,7 @@ export async function handleUserMessage(
     replyId,
     replyTimestamp,
     appearanceAssetId: appearance.assetId,
+    photoDecision: cloudLanguage.photoDecision,
     state: {
       emotion,
       relationship,
@@ -1300,6 +1481,7 @@ function latestProactiveEvent(events: CharacterEvent[]) {
 
 export interface MaintenanceOptions {
   allowInitiative?: boolean;
+  characterId?: string;
   initiativeSignal?: AbortSignal;
   canSurfaceInitiative?: () => boolean;
 }
@@ -1315,7 +1497,9 @@ export async function maintainRuntime(
   const allowInitiative = maintenanceOptions.allowInitiative === true;
   const initiativeSignal = maintenanceOptions.initiativeSignal ?? signal;
   const canSurfaceInitiative = maintenanceOptions.canSurfaceInitiative ?? (() => true);
-  const repository = repo(uid, signal);
+  const characterId = maintenanceOptions.characterId ?? defaultCharacter.id;
+  const profile = getCharacterProfile(characterId);
+  const repository = repo(characterId, uid, signal);
   // Immutable event writes are safe in idle work; never save an old mutable snapshot here.
   for (const event of state.pendingWorldEvents ?? []) {
     await repository.appendEvent(event);
@@ -1336,6 +1520,7 @@ export async function maintainRuntime(
   const proactiveCooldownOpen = !lastProactive ||
     maintenanceNow - lastProactive.timestamp >= PROACTIVE_MESSAGE_COOLDOWN_MS;
   let message: ConversationLine | null = null;
+  let photoMessage: ConversationLine | null = null;
   let proactiveAppearance: AppearanceState | null = null;
   const quietMs = Math.max(0, maintenanceNow - advanced.state.world.lastUserInteractionAt);
   const initiativeWindowOpen = () =>
@@ -1354,8 +1539,10 @@ export async function maintainRuntime(
       repository.listConversationEvents({ limit: 60 }),
     ]);
     const proactiveEditableContext = normalizeEditableContext(
-      storedEditableContext ?? createDefaultEditableContext(maintenanceNow),
+      storedEditableContext ?? createDefaultEditableContext(maintenanceNow, profile.defaultPersonality, profile.defaultMemory),
       maintenanceNow,
+      profile.defaultPersonality,
+      profile.defaultMemory,
     );
     const proactiveHistory = conversationFrom(proactivePage.events);
     checkSignal(signal);
@@ -1363,12 +1550,13 @@ export async function maintainRuntime(
     if (initiativeWindowOpen()) {
       const proactiveLanguage = await renderCloudLanguage({
         mode: "initiative",
+        character: { id: profile.id, name: profile.core.name, age: profile.core.age },
         userText: "",
         personality: proactiveEditableContext.personality,
         memory: proactiveEditableContext.memory,
         proactive: {
           kind: "autonomous_check",
-          reason: "Проверка, есть ли у Yuzuki естественное желание самой выйти на связь.",
+          reason: "Проверка, есть ли у персонажа естественное желание самому выйти на связь.",
           quietMinutes: Math.round(quietMs / 60_000),
         },
         world: {
@@ -1404,7 +1592,7 @@ export async function maintainRuntime(
         romancePhase: advanced.state.romance?.phase,
         recentHistory: selectBalancedRecentHistory(proactiveHistory, 15).map((line) => ({
           role: line.role,
-          text: line.text,
+          text: line.contextText ?? line.text,
         })),
         silent: false,
       }, initiativeSignal);
@@ -1464,6 +1652,16 @@ export async function maintainRuntime(
               importance: index === 0 ? 0.4 : 0.2,
             }));
             for (const event of events) await repository.appendEvent(event);
+            if (proactiveLanguage.photoDecision?.shouldSendPhoto) {
+              photoMessage = await persistGeneratedPhotoMessage(
+                uid,
+                signal,
+                characterId,
+                proactiveLanguage.photoDecision,
+                events[0].id,
+                publishNow + parts.length * 700 + 900,
+              );
+            }
             message = {
               id: events[0].id,
               role: "character",
@@ -1478,5 +1676,5 @@ export async function maintainRuntime(
       }
     }
   }
-  return { message, appearance: proactiveAppearance };
+  return { message, photoMessage, appearance: proactiveAppearance };
 }

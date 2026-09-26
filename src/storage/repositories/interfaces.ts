@@ -96,7 +96,10 @@ export interface CompanionRepository {
 
   loadEditableContext(): Promise<YuzukiEditableContext | null>;
   saveEditableContext(context: YuzukiEditableContext): Promise<YuzukiEditableContext>;
-  updateEditableContext(patch: YuzukiEditableContextPatch): Promise<YuzukiEditableContext>;
+  updateEditableContext(
+    patch: YuzukiEditableContextPatch,
+    fallback?: YuzukiEditableContext,
+  ): Promise<YuzukiEditableContext>;
 
   loadIntimacyState(): Promise<IntimacyState | null>;
   commitIntimacyState(

@@ -11,8 +11,21 @@ import {
 function exportLine(event: CharacterEvent): ExportConversationLine | null {
   if ((event.type !== "message" && event.type !== "character_action") || event.source === "system")
     return null;
-  const payload = event.payload as { text?: unknown; silent?: unknown };
-  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+  const payload = event.payload as {
+    text?: unknown;
+    silent?: unknown;
+    kind?: unknown;
+    contextText?: unknown;
+  };
+  const rawText = typeof payload?.text === "string" ? payload.text.trim() : "";
+  const imageContext = payload?.kind === "image"
+    ? (typeof payload.contextText === "string" && payload.contextText.trim()
+        ? payload.contextText.trim()
+        : "[Отправила фотографию]")
+    : "";
+  const text = imageContext
+    ? `${imageContext}${rawText ? ` — ${rawText}` : ""}`
+    : rawText;
   const silent = event.source === "character" && payload?.silent === true;
   if ((!text && !silent) || (event.source !== "user" && event.source !== "character")) return null;
   return {
@@ -29,8 +42,9 @@ export async function exportConversationText(
   uid: string | null,
   signal: AbortSignal | undefined,
   target: ConversationExportLimit,
+  characterId = defaultCharacter.id,
 ) {
-  const repository = getCompanionRepository(defaultCharacter.id, uid, signal);
+  const repository = getCompanionRepository(characterId, uid, signal);
   const wanted = target === "all" ? Number.POSITIVE_INFINITY : target;
   const collected = new Map<string, ExportConversationLine>();
   let before: { timestamp: number; id: string } | null = null;
