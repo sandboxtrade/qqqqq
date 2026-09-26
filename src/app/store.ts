@@ -251,7 +251,7 @@ function canSurfaceInitiative(version: number) {
   return (
     state.runtime.world.isAwake &&
     state.runtime.world.availability !== "sleeping" &&
-    now - state.runtime.world.lastUserInteractionAt > 10 * 60_000
+    now - state.runtime.world.lastUserInteractionAt >= 5 * 60_000
   );
 }
 

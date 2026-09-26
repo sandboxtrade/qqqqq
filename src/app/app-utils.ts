@@ -31,15 +31,17 @@ export function nextInitiativeCheckAt(
   world: WorldState,
   now: number,
 ) {
-  // Initiative is no longer driven by a legacy topic queue. Re-check only at
-  // meaningful quiet-time thresholds while respecting the sleep routine.
-  const oneHour = world.lastUserInteractionAt + HOUR;
-  const eightHours = world.lastUserInteractionAt + 8 * HOUR;
-  const target = now < oneHour
-    ? oneHour
-    : now < eightHours
-      ? Math.min(eightHours, now + HOUR)
-      : now + HOUR;
+  // GPT decides whether she actually wants to write. The scheduler should only
+  // give it enough chances to feel alive, instead of waiting a full hour before
+  // the very first check.
+  const firstCheck = world.lastUserInteractionAt + 5 * MINUTE;
+  const quietFor = Math.max(0, now - world.lastUserInteractionAt);
+  const cadence = quietFor < 2 * HOUR
+    ? 15 * MINUTE
+    : quietFor < 8 * HOUR
+      ? 30 * MINUTE
+      : HOUR;
+  const target = now < firstCheck ? firstCheck : now + cadence;
   return nextAwakeTimestamp(world, Math.max(now, target));
 }
 

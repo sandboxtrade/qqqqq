@@ -337,12 +337,14 @@ export function shouldShowReadyToChat(state: RuntimeState, now: number) {
   if (
     currentActivityAsset &&
     READY_TRANSITION_ACTIVITIES.has(currentActivityAsset.activity) &&
-    state.world.currentActivity === "chatting" &&
-    sinceLastInteraction <= 90_000
+    state.world.currentActivity === "chatting"
   ) return false;
   if (currentActivityAsset) return true;
-  if (state.world.currentActivity !== "chatting") return true;
-  return sinceLastInteraction > 90_000;
+  // Once the world is already in chat mode, a long pause must not bring the
+  // same ready_to_chat photo back on every next message. The emotional portrait
+  // is the source of truth for an active conversation.
+  if (state.world.currentActivity === "chatting") return false;
+  return true;
 }
 
 export function shouldHoldSequenceAppearance(state: RuntimeState, now: number) {
@@ -375,6 +377,20 @@ function normalizeAmbientAppearance(
   if (state.world.currentActivity === "chatting" && sinceLastInteraction < 90_000 && state.appearance?.assetId)
     return state;
   const recentAssetIds = recentCharacterAppearanceIds(history);
+  // During an active chat, do not reinterpret "chatting" as an ambient activity.
+  // With the current photo pack that path resolves almost exclusively to
+  // ready_to_chat and was one of the reasons the UI oscillated between two
+  // frames regardless of emotion. Conversation visuals stay emotion-driven.
+  if (state.world.currentActivity === "chatting") {
+    const visualEmotion = resolveVisualEmotionState(state);
+    return {
+      ...state,
+      appearance: selectAppearance(state, visualEmotion, now, {
+        recentAssetIds,
+        seed: `chat-emotion|${state.revision}|${Math.floor(now / 60_000)}`,
+      }),
+    };
+  }
   return {
     ...state,
     appearance: selectAmbientOrEmotionAppearance(state, now, {
@@ -848,14 +864,22 @@ export async function handleUserMessage(
   const sequenceAppearance = shouldTriggerSequence(intimacySignal, input.text, intimacy.state)
     ? selectSequenceAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
     : null;
-  const readyAppearance = !sequenceAppearance && shouldShowReadyToChat(visualRuntime, now)
+  // An explicit visual request is higher priority than the automatic one-turn
+  // "ready_to_chat" bridge. Previously that bridge silently swallowed pose
+  // requests on the first message after an ambient activity.
+  const readyAppearance = !sequenceAppearance && !appearanceResolution.requested && shouldShowReadyToChat(visualRuntime, now)
     ? selectReadyToChatAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
     : null;
   let appearance = sequenceAppearance?.appearance ?? readyAppearance ?? selectAppearance(
     visualRuntime,
     appearanceResolution.visualEmotion,
     now,
-    { recentAssetIds: recentAppearanceIds, seed: input.id },
+    {
+      recentAssetIds: recentAppearanceIds,
+      seed: input.id,
+      forceVariantChange:
+        appearanceResolution.forceVariantChange || appearanceRequest.wantsDifferentVariant,
+    },
   );
   const sceneMechanic = sequenceAppearance
     ? {
@@ -1171,8 +1195,8 @@ export async function handleUserMessage(
     trace,
   };
 }
-const PROACTIVE_MESSAGE_COOLDOWN_MS = 2 * 60 * 60_000;
-const PROACTIVE_BLOCK_RECHECK_MS = 60 * 60_000;
+const PROACTIVE_MESSAGE_COOLDOWN_MS = 45 * 60_000;
+const PROACTIVE_BLOCK_RECHECK_MS = 15 * 60_000;
 
 function latestProactiveEvent(events: CharacterEvent[]) {
   return [...events]
@@ -1227,8 +1251,8 @@ export async function maintainRuntime(
     canSurfaceInitiative() &&
     !initiativeSignal.aborted &&
     advanced.state.world.isAwake &&
-    !["sleeping", "occupied"].includes(advanced.state.world.availability) &&
-    quietMs >= 10 * 60_000;
+    advanced.state.world.availability !== "sleeping" &&
+    quietMs >= 5 * 60_000;
 
   if (initiativeWindowOpen()) {
     const [storedEditableContext, proactivePage] = await Promise.all([
@@ -1303,7 +1327,7 @@ export async function maintainRuntime(
         const publishState = advance(advanced.state, publishNow).state;
         if (
           publishState.world.isAwake &&
-          !["sleeping", "occupied"].includes(publishState.world.availability)
+          publishState.world.availability !== "sleeping"
         ) {
           const parts = (proactiveLanguage.messages?.length
             ? proactiveLanguage.messages

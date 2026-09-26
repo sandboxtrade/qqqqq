@@ -256,21 +256,22 @@ export function resolveAppearanceRequest(
   }
 
   if (request.vibe === "different") {
-    const willingness = clamp01(
-      0.78 +
-        runtime.relationship.closeness * 0.08 -
-        runtime.emotion.irritation * 0.14,
-    );
-    const accepted = roll <= willingness;
+    // A normal pose/photo request should be predictable. Keep real autonomy for
+    // sleep or a genuinely strong negative state, but do not randomly reject
+    // a neutral "поменяй позу".
+    const blocked =
+      !runtime.world.isAwake ||
+      runtime.world.availability === "sleeping" ||
+      negative >= 0.82;
     return {
       requested: true,
       requestedVibe: request.vibe,
       suggestive: false,
-      outcome: accepted ? "accepted" : "refused",
-      reason: accepted ? "variant-change" : "not-in-the-mood",
+      outcome: blocked ? "refused" : "accepted",
+      reason: blocked ? "strong-state-conflict" : "variant-change",
       selectedEmotion: base.emotion,
-      forceVariantChange: accepted,
-      visualEmotion: accepted ? { ...base, changeStrength: 1 } : base,
+      forceVariantChange: !blocked,
+      visualEmotion: blocked ? base : { ...base, changeStrength: 1 },
     };
   }
 

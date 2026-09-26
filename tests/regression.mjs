@@ -357,17 +357,13 @@ await test("pose arbitration respects emotion and relationship instead of obeyin
   assert.ok(["seductive", "flirty", "shy"].includes(closeResult.selectedEmotion));
   assert.equal(closeResult.forceVariantChange, true);
 
-  let genericAccepted = null;
-  for (let i = 0; i < 64 && !genericAccepted; i += 1) {
-    const result = resolveAppearanceRequest(
-      closeRuntime,
-      { emotion: "happy", intensity: 6, confidence: 0.7, changeStrength: 0.5 },
-      { requested: true, vibe: "different", strength: 0.8, explicit: true, suggestive: false, wantsDifferentVariant: true },
-      `variant-${i}`,
-    );
-    if (result.outcome === "accepted") genericAccepted = result;
-  }
-  assert.ok(genericAccepted, "generic pose request should sometimes be accepted");
+  const genericAccepted = resolveAppearanceRequest(
+    closeRuntime,
+    { emotion: "happy", intensity: 6, confidence: 0.7, changeStrength: 0.5 },
+    { requested: true, vibe: "different", strength: 0.8, explicit: true, suggestive: false, wantsDifferentVariant: true },
+    "variant-direct",
+  );
+  assert.equal(genericAccepted.outcome, "accepted");
   assert.equal(genericAccepted.forceVariantChange, true);
   assert.equal(genericAccepted.selectedEmotion, "happy");
 });
@@ -1988,13 +1984,13 @@ await test("queue-less initiative scheduling waits for the first quiet-hour chec
   assert.ok(target >= Date.UTC(2026, 0, 1, 6, 0, 0));
   assert.equal(resolveRoutine(target, "UTC").isAwake, true);
 });
-await test("queue-less initiative scheduling uses one-hour quiet checkpoints", () => {
+await test("queue-less initiative scheduling checks after five quiet minutes", () => {
   const baseNow = Date.UTC(2026, 0, 1, 12, 0, 0);
   const world = {
     ...createInitialWorldState(baseNow, "UTC"),
     lastUserInteractionAt: baseNow,
   };
-  assert.equal(nextInitiativeCheckAt(world, baseNow), baseNow + 60 * 60_000);
+  assert.equal(nextInitiativeCheckAt(world, baseNow), baseNow + 5 * 60_000);
 });
 await test("maintenance never publishes a proactive message while sleeping", async () => {
   const previousRepository = repository;
@@ -3135,6 +3131,8 @@ await test("generic action verbs do not masquerade as photo requests", () => {
   assert.equal(detectAppearanceRequest("измени текст вот тут").requested, false);
   assert.equal(detectAppearanceRequest("покажи другую позу").requested, true);
   assert.equal(detectAppearanceRequest("повернись ко мне").requested, true);
+  assert.equal(detectAppearanceRequest("ляг поудобнее").requested, true);
+  assert.equal(detectAppearanceRequest("можешь прилечь?").requested, true);
 });
 
 await test("conversation corrections do not masquerade as intimacy stop while real stop still stops", () => {
@@ -3172,6 +3170,48 @@ await test("conversation corrections do not masquerade as intimacy stop while re
 const { selectAppearance, selectAmbientAppearance, selectAmbientOrEmotionAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, parseActivitySceneFilename, parseSequenceSceneFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
 const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
+await test("forced pose change can borrow a nearby portrait when the exact emotion has one frame", () => {
+  const base = romanticInput("");
+  const currentAsset = {
+    ...baseAsset,
+    id: "scene.happy.5.1",
+    expression: "happy",
+    visualEmotion: { emotion: "happy", intensity: 5, variant: 1 },
+  };
+  const nearbyAsset = {
+    ...baseAsset,
+    id: "scene.amused.5.1",
+    expression: "amused",
+    visualEmotion: { emotion: "amused", intensity: 5, variant: 1 },
+  };
+  const state = {
+    revision: 0,
+    emotion: base.emotion,
+    relationship: base.relationship,
+    world: base.world,
+    romance: initialRomance(now),
+    appearance: {
+      version: 1,
+      assetId: currentAsset.id,
+      selectedAt: now - 1_000,
+      outfitChangedAt: now - 1_000,
+    },
+  };
+  const selected = selectAppearance(
+    state,
+    { emotion: "happy", intensity: 5, confidence: 0.9, changeStrength: 1 },
+    now,
+    {
+      assets: [currentAsset, nearbyAsset],
+      fallbackId: currentAsset.id,
+      forceVariantChange: true,
+      recentAssetIds: [currentAsset.id],
+      seed: "pose-change",
+    },
+  );
+  assert.equal(selected.assetId, nearbyAsset.id);
+});
+
 const visualAssets = [baseAsset,
   { ...baseAsset, id: "smile", src: "assets/character/smile.webp", expression: "playful", motion: "still", contexts: ["playful", "romantic"] },
   { ...baseAsset, id: "home", src: "assets/character/home.webp", outfit: "home", expression: "warm", motion: "still", contexts: ["romantic"], locations: ["living_room"] },

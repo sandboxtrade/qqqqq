@@ -171,8 +171,25 @@ export function resolveVisualEmotionState(
   add("excited", e.happiness * 0.42 + e.energy * 0.48, e.energy * e.happiness);
   add("gentle", e.affection * 0.36 + (1 - tension) * 0.25 + (1 - e.energy) * 0.18 + (relationshipEvent === "repair" ? 0.22 : 0), e.affection * 0.55);
   add("relaxed", (1 - e.anxiety) * 0.35 + (1 - e.irritation) * 0.26 + (1 - Math.abs(e.energy - 0.48)) * 0.18, 1 - e.anxiety);
-  add("comfortable", closeness * 0.45 + r.security * 0.28 + positive * 0.2, closeness);
-  add("confident", ((1 - e.anxiety) * 0.42 + r.security * 0.28 + r.respect * 0.2) * (romance === "private" ? 0.72 : 1), 1 - e.anxiety);
+  // Relationship security should make the portrait feel at ease, not pin the
+  // face to the same one or two "comfortable/confident" photos forever.
+  // Current emotion and turn-level signals must be able to win.
+  add("comfortable", closeness * 0.24 + r.security * 0.18 + positive * 0.16, closeness);
+  add("confident", (0.08 + (1 - e.anxiety) * 0.18 + r.security * 0.12 + r.respect * 0.08) * (romance === "private" ? 0.78 : 1), 1 - e.anxiety);
+
+  // GPT turn colour is deliberately a strong visual hint. Mechanical emotion
+  // still owns persistence, but a clearly hurt/jealous/bored/etc. reply should
+  // be visible immediately instead of being drowned out by relationship stats.
+  if (emotionTone === "jealous") add("jealous", 1, Math.max(eventIntensity, r.attachment));
+  if (emotionTone === "hurt") add("hurt", 0.99, Math.max(eventIntensity, e.sadness));
+  if (emotionTone === "irritated") add("annoyed", 0.98, Math.max(eventIntensity, e.irritation));
+  if (emotionTone === "sad") add("sad", 0.96, Math.max(eventIntensity, e.sadness));
+  if (emotionTone === "anxious") add("anxious", 0.94, Math.max(eventIntensity, e.anxiety));
+  if (emotionTone === "bored") add("bored", 0.93, Math.max(eventIntensity, e.boredom));
+  if (emotionTone === "low_energy") add("sleepy", 0.9, Math.max(eventIntensity, lowEnergy));
+  if (emotionTone === "tender") add("affectionate", 0.95, Math.max(eventIntensity, e.affection));
+  if (emotionTone === "warm") add("happy", 0.84, Math.max(eventIntensity, e.happiness));
+  if (emotionTone === "curious") add("focused", 0.86, Math.max(eventIntensity, e.curiosity));
 
   add("curious", e.curiosity * 0.66 + (emotionTone === "curious" ? 0.22 : 0), e.curiosity);
   add("thinking", e.curiosity * 0.34 + (userTone === "confused" ? 0.14 : 0), Math.max(e.curiosity, eventIntensity));
@@ -726,6 +743,42 @@ function chooseVariant(candidates: CharacterAsset[], recentAssetIds: readonly st
   return ordered[hashString(seed) % ordered.length];
 }
 
+function explicitVariantPool(
+  assets: readonly CharacterAsset[],
+  targetEmotion: VisualEmotionName,
+  requestedIntensity: number,
+  runtime: RuntimeState,
+  currentId?: string,
+) {
+  const adultEnabled = runtime.intimacy?.adultModeEnabled === true;
+  const ranked = assets
+    .filter((asset) => {
+      const visual = asset.visualEmotion;
+      if (!visual || asset.id === currentId) return false;
+      if (!adultEnabled && matureVisualStates.has(visual.emotion)) return false;
+      if (targetEmotion !== "hornys" && visual.emotion === "hornys") return false;
+      return true;
+    })
+    .map((asset) => {
+      const visual = asset.visualEmotion!;
+      return {
+        asset,
+        score:
+          visualEmotionDistance(targetEmotion, visual.emotion) +
+          Math.abs(visual.intensity - requestedIntensity) * 0.035,
+      };
+    })
+    .sort((a, b) => a.score - b.score || a.asset.id.localeCompare(b.asset.id));
+
+  if (!ranked.length) return [];
+  const best = ranked[0]!.score;
+  const close = ranked
+    .filter((item) => item.score <= best + 0.72)
+    .slice(0, 8)
+    .map((item) => item.asset);
+  return close.length ? close : ranked.slice(0, 8).map((item) => item.asset);
+}
+
 export function parseActivitySceneId(assetId?: string): { activity: ActivitySceneName; variant: number } | null {
   if (!assetId) return null;
   const match = /^activity\.([a-z_]+)\.([1-9]\d*)(?:\.video)?$/u.exec(assetId);
@@ -1082,6 +1135,8 @@ export interface AppearanceSelectionOptions {
   fallbackId?: string;
   recentAssetIds?: readonly string[];
   seed?: string;
+  /** Force a visibly different compatible pose for an explicit user request. */
+  forceVariantChange?: boolean;
 }
 
 function isCharacterAssetArray(
@@ -1136,7 +1191,7 @@ export function selectAppearance(
     .sort((a, b) => Math.abs(a - request.intensity) - Math.abs(b - request.intensity) || a - b);
   const level = availableLevels[0];
 
-  if (currentVisual && previous) {
+  if (currentVisual && previous && !options.forceVariantChange) {
     const sameEmotion = currentVisual.emotion === targetEmotion;
     const intensityShift = Math.abs(currentVisual.intensity - request.intensity);
     const age = Math.max(0, now - previous.selectedAt);
@@ -1156,8 +1211,28 @@ export function selectAppearance(
   // automatically. Images remain a first-class fallback and keep working when
   // there is no video or the device cannot decode the clip.
   const videoCandidates = levelCandidates.filter((asset) => asset.mediaType === "video");
-  const renderCandidates = videoCandidates.length ? videoCandidates : levelCandidates;
+  let renderCandidates = videoCandidates.length ? videoCandidates : levelCandidates;
   const recent = [...(options.recentAssetIds ?? []), ...(previous ? [previous.assetId] : [])];
+
+  // Most emotion buckets currently contain only one photo. A direct request
+  // such as "поменяй позу" therefore used to resolve successfully but still
+  // select the exact same asset. Borrow a nearby emotional portrait only for
+  // explicit variant changes; normal state-driven selection stays strict.
+  if (options.forceVariantChange) {
+    const alternatives = explicitVariantPool(
+      assets,
+      targetEmotion,
+      request.intensity,
+      runtime,
+      previous?.assetId,
+    );
+    if (alternatives.length) {
+      const byId = new Map<string, CharacterAsset>();
+      for (const asset of [...renderCandidates, ...alternatives]) byId.set(asset.id, asset);
+      renderCandidates = [...byId.values()];
+    }
+  }
+
   const selected = chooseVariant(
     renderCandidates,
     recent,
