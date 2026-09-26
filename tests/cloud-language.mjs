@@ -9,6 +9,7 @@ globalThis.window = {
 };
 
 let fetchCalls = [];
+let replySequence = [];
 let reply = {
   status: 200,
   body: {
@@ -45,26 +46,39 @@ let reply = {
       memoryUsed: true,
       emotionTone: "warm",
     },
+    shouldInitiate: true,
+    emotionReaction: {
+      happiness: 0.2, sadness: 0, irritation: -0.1, anxiety: 0,
+      curiosity: 0.3, boredom: -0.1, affection: 0.1, romanticInterest: 0,
+    },
+    relationshipReaction: {
+      trust: 0, closeness: 0.1, attachment: 0, security: 0, respect: 0, unresolvedTension: -0.1,
+    },
   },
 };
 
+const successfulBody = structuredClone(reply.body);
+
 globalThis.fetch = async (url, options) => {
   fetchCalls.push({ url: String(url), options });
-  return new Response(JSON.stringify(reply.body), {
-    status: reply.status,
+  const selected = replySequence.length ? replySequence.shift() : reply;
+  return new Response(JSON.stringify(selected.body), {
+    status: selected.status,
     headers: { "Content-Type": "application/json" },
   });
 };
 
 let idTokenCalls = 0;
 let appCheckTokenCalls = 0;
+const idTokenForces = [];
+const appCheckTokenForces = [];
 globalThis.__authMock = {
   getAuth: () => ({
     currentUser: {
       getIdToken: async (forceRefresh) => {
         idTokenCalls += 1;
-        assert.equal(forceRefresh, false);
-        return "firebase-id-token";
+        idTokenForces.push(forceRefresh);
+        return forceRefresh ? "firebase-id-token-refresh" : "firebase-id-token";
       },
     },
   }),
@@ -75,8 +89,8 @@ globalThis.__firebaseMock = {
   getFirebaseApp: () => ({ name: "app" }),
   getFirebaseAppCheckToken: async (forceRefresh) => {
     appCheckTokenCalls += 1;
-    assert.equal(forceRefresh, false);
-    return "app-check-token";
+    appCheckTokenForces.push(forceRefresh);
+    return forceRefresh ? "app-check-token-refresh" : "app-check-token";
   },
 };
 
@@ -114,64 +128,29 @@ registerHooks({
 const { shouldUseCloudLanguage, renderCloudLanguage } = await import("../src/ai/cloud-language.ts");
 
 const base = {
+  mode: "reply",
   userText: "Я всё думаю о том разговоре вчера, как ты это видишь?",
-  intent: "ask_for_opinion",
-  dialogueActs: ["ANSWER"],
-  goal: "answer",
-  tone: "warm",
-  length: "short",
-  semantic: {
-    topic: "conversation",
-    focus: "вчерашний разговор",
-    subject: "shared",
-    stance: "ask_opinion",
-    questionType: "what",
-    isQuestion: true,
-    reciprocal: false,
-    asksCharacterView: true,
-    wantsAdvice: false,
-    wantsListening: false,
-    confidence: 0.92,
-    appearanceRequest: {
-      requestedVibe: "different",
-      outcome: "accepted",
-      reason: "variant-change",
-      selectedEmotion: "comfortable",
-      suggestive: false,
-    },
-  },
-  decision: {
-    action: "answer",
-    mode: "personal_stance",
-    stance: "mixed",
-    summary: "Ответить по существу, сохраняя уже сформированное отношение.",
-    locked: true,
-    shouldAskFollowUp: false,
-    shouldReferenceMemory: true,
-  },
-  continuity: {
-    currentTopic: "conversation",
-    previousTopic: "conversation",
-    previousUserText: "Вчера мы об этом уже говорили.",
-    previousCharacterText: "Я бы не делала из этого быстрый вывод.",
-    lastUserIntent: "statement",
-    lastCharacterIntent: "ANSWER",
-    lastCharacterTopic: "вчерашний разговор",
-    lastCharacterOpenThread: "вернуться к разговору без поспешного вывода",
-    lastCharacterContinuesPrevious: true,
-    turnsOnTopic: 3,
-  },
+  personality: "Yuzuki самостоятельная, любопытная, может спорить и любит сухой юмор.",
+  memory: "Вчера мы долго обсуждали важную для него ситуацию. Я решила не торопить его с выводами.",
   world: {
     timeOfDay: "evening",
     location: "living_room",
     activity: "relaxing",
     availability: "free",
     isAwake: true,
+    connectionDrive: 0.5,
     activityDetail: "просто лежу и даю голове немного затихнуть",
   },
   relationship: { stage: "close", trust: 0.7, closeness: 0.7, attachment: 0.6, security: 0.7, respect: 0.8, unresolvedTension: 0.1 },
   emotion: { mood: 0.6, energy: 0.55, happiness: 0.5, sadness: 0.1, irritation: 0.1, anxiety: 0.1, curiosity: 0.6, boredom: 0.1, affection: 0.7, romanticInterest: 0.4 },
   romancePhase: "neutral",
+  appearanceRequest: {
+    requestedVibe: "different",
+    outcome: "accepted",
+    reason: "variant-change",
+    selectedEmotion: "comfortable",
+    suggestive: false,
+  },
   intimacy: {
     enabled: false,
     phase: "normal",
@@ -198,43 +177,18 @@ const base = {
       reflection: "Intimacy is not currently active in her attention.",
     },
   },
-  thought: { interpretation: "Пользователь возвращается к важной теме.", stance: "Не торопиться с выводом." },
   recentHistory: [
     { role: "user", text: "Вчера мы об этом уже говорили." },
     { role: "character", text: "Я бы не делала из этого быстрый вывод." },
   ],
-  recoveredHistory: [],
-  memories: [{
-    summary: "Вчерашний разговор был важен пользователю.",
-    kind: "episodic",
-    importance: 0.8,
-    emotionalWeight: 0.7,
-    confidence: 0.9,
-    retrievalStrength: 0.8,
-  }],
-  facts: [{ statement: "Пользователь не любит поспешные выводы.", subject: "user", confidence: 0.85 }],
-  openThreads: [{ summary: "Вернуться к вчерашнему разговору.", priority: 0.7 }],
-  causal: [],
-  locked: false,
   silent: false,
 };
 
 assert.equal(shouldUseCloudLanguage(base), true);
-// v0.17: GPT is the default conversation path even for simple and intimate turns.
-assert.equal(shouldUseCloudLanguage({
-  ...base,
-  intent: "greeting",
-  userText: "Привет",
-  semantic: { ...base.semantic, isQuestion: false, reciprocal: false },
-}), true);
-assert.equal(shouldUseCloudLanguage({
-  ...base,
-  intent: "short_yes",
-  userText: "Точно?",
-  semantic: { ...base.semantic, isQuestion: true, reciprocal: true, questionType: "yes_no" },
-  continuity: { ...base.continuity, previousCharacterText: "Нет, я сейчас не злюсь." },
-}), true);
-assert.equal(shouldUseCloudLanguage({ ...base, locked: true }), true);
+// v0.19: GPT is the default conversation path for every non-silent user turn.
+assert.equal(shouldUseCloudLanguage({ ...base, userText: "Привет" }), true);
+assert.equal(shouldUseCloudLanguage({ ...base, userText: "Точно?" }), true);
+assert.equal(shouldUseCloudLanguage({ ...base, constraint: { locked: true, kind: "boundary", summary: "Не продолжать." } }), true);
 assert.equal(shouldUseCloudLanguage({
   ...base,
   intimacy: {
@@ -263,6 +217,7 @@ assert.equal(shouldUseCloudLanguage({
   },
 }), true);
 assert.equal(shouldUseCloudLanguage({ ...base, silent: true }), false);
+assert.equal(shouldUseCloudLanguage({ ...base, mode: "initiative", userText: "", proactive: { kind: "autonomous_check" } }), true);
 
 const result = await renderCloudLanguage(base);
 assert.equal(result.used, true);
@@ -276,6 +231,9 @@ assert.equal(result.conversation?.topic, "вчерашний разговор");
 assert.equal(result.signals?.userTone, "neutral");
 assert.equal(result.signals?.memoryUsed, true);
 assert.equal(result.signals?.emotionTone, "warm");
+assert.equal(result.shouldInitiate, true);
+assert.equal(result.emotionReaction?.curiosity, 0.3);
+assert.equal(result.relationshipReaction?.closeness, 0.1);
 assert.deepEqual(result.messages, [
   "Да, я поняла, о чём ты.",
   "Просто я бы тут не спешила с выводом.",
@@ -289,21 +247,37 @@ assert.equal(fetchCalls[0].options.headers.Authorization, "Bearer firebase-id-to
 assert.equal(fetchCalls[0].options.headers["X-Firebase-AppCheck"], "app-check-token");
 assert.equal(fetchCalls[0].options.credentials, "omit");
 assert.equal(fetchCalls[0].options.cache, "no-store");
-assert.equal(JSON.parse(fetchCalls[0].options.body).userText, base.userText);
-assert.equal("localDraft" in JSON.parse(fetchCalls[0].options.body), false);
-assert.equal(JSON.parse(fetchCalls[0].options.body).continuity.lastCharacterTopic, "вчерашний разговор");
-assert.equal(JSON.parse(fetchCalls[0].options.body).world.activity, "relaxing");
-assert.equal(JSON.parse(fetchCalls[0].options.body).memories[0].importance, 0.8);
-assert.equal(JSON.parse(fetchCalls[0].options.body).emotion.energy, 0.55);
-assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.signal.kind, "none");
-assert.equal(JSON.parse(fetchCalls[0].options.body).intimacy.mind.inwardArousal, false);
-assert.deepEqual(JSON.parse(fetchCalls[0].options.body).semantic.appearanceRequest, {
-  requestedVibe: "different",
-  outcome: "accepted",
-  reason: "variant-change",
-  selectedEmotion: "comfortable",
-  suggestive: false,
+const sent = JSON.parse(fetchCalls[0].options.body);
+assert.equal(sent.userText, base.userText);
+assert.equal(sent.personality, base.personality);
+assert.equal(sent.memory, base.memory);
+assert.equal(sent.world.activity, "relaxing");
+assert.equal(sent.emotion.energy, 0.55);
+assert.equal(sent.intimacy.signal.kind, "none");
+assert.equal(sent.intimacy.mind.inwardArousal, false);
+assert.deepEqual(sent.appearanceRequest, base.appearanceRequest);
+for (const legacy of ["localDraft", "facts", "memories", "openThreads", "recoveredHistory", "retrospective", "causal", "continuity", "semantic", "thought"])
+  assert.equal(legacy in sent, false);
+
+reply = {
+  status: 200,
+  body: {
+    messages: [],
+    shouldInitiate: false,
+    model: "gpt-6-luna",
+    conversation: { topic: "", continuesPrevious: false, openThread: "" },
+    signals: { userTone: "neutral", relationshipEvent: "none", memoryUsed: false, emotionTone: "neutral" },
+    emotionReaction: { happiness: 0, sadness: 0, irritation: 0, anxiety: 0, curiosity: 0, boredom: 0, affection: 0, romanticInterest: 0 },
+    relationshipReaction: { trust: 0, closeness: 0, attachment: 0, security: 0, respect: 0, unresolvedTension: 0 },
+  },
+};
+const declinedInitiative = await renderCloudLanguage({
+  ...base, mode: "initiative", userText: "", proactive: { kind: "autonomous_check", quietMinutes: 90 },
 });
+assert.equal(declinedInitiative.used, true);
+assert.equal(declinedInitiative.shouldInitiate, false);
+assert.deepEqual(declinedInitiative.messages, []);
+assert.equal(declinedInitiative.text, undefined);
 
 reply = {
   status: 200,
@@ -321,4 +295,25 @@ assert.equal(localOnly.attempted, false);
 assert.equal(localOnly.reason, "local-route");
 assert.equal(fetchCalls.length, callsBeforeLocal);
 
-console.log("PASS cloud dialogue: GPT-first routing, multi-bubble replies, memory/emotion context, Cloudflare transport, Auth, App Check, metadata, telemetry and local fallback");
+replySequence = [
+  { status: 401, body: { error: "invalid-auth" } },
+  { status: 200, body: successfulBody },
+];
+const refreshResult = await renderCloudLanguage({ ...base, userText: base.userText + " снова" });
+assert.equal(refreshResult.used, true);
+assert.deepEqual(idTokenForces.slice(-2), [false, true]);
+assert.deepEqual(appCheckTokenForces.slice(-2), [false, true]);
+assert.equal(fetchCalls.at(-1).options.headers.Authorization, "Bearer firebase-id-token-refresh");
+assert.equal(fetchCalls.at(-1).options.headers["X-Firebase-AppCheck"], "app-check-token-refresh");
+
+const cloudSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
+const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+assert.match(cloudSource, /mode\?: "reply" \| "initiative"/);
+assert.match(cloudSource, /input\.mode === "initiative"/);
+assert.match(workerSource, /mode === "initiative"/);
+assert.match(workerSource, /\.slice\(-30\)/);
+assert.match(workerSource, /MEMORY — единственная каноническая долговременная память/);
+assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
+assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
+
+console.log("PASS cloud dialogue: manual personality/memory, GPT-first routing, multi-bubble replies, 30-message context, Cloudflare transport, token refresh, Auth, App Check and local fallback");

@@ -16,6 +16,8 @@ import type { WorldState } from "../../world/world";
 import { reinforceMemory } from "../../memory/model";
 import type { CharacterInitiative } from "../../initiative/initiative";
 import type { IntimacyPreferencesDocument, IntimacyState } from "../../intimacy/intimacy";
+import type { YuzukiEditableContext, YuzukiEditableContextPatch } from "../../context/yuzuki-context";
+import { normalizeEditableContext } from "../../context/yuzuki-context";
 import {
   decodeIntimacyPreferences,
   decodeIntimacyState,
@@ -88,6 +90,7 @@ export class InMemoryCompanionRepository implements CompanionRepository {
   private initiatives: CharacterInitiative[] = [];
   private intimacyState: IntimacyState | null = null;
   private intimacyPreferences: IntimacyPreferencesDocument | null = null;
+  private editableContext: YuzukiEditableContext | null = null;
 
   private queueMemoryEvent(event: CharacterEvent) {
     this.pendingMemoryEventIds.add(event.id);
@@ -98,7 +101,6 @@ export class InMemoryCompanionRepository implements CompanionRepository {
     const existing = this.events.find((item) => item.id === event.id);
     if (!existing) {
       this.events.push(copy);
-      this.queueMemoryEvent(copy);
       if (copy.type === "message" && copy.source === "user")
         this.pendingTurnIds.add(copy.id);
       return;
@@ -301,6 +303,28 @@ export class InMemoryCompanionRepository implements CompanionRepository {
     return (await this.loadRuntimeState()).world;
   }
 
+  async loadEditableContext() {
+    return this.editableContext ? structuredClone(this.editableContext) : null;
+  }
+
+  async saveEditableContext(context: YuzukiEditableContext) {
+    const normalized = normalizeEditableContext(context, Date.now());
+    this.editableContext = structuredClone(normalized);
+    return structuredClone(normalized);
+  }
+
+  async updateEditableContext(patch: YuzukiEditableContextPatch) {
+    const now = Date.now();
+    const current = this.editableContext ?? normalizeEditableContext(null, now);
+    const normalized = normalizeEditableContext({
+      ...current,
+      ...patch,
+      updatedAt: Math.max(current.updatedAt, patch.updatedAt ?? 0, now),
+    }, now);
+    this.editableContext = structuredClone(normalized);
+    return structuredClone(normalized);
+  }
+
   async resetConversationAndMemory(
     snapshot: CompanionSnapshot,
     world: WorldState,
@@ -317,6 +341,13 @@ export class InMemoryCompanionRepository implements CompanionRepository {
     this.initiatives = [];
     this.intimacyState = null;
     this.intimacyPreferences = null;
+    if (this.editableContext) {
+      this.editableContext = {
+        ...this.editableContext,
+        memory: "",
+        updatedAt: Date.now(),
+      };
+    }
     this.snapshot = structuredClone({ ...snapshot, revision: nextRevision });
     this.world = structuredClone(world);
     this.worldRevision = nextRevision;

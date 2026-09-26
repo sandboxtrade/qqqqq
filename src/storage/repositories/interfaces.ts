@@ -15,6 +15,7 @@ import type { CharacterInitiative } from "../../initiative/initiative";
 import type { IntimacyPreferencesDocument, IntimacyState } from "../../intimacy/intimacy";
 
 import type { RomanceState } from "../../relationship/relationship";
+import type { YuzukiEditableContext, YuzukiEditableContextPatch } from "../../context/yuzuki-context";
 
 export interface CompanionSnapshot {
   romance?: RomanceState;
@@ -92,6 +93,10 @@ export interface CompanionRepository {
     snapshot: CompanionSnapshot,
     world: WorldState,
   ): Promise<RuntimePersistenceState>;
+
+  loadEditableContext(): Promise<YuzukiEditableContext | null>;
+  saveEditableContext(context: YuzukiEditableContext): Promise<YuzukiEditableContext>;
+  updateEditableContext(patch: YuzukiEditableContextPatch): Promise<YuzukiEditableContext>;
 
   loadIntimacyState(): Promise<IntimacyState | null>;
   commitIntimacyState(

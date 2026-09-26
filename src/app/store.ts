@@ -34,12 +34,15 @@ import {
 } from "../storage/auth";
 import { bounded, errorText } from "../core/async";
 import { resetWorldClock } from "../world/world";
-import type { CharacterInitiative } from "../initiative/initiative";
 import { maintenanceRetryDelay, nextInitiativeCheckAt } from "./app-utils";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 import { subscribeCharacterLiveSync } from "../storage/live-sync";
 import { defaultCharacter } from "../character/character";
 import { mergeChatMessages, replyForFailedMessage, replyTargets } from "./app-utils";
+import { loadYuzukiEditableContext, updateYuzukiEditableContext } from "../context/context-service";
+import { createDefaultEditableContext } from "../context/yuzuki-context";
+import { exportConversationText } from "../chat/conversation-export-service";
+import type { ConversationExportLimit } from "../chat/conversation-export";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
 }
@@ -65,11 +68,20 @@ interface AppStore {
   loadingOlder: boolean;
   resettingData: boolean;
   updatingIntimacyMode: boolean;
+  editablePersonality: string;
+  editableMemory: string;
+  editableContextUpdatedAt: number;
+  editableContextBusy: boolean;
+  exportBusy: boolean;
   initialize: () => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   clearConversationAndMemory: () => Promise<void>;
   setIntimacyAdultMode: (enabled: boolean) => Promise<void>;
+  loadEditableContext: () => Promise<void>;
+  saveEditablePersonality: (text: string) => Promise<boolean>;
+  saveEditableMemory: (text: string) => Promise<boolean>;
+  exportConversation: (limit: ConversationExportLimit) => Promise<string>;
   send: (text: string) => Promise<void>;
   retry: (messageId: string) => Promise<void>;
   dismissFailed: (messageId: string) => Promise<void>;
@@ -257,11 +269,11 @@ function scheduleInitiativeAttempt(delayMs: number) {
   }, Math.max(0, delayMs));
 }
 
-function scheduleNextInitiative(initiatives: CharacterInitiative[]) {
+function scheduleNextInitiative() {
   const state = useAppStore.getState();
   if (!state.ready || !state.runtime || state.busy) return;
   const now = runtimeNow(state.runtime);
-  const nextAt = nextInitiativeCheckAt(initiatives, state.runtime.world, now);
+  const nextAt = nextInitiativeCheckAt(state.runtime.world, now);
   // setTimeout is a signed 32-bit delay in browsers.
   const delay = Math.max(250, Math.min(2_147_000_000, nextAt - now));
   scheduleInitiativeAttempt(delay);
@@ -313,7 +325,7 @@ async function runMaintenance(allowInitiative: boolean, version = epoch) {
         canSurfaceInitiative: () => canSurfaceInitiative(version),
       }),
       30000,
-      "Обработка памяти",
+      "Фоновое состояние",
       controller.signal,
     );
     if (version !== epoch || controller.signal.aborted) return;
@@ -329,9 +341,11 @@ async function runMaintenance(allowInitiative: boolean, version = epoch) {
             { ...result.message, delivery: "saved" as const },
           ])
         : state.messages,
+      runtime: result.appearance && state.runtime
+        ? { ...state.runtime, appearance: result.appearance }
+        : state.runtime,
     }));
-    scheduleNextInitiative(result.initiatives);
-    if (result.memoryBacklog) maintenanceQueued = true;
+    scheduleNextInitiative();
   } catch (error) {
     if (version === epoch && !controller.signal.aborted) {
       maintenanceRetryAttempt += 1;
@@ -374,6 +388,8 @@ async function boot(version: number, user: AuthProfile | null) {
       controller.signal,
     );
     if (version !== epoch) return;
+    const editableContext = await loadYuzukiEditableContext(user?.uid ?? null, controller.signal);
+    if (version !== epoch) return;
     const failedMessageIds = [...new Set(result.pendingTurnIds)];
     const failedSet = new Set(failedMessageIds);
     useAppStore.setState({
@@ -393,6 +409,11 @@ async function boot(version: number, user: AuthProfile | null) {
       historyCursor: result.historyCursor,
       hasOlderMessages: result.hasOlderConversation,
       loadingOlder: false,
+      editablePersonality: editableContext.personality,
+      editableMemory: editableContext.memory,
+      editableContextUpdatedAt: editableContext.updatedAt,
+      editableContextBusy: false,
+      exportBusy: false,
       error: failedMessageIds.length
         ? `Есть ${failedMessageIds.length} ${failedMessageIds.length === 1 ? "сообщение" : "сообщения"} без ответа. Их можно повторить, изменить или пропустить.`
         : null,
@@ -436,6 +457,11 @@ function watchAuth() {
       loadingOlder: false,
       resettingData: false,
       updatingIntimacyMode: false,
+      editablePersonality: createDefaultEditableContext().personality,
+      editableMemory: "",
+      editableContextUpdatedAt: 0,
+      editableContextBusy: false,
+      exportBusy: false,
       phase: "",
       error: null,
       authStatus: user ? "checking" : "signed_out",
@@ -537,8 +563,6 @@ async function sendTurn(message: ChatMessage) {
             role: "character" as const,
             text: result.reply,
             timestamp: result.replyTimestamp,
-            templateId: result.renderMeta?.templateId,
-            dialogueActs: result.renderMeta?.dialogueActs,
             appearanceAssetId: result.appearanceAssetId,
           }];
       const replyIds = new Set(replyMessages.map((item) => item.id));
@@ -614,6 +638,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   loadingOlder: false,
   resettingData: false,
   updatingIntimacyMode: false,
+  editablePersonality: createDefaultEditableContext().personality,
+  editableMemory: "",
+  editableContextUpdatedAt: 0,
+  editableContextBusy: false,
+  exportBusy: false,
   initialize: async () => {
     if (get().initializing || get().ready) return;
     const version = invalidate();
@@ -692,6 +721,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       loadingOlder: false,
       resettingData: false,
       updatingIntimacyMode: false,
+      editablePersonality: createDefaultEditableContext().personality,
+      editableMemory: "",
+      editableContextUpdatedAt: 0,
+      editableContextBusy: false,
+      exportBusy: false,
       error: null,
       maintenanceError: null,
     });
@@ -742,6 +776,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         historyCursor: null,
         hasOlderMessages: false,
         loadingOlder: false,
+        editableMemory: "",
+        editableContextUpdatedAt: Date.now(),
       });
       await boot(version, user);
       if (version === epoch)
@@ -783,6 +819,106 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } finally {
       controller.abort();
       if (active === controller) active = null;
+    }
+  },
+  loadEditableContext: async () => {
+    const state = get();
+    if (state.editableContextBusy) return;
+    const version = epoch;
+    const controller = new AbortController();
+    set({ editableContextBusy: true, error: null });
+    try {
+      const context = await loadYuzukiEditableContext(state.user?.uid ?? null, controller.signal);
+      if (version !== epoch || controller.signal.aborted) return;
+      set({
+        editablePersonality: context.personality,
+        editableMemory: context.memory,
+        editableContextUpdatedAt: context.updatedAt,
+        editableContextBusy: false,
+      });
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ editableContextBusy: false, error: errorText(error) });
+    } finally {
+      controller.abort();
+    }
+  },
+  saveEditablePersonality: async (text) => {
+    const state = get();
+    if (state.editableContextBusy) return false;
+    const version = epoch;
+    const controller = new AbortController();
+    set({ editableContextBusy: true, error: null });
+    try {
+      const saved = await updateYuzukiEditableContext(state.user?.uid ?? null, controller.signal, {
+        personality: text,
+        updatedAt: Date.now(),
+      });
+      if (version !== epoch || controller.signal.aborted) return false;
+      set({
+        editablePersonality: saved.personality,
+        editableMemory: saved.memory,
+        editableContextUpdatedAt: saved.updatedAt,
+        editableContextBusy: false,
+      });
+      return true;
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ editableContextBusy: false, error: errorText(error) });
+      return false;
+    } finally {
+      controller.abort();
+    }
+  },
+  saveEditableMemory: async (text) => {
+    const state = get();
+    if (state.editableContextBusy) return false;
+    const version = epoch;
+    const controller = new AbortController();
+    set({ editableContextBusy: true, error: null });
+    try {
+      const saved = await updateYuzukiEditableContext(state.user?.uid ?? null, controller.signal, {
+        memory: text,
+        updatedAt: Date.now(),
+      });
+      if (version !== epoch || controller.signal.aborted) return false;
+      set({
+        editablePersonality: saved.personality,
+        editableMemory: saved.memory,
+        editableContextUpdatedAt: saved.updatedAt,
+        editableContextBusy: false,
+      });
+      return true;
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ editableContextBusy: false, error: errorText(error) });
+      return false;
+    } finally {
+      controller.abort();
+    }
+  },
+  exportConversation: async (limit) => {
+    const state = get();
+    if (state.exportBusy) return "";
+    const version = epoch;
+    const controller = new AbortController();
+    set({ exportBusy: true, error: null });
+    try {
+      const text = await bounded(
+        exportConversationText(state.user?.uid ?? null, controller.signal, limit),
+        60000,
+        "Экспорт диалога",
+        controller.signal,
+      );
+      if (version !== epoch || controller.signal.aborted) return "";
+      set({ exportBusy: false });
+      return text;
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ exportBusy: false, error: errorText(error) });
+      return "";
+    } finally {
+      controller.abort();
     }
   },
   send: async (text) => {

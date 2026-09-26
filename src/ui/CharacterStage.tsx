@@ -1,13 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { AssetScene } from "../avatar/AssetScene";
 import {
   deriveAvatarCue,
   resolveAvatarVisualState,
-  type AvatarVisualCue,
 } from "../avatar/avatar-model";
-import { defaultCharacter } from "../character/character";
 import type { RuntimeState } from "../engine/runtime";
-import type { AppTab } from "./components";
 
 const activityLabel: Record<string, string> = {
   sleeping: "спит",
@@ -32,42 +29,17 @@ const timeLabel: Record<string, string> = {
   evening: "вечер",
 };
 
-const relationshipLabel: Record<string, string> = {
-  new: "знакомство",
-  familiar: "приятели",
-  close: "близкие",
-  deep: "глубокая связь",
-};
-
 export function CharacterStage({
   runtime,
   busy = false,
-  visualCue = null,
-  visualCueKey = null,
-  onNavigate,
   onQuietAction,
   quietActionDisabled = false,
 }: {
   runtime: RuntimeState | null;
   busy?: boolean;
-  visualCue?: AvatarVisualCue | null;
-  visualCueKey?: string | null;
-  onNavigate: (tab: AppTab) => void;
   onQuietAction?: (text: string) => void;
   quietActionDisabled?: boolean;
 }) {
-  const [transientCue, setTransientCue] = useState<AvatarVisualCue | null>(null);
-
-  useEffect(() => {
-    if (!visualCue || !visualCueKey) {
-      setTransientCue(null);
-      return;
-    }
-    setTransientCue(visualCue);
-    const timer = window.setTimeout(() => setTransientCue(null), 6500);
-    return () => window.clearTimeout(timer);
-  }, [visualCue, visualCueKey]);
-
   const mood = runtime?.emotion.mood ?? 0.5;
   const moodLabel =
     runtime?.world.isAwake === false
@@ -77,7 +49,7 @@ export function CharacterStage({
         : mood < 0.36
           ? "немного закрыта"
           : "спокойная";
-  const resolvedCue = transientCue ?? deriveAvatarCue(runtime);
+  const resolvedCue = deriveAvatarCue(runtime);
   const visualState = useMemo(
     () => resolveAvatarVisualState(runtime, resolvedCue, busy),
     [runtime, resolvedCue, busy],
@@ -87,21 +59,6 @@ export function CharacterStage({
     ? (activityLabel[runtime.world.currentActivity] ?? runtime.world.currentActivity)
     : "загрузка";
   const currentTime = runtime ? (timeLabel[runtime.world.timeOfDay] ?? runtime.world.timeOfDay) : "";
-  const relationshipStage = runtime
-    ? (relationshipLabel[runtime.relationship.stage] ?? runtime.relationship.stage)
-    : "связь";
-  const warmth = runtime
-    ? runtime.relationship.closeness >= 0.74
-      ? "ощутимо тянется к тебе"
-      : runtime.relationship.closeness >= 0.5
-        ? "становится ближе"
-        : "привыкает к тебе"
-    : "";
-  const topSummary = runtime
-    ? busy
-      ? "собирает ответ"
-      : `${currentTime} · ${moodLabel}`
-    : "подготовка сцены";
 
   return (
     <section
@@ -154,32 +111,6 @@ export function CharacterStage({
         </div>
       </div>
 
-      <div className="stage-bottom">
-        <div className="character-title">
-          <div>
-            <h1>{defaultCharacter.name}</h1>
-            <p>{topSummary}</p>
-          </div>
-          <span className="relationship-badge">{relationshipStage}</span>
-        </div>
-
-        <div className="stage-summary-row">
-          <span className="stage-summary-pill">{currentActivity}</span>
-          {warmth ? <span className="stage-summary-pill">{warmth}</span> : null}
-        </div>
-
-        <div className="quick-actions">
-          <button type="button" onClick={() => onNavigate("chat")}>Написать</button>
-          <button type="button" onClick={() => onNavigate("together")}>Побыть вместе</button>
-          <button
-            type="button"
-            disabled={quietActionDisabled}
-            onClick={() => onQuietAction?.("Как ты сейчас?")}
-          >
-            Как ты?
-          </button>
-        </div>
-      </div>
     </section>
   );
 }

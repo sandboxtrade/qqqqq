@@ -35,6 +35,8 @@ import type { CharacterInitiative } from "../../initiative/initiative";
 import { reinforceMemory } from "../../memory/model";
 import type { IntimacyPreferencesDocument, IntimacyState } from "../../intimacy/intimacy";
 import { getFirebaseDb } from "../firebase";
+import type { YuzukiEditableContext, YuzukiEditableContextPatch } from "../../context/yuzuki-context";
+import { createDefaultEditableContext, decodeEditableContext, encodeEditableContext, normalizeEditableContext } from "../../context/yuzuki-context";
 import { getAuthenticatedUid } from "../auth";
 import { sanitizeForFirestore } from "../firestore-data";
 import {
@@ -192,7 +194,6 @@ export class FirestoreCompanionRepository implements CompanionRepository {
 
   async appendEvent(event: CharacterEvent) {
     const ref = this.childDoc("events", event.id);
-    const pendingRef = this.childDoc("memoryPending", event.id);
     const turnPendingRef =
       event.type === "message" && event.source === "user"
         ? this.childDoc("turnPending", event.id)
@@ -202,10 +203,6 @@ export class FirestoreCompanionRepository implements CompanionRepository {
       this.ownerId();
       if (!existing.exists()) {
         tx.set(ref, sanitizeForFirestore(event));
-        tx.set(
-          pendingRef,
-          sanitizeForFirestore(encodeMemoryPendingMarker(event.id, event.timestamp)),
-        );
         if (turnPendingRef)
           tx.set(
             turnPendingRef,
@@ -273,9 +270,6 @@ export class FirestoreCompanionRepository implements CompanionRepository {
     const stateRef = this.childDoc("state", "current");
     const worldRef = this.childDoc("world", "current");
     const refs = events.map((event) => this.childDoc("events", event.id));
-    const pendingRefs = events.map((event) =>
-      this.childDoc("memoryPending", event.id),
-    );
     const turnPendingRef = this.childDoc("turnPending", events[0].id);
 
     await runTransaction(this.db(), async (tx) => {
@@ -335,12 +329,6 @@ export class FirestoreCompanionRepository implements CompanionRepository {
       events.forEach((event, i) => {
         if (!existing[i].exists()) {
           tx.set(refs[i], sanitizeForFirestore(event));
-          tx.set(
-            pendingRefs[i],
-            sanitizeForFirestore(
-              encodeMemoryPendingMarker(event.id, event.timestamp),
-            ),
-          );
         }
       });
       // A completed turn and its "pending" marker move atomically. If this
@@ -569,10 +557,42 @@ export class FirestoreCompanionRepository implements CompanionRepository {
     return (await this.loadRuntimeState()).world;
   }
 
+  async loadEditableContext(): Promise<YuzukiEditableContext | null> {
+    const snapshot = await getDoc(this.childDoc("manualContext", "current"));
+    return snapshot.exists() ? decodeEditableContext(snapshot.data()) : null;
+  }
+
+  async saveEditableContext(context: YuzukiEditableContext): Promise<YuzukiEditableContext> {
+    const normalized = normalizeEditableContext(context, Date.now());
+    const ref = this.childDoc("manualContext", "current");
+    await setDoc(ref, sanitizeForFirestore(encodeEditableContext(normalized)));
+    return normalized;
+  }
+
+  async updateEditableContext(patch: YuzukiEditableContextPatch): Promise<YuzukiEditableContext> {
+    const ref = this.childDoc("manualContext", "current");
+    return runTransaction(this.db(), async (tx) => {
+      const snapshot = await tx.get(ref);
+      this.ownerId();
+      const now = Date.now();
+      const current = snapshot.exists()
+        ? decodeEditableContext(snapshot.data()) ?? createDefaultEditableContext(now)
+        : createDefaultEditableContext(now);
+      const normalized = normalizeEditableContext({
+        ...current,
+        ...patch,
+        updatedAt: Math.max(current.updatedAt, patch.updatedAt ?? 0, now),
+      }, now);
+      tx.set(ref, sanitizeForFirestore(encodeEditableContext(normalized)));
+      return normalized;
+    });
+  }
+
   async resetConversationAndMemory(
     snapshot: CompanionSnapshot,
     world: WorldState,
   ): Promise<RuntimePersistenceState> {
+    const editableContext = await this.loadEditableContext();
     const resetCollections = [
       "events",
       "memoryPending",
@@ -636,6 +656,16 @@ export class FirestoreCompanionRepository implements CompanionRepository {
       const batch = writeBatch(this.db());
       for (const ref of targets.slice(index, index + 400)) batch.delete(ref);
       await batch.commit();
+    }
+
+    if (editableContext) {
+      // Clear only the memory field against the latest document. A personality
+      // edit from another device during the reset must never be overwritten by
+      // the snapshot captured before collection cleanup began.
+      await this.updateEditableContext({
+        memory: "",
+        updatedAt: Date.now(),
+      });
     }
 
     return {

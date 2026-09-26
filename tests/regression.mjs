@@ -163,10 +163,16 @@ const {
   encodeIntimacyPreferences,
   decodeIntimacyPreferences,
 } = await import("../src/storage/persistence-schema.ts");
-const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance } = await import(
+const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance, selectBalancedRecentHistory, applyBoundedCloudReaction } = await import(
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
+const {
+  createDefaultEditableContext,
+  normalizeEditableContext,
+  DEFAULT_YUZUKI_PERSONALITY,
+} = await import("../src/context/yuzuki-context.ts");
+const { formatConversationExport } = await import("../src/chat/conversation-export.ts");
 const { defaultCharacter } = await import("../src/character/character.ts");
 const {
   createInitialIntimacyState,
@@ -195,6 +201,9 @@ const { deriveAvatarCue, resolveAvatarVisualState } = await import(
 );
 const { resolveAppearanceRequest } = await import(
   "../src/avatar/appearance-request.ts"
+);
+const { detectAppearanceRequest, detectIntimacySignal } = await import(
+  "../src/mechanics/turn-signals.ts"
 );
 const { mergeChatMessages, replyForFailedMessage, replyTargets } = await import(
   "../src/app/app-utils.ts"
@@ -786,20 +795,91 @@ await test("memory processor upgrade can promote an old archived personal detail
   assert.ok(upgraded.topics.includes("concept:study"));
 });
 
-await test("direct recall flushes pending memory before answering", async () => {
+await test("v0.19.3 production hot path is isolated from legacy cognition, memory retrieval, initiative queues and local dialogue", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const avatarSource = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
+  for (const legacyPath of ["../local-dialogue/", "../cognition/", "../memory/", "../initiative/", "../dialogue/"]) {
+    assert.equal(runtimeSource.includes(legacyPath), false, `runtime must not import ${legacyPath}`);
+  }
+  assert.equal(avatarSource.includes("../cognition/"), false);
+  assert.equal(avatarSource.includes("../local-dialogue/"), false);
+  assert.match(runtimeSource, /detectExplicitSilenceRequest/);
+  assert.match(runtimeSource, /detectIntimacySignal/);
+  assert.match(runtimeSource, /detectAppearanceRequest/);
+});
+
+await test("v0.19 runtime isolates legacy automatic memory from normal dialogue", async () => {
   const r = new InMemoryCompanionRepository();
-  await r.appendEvent(ev("pending-job", "Я устроился в автосервис на кузовные работы.", now - 5_000));
+  await consolidateEvents([ev("legacy-job", "Я работаю в старой кофейне.", now - 20_000)], r);
+  await r.saveEditableContext({
+    ...createDefaultEditableContext(now - 10_000),
+    memory: "Он теперь работает в автомалярке.",
+    updatedAt: now - 10_000,
+  });
   repository = r;
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal, now);
-  assert.equal((await r.listKnowledgeFacts()).length, 0);
   const result = await handleUserMessage(
-    { id: "ask-pending-job", text: "Где я работаю?", timestamp: now },
+    { id: "ask-manual-job", text: "Где я работаю?", timestamp: now },
     boot.state,
     { uid: "A", signal: c.signal, history: boot.recentConversation },
   );
-  assert.ok(result.trace.memoryContext.facts.some((fact) => /автосервис/u.test(fact)));
-  assert.ok((await r.listKnowledgeFacts()).some((fact) => fact.key === "user.work" && /автосервис/u.test(fact.value)));
+  assert.equal("memoryContext" in result.trace, false);
+  assert.equal(result.trace.manualContext?.memoryChars, "Он теперь работает в автомалярке.".length);
+});
+
+await test("editable Yuzuki context persists exactly and reset clears memory but keeps personality", async () => {
+  const r = new InMemoryCompanionRepository();
+  const custom = normalizeEditableContext({
+    version: 1,
+    personality: "Yuzuki самостоятельная и любит сухой юмор.",
+    memory: "Он сказал мне, что я красивая. Мне это запомнилось.",
+    updatedAt: now - 1000,
+  }, now - 1000);
+  await r.saveEditableContext(custom);
+  assert.deepEqual(await r.loadEditableContext(), custom);
+  await r.resetConversationAndMemory(
+    { revision: 0, emotion: initialEmotionalState, relationship: initialRelationshipState },
+    createInitialWorldState(now, "UTC"),
+  );
+  const after = await r.loadEditableContext();
+  assert.equal(after?.personality, custom.personality);
+  assert.equal(after?.memory, "");
+});
+
+await test("partial manual-context updates never clobber the other canonical field", async () => {
+  const r = new InMemoryCompanionRepository();
+  await r.saveEditableContext(normalizeEditableContext({
+    version: 1,
+    personality: "PERSONALITY A",
+    memory: "MEMORY A",
+    updatedAt: now - 3000,
+  }, now - 3000));
+  const afterPersonality = await r.updateEditableContext({ personality: "PERSONALITY B", updatedAt: now - 2000 });
+  assert.equal(afterPersonality.personality, "PERSONALITY B");
+  assert.equal(afterPersonality.memory, "MEMORY A");
+  const afterMemory = await r.updateEditableContext({ memory: "MEMORY B", updatedAt: now - 1000 });
+  assert.equal(afterMemory.personality, "PERSONALITY B");
+  assert.equal(afterMemory.memory, "MEMORY B");
+});
+
+await test("editable context defaults to stable personality while allowing empty long-term memory", () => {
+  const empty = normalizeEditableContext({ version: 1, personality: "", memory: "", updatedAt: now }, now);
+  assert.equal(empty.personality, DEFAULT_YUZUKI_PERSONALITY);
+  assert.equal(empty.memory, "");
+});
+
+await test("clean dialogue export contains only human chat roles and marks Yuzuki initiatives", () => {
+  const text = formatConversationExport([
+    { id: "u1", role: "user", text: "Привет", timestamp: now - 3000 },
+    { id: "c1", role: "character", text: "Привет", timestamp: now - 2000 },
+    { id: "c2", role: "character", text: "Как ты там?", timestamp: now - 1000, proactive: true },
+    { id: "silent", role: "character", text: "", timestamp: now, silent: true },
+  ]);
+  assert.match(text, /USER:\nПривет/u);
+  assert.match(text, /YUZUKI:\nПривет/u);
+  assert.match(text, /YUZUKI · INITIATIVE:\nКак ты там\?/u);
+  assert.doesNotMatch(text, /silent/u);
 });
 
 await test("proactive character actions become durable memories", async () => {
@@ -829,25 +909,28 @@ await test("long messages preserve important information from the tail", async (
   assert.match(memory.summary, /Аврора/u);
 });
 
-await test("used memories are reinforced after a completed turn", async () => {
+await test("v0.19 completed turns do not reinforce legacy automatic memories", async () => {
   const r = new InMemoryCompanionRepository();
   await consolidateEvents([ev("used-memory", "У меня дома стоит телескоп Аврора.", now - 100_000)], r);
   const before = await r.getMemory("memory_used-memory");
+  await r.saveEditableContext({
+    ...createDefaultEditableContext(now - 1000),
+    memory: "У него дома есть телескоп Аврора.",
+    updatedAt: now - 1000,
+  });
   repository = r;
-  const callsBefore = modelCalls;
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
   await handleUserMessage(
-    { id: "use-memory-turn", text: "Что там с телескопом Аврора?", timestamp: now },
+    { id: "use-manual-memory-turn", text: "Что там с телескопом Аврора?", timestamp: now },
     boot.state,
     { uid: "A", signal: c.signal, history: [] },
   );
   await new Promise(resolve => setTimeout(resolve, 0));
   const after = await r.getMemory("memory_used-memory");
-  assert.ok(after.accessCount > before.accessCount);
-  assert.ok(after.lastAccessedAt >= now);
-  assert.ok(after.retrievalStrength >= before.retrievalStrength);
-  modelCalls = callsBefore;
+  assert.equal(after.accessCount, before.accessCount);
+  assert.equal(after.lastAccessedAt, before.lastAccessedAt);
+  assert.equal(after.retrievalStrength, before.retrievalStrength);
 });
 
 await test("memory recovery paginates beyond the old recent-event window", async () => {
@@ -1090,8 +1173,8 @@ await test("runtime boot is read-only and local reply is saved without consolida
     onChunk: (t) => chunks.push(t),
   });
   assert.equal(modelCalls, callsAtStart);
-  assert.equal(result.trace.usedGeminiReply, false);
-  assert.ok(result.trace.localRenderer?.selectedTemplate);
+  assert.equal(result.trace.cloudLanguage?.used, false);
+  assert.equal(result.trace.mechanics?.reactionSource, "unchanged-fallback");
   assert.deepEqual(chunks, [result.reply]);
   assert.notEqual(chunks[0], "Привет");
   assert.equal(
@@ -1105,7 +1188,7 @@ await test("completed turn clears its pending-turn recovery marker", async () =>
   const pending = await repository.listPendingTurns();
   assert.equal(pending.some((event) => event.id === "turn1"), false);
 });
-await test("runtime rereads older conversation before clarifying a recovered causal question", async () => {
+await test("v0.19 runtime does not retrospectively reread old dialogue outside recent 30", async () => {
   const previousRepository = repository;
   const r = new InMemoryCompanionRepository();
   repository = r;
@@ -1133,6 +1216,11 @@ await test("runtime rereads older conversation before clarifying a recovered cau
       at + 1,
     ));
   }
+  await r.saveEditableContext({
+    ...createDefaultEditableContext(now),
+    memory: "",
+    updatedAt: now,
+  });
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal, now);
   assert.equal(boot.recentConversation.some((line) => line.id === oldUser.id), false);
@@ -1141,11 +1229,8 @@ await test("runtime rereads older conversation before clarifying a recovered cau
     boot.state,
     { uid: "A", signal: c.signal, history: boot.recentConversation.slice(-24) },
   );
-  assert.equal(result.trace?.reasoning?.retrospective, true);
-  assert.equal(result.trace?.reasoning?.recovered, true);
-  assert.ok((result.trace?.reasoning?.scannedLines ?? 0) > 80);
-  assert.match(result.reply, /начальник|срывал/u);
-  assert.doesNotMatch(result.reply, /про что именно|скажи чуть по-другому|не поняла/u);
+  assert.equal("reasoning" in result.trace, false);
+  assert.equal(result.trace?.manualContext?.memoryChars, 0);
   repository = previousRepository;
 });
 await test("bootstrap recovers an older unanswered turn after newer completed chat", async () => {
@@ -1202,7 +1287,7 @@ await test("retry uses saved reply without model call or state replay", async ()
     2,
   );
 });
-await test("local renderer metadata is persisted with the reply", async () => {
+await test("legacy local renderer metadata is no longer persisted with new replies", async () => {
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal);
   const result = await handleUserMessage(
@@ -1211,9 +1296,9 @@ await test("local renderer metadata is persisted with the reply", async () => {
     { uid: "A", signal: c.signal, history: boot.recentConversation },
   );
   const saved = await repository.getEvent("reply_turn2");
-  assert.equal(result.trace.usedGeminiReply, false);
-  assert.ok(typeof saved.payload.localDialogue?.templateId === "string");
-  assert.ok(Array.isArray(saved.payload.localDialogue?.dialogueActs));
+  assert.equal(result.trace.cloudLanguage?.used, false);
+  assert.equal(saved.payload.localDialogue, undefined);
+  assert.equal(saved.payload.mindContinuity, undefined);
 });
 await test("Gemini failure no longer affects the dialogue path", async () => {
   generate = async () => {
@@ -1233,7 +1318,7 @@ await test("Gemini failure no longer affects the dialogue path", async () => {
   assert.equal((await repository.listPendingTurns()).some((event) => event.id === "gemini-down"), false);
   assert.equal((await repository.loadSnapshot()).revision, revisionBefore + 1);
   assert.equal(modelCalls, callsBefore);
-  assert.equal(result.trace.usedGeminiReply, false);
+  assert.equal(result.trace.cloudLanguage?.used, false);
 });
 await test("pre-aborted local turn cannot commit", async () => {
   const c = new AbortController();
@@ -1296,16 +1381,31 @@ await test("Firestore memoryProcessed honors processor version", async () => {
   assert.equal(db.get(`${base}stale`).schemaVersion, STORAGE_SCHEMA_VERSION);
   assert.equal(db.get(`${base}stale`).processorVersion, MEMORY_PROCESSOR_VERSION);
 });
-await test("Firestore event write queues memory work and consolidation clears it", async () => {
+await test("v0.19 Firestore event writes no longer queue legacy automatic-memory work", async () => {
   const r = new FirestoreCompanionRepository("memory_queue", "A");
   const event = ev("queued-event", "Запомни это");
   await r.appendEvent(event);
   const pending = "users/A/characters/memory_queue/memoryPending/queued-event";
-  const processed = "users/A/characters/memory_queue/memoryProcessed/queued-event";
-  assert.equal(db.has(pending), true);
-  await r.markEventConsolidated("queued-event", event.timestamp);
+  const eventPath = "users/A/characters/memory_queue/events/queued-event";
+  assert.equal(db.has(eventPath), true);
   assert.equal(db.has(pending), false);
-  assert.equal(db.get(processed).processorVersion, MEMORY_PROCESSOR_VERSION);
+});
+
+await test("Firestore persists manual Yuzuki personality and memory in one user-scoped document", async () => {
+  const r = new FirestoreCompanionRepository("manual_ctx", "A");
+  const context = normalizeEditableContext({
+    version: 1,
+    personality: "Yuzuki спорит, шутит и не ведёт себя как ассистент.",
+    memory: "Он сказал мне, что я красивая. Мне было приятно.",
+    updatedAt: now,
+  }, now);
+  await r.saveEditableContext(context);
+  const path = "users/A/characters/manual_ctx/manualContext/current";
+  assert.equal(db.has(path), true);
+  assert.deepEqual(await r.loadEditableContext(), context);
+  const updated = await r.updateEditableContext({ memory: "Новая память без перезаписи личности.", updatedAt: now + 1 });
+  assert.equal(updated.personality, context.personality);
+  assert.equal(updated.memory, "Новая память без перезаписи личности.");
 });
 
 await test("Firestore pending-turn marker is created, dismissible, and cleared by commit", async () => {
@@ -1869,49 +1969,23 @@ await test("maintenance retry policy backs off and caps", () => {
   assert.equal(maintenanceRetryDelay(3), 30_000);
   assert.equal(maintenanceRetryDelay(99), 120_000);
 });
-await test("initiative scheduling honors notBefore, quiet window and sleep", () => {
+await test("queue-less initiative scheduling waits for the first quiet-hour checkpoint and an awake routine", () => {
   const baseNow = Date.UTC(2026, 0, 1, 2, 0, 0);
   const world = {
     ...createInitialWorldState(baseNow, "UTC"),
     lastUserInteractionAt: baseNow - 12 * 3_600_000,
   };
-  const initiative = {
-    id: "initiative_due",
-    kind: "share_thought",
-    topic: "test",
-    reason: "test",
-    priority: 0.5,
-    createdAt: baseNow - 1_000,
-    notBefore: baseNow,
-    expiresAt: baseNow + 12 * 3_600_000,
-    status: "pending",
-    dedupeKey: "test:due",
-    sourceIds: [],
-  };
-  const target = nextInitiativeCheckAt([initiative], world, baseNow);
+  const target = nextInitiativeCheckAt(world, baseNow);
   assert.ok(target >= Date.UTC(2026, 0, 1, 6, 0, 0));
   assert.equal(resolveRoutine(target, "UTC").isAwake, true);
 });
-await test("initiative scheduling preserves the post-user quiet window", () => {
+await test("queue-less initiative scheduling uses one-hour quiet checkpoints", () => {
   const baseNow = Date.UTC(2026, 0, 1, 12, 0, 0);
   const world = {
     ...createInitialWorldState(baseNow, "UTC"),
     lastUserInteractionAt: baseNow,
   };
-  const initiative = {
-    id: "initiative_quiet",
-    kind: "continue_thread",
-    topic: "test",
-    reason: "test",
-    priority: 0.7,
-    createdAt: baseNow,
-    notBefore: baseNow,
-    expiresAt: baseNow + 3_600_000,
-    status: "pending",
-    dedupeKey: "quiet:test",
-    sourceIds: [],
-  };
-  assert.equal(nextInitiativeCheckAt([initiative], world, baseNow), baseNow + 10 * 60_000);
+  assert.equal(nextInitiativeCheckAt(world, baseNow), baseNow + 60 * 60_000);
 });
 await test("maintenance never publishes a proactive message while sleeping", async () => {
   const previousRepository = repository;
@@ -2011,7 +2085,16 @@ await test("legacy internal autonomy text is never shown to the user", () => {
   );
 });
 
-await test("autonomy waits for the user after one proactive message", async () => {
+await test("v0.19.3 proactive GPT messages select and surface a matching visual appearance", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
+  assert.match(runtimeSource, /proactiveVisualEmotion = resolveVisualEmotionState/);
+  assert.match(runtimeSource, /appearanceAssetId: proactiveAppearance\?\.assetId/);
+  assert.match(runtimeSource, /return \{ message, appearance: proactiveAppearance \}/);
+  assert.match(storeSource, /runtime: result\.appearance && state\.runtime/);
+});
+
+await test("v0.19.3 initiative ignores legacy queues and never emits a canned fallback when cloud is unavailable", async () => {
   const previousRepository = repository;
   const r = new InMemoryCompanionRepository();
   repository = r;
@@ -2031,36 +2114,24 @@ await test("autonomy waits for the user after one proactive message", async () =
     world,
   };
   await r.saveInitiative({
-    id: "initiative_first_proactive",
+    id: "initiative_legacy_should_be_ignored",
     kind: "share_thought",
-    topic: "У меня есть одна мысль.",
-    reason: "internal reason",
+    topic: "Старый локальный повод",
+    reason: "legacy",
     priority: 1,
     createdAt: wallNow - 1000,
     notBefore: wallNow - 1000,
     expiresAt: wallNow + 12 * 3_600_000,
     status: "pending",
-    dedupeKey: "proactive:first",
+    dedupeKey: "legacy:ignored",
     sourceIds: [],
   });
-  const first = await maintainRuntime("A", new AbortController().signal, state, true);
-  assert.ok(first.message?.proactive);
-  await r.saveInitiative({
-    id: "initiative_second_proactive",
-    kind: "share_thought",
-    topic: "А вот ещё одна мысль.",
-    reason: "internal reason",
-    priority: 1,
-    createdAt: wallNow,
-    notBefore: wallNow,
-    expiresAt: wallNow + 12 * 3_600_000,
-    status: "pending",
-    dedupeKey: "proactive:second",
-    sourceIds: [],
-  });
-  const second = await maintainRuntime("A", new AbortController().signal, state, true);
-  assert.equal(second.message, null);
-  assert.equal(await r.getEvent("proactive_initiative_second_proactive"), null);
+  // Node tests have no browser/Firebase cloud transport. New initiative has no
+  // local renderer fallback, so a cloud-unavailable check correctly stays quiet.
+  const result = await maintainRuntime("A", new AbortController().signal, state, true);
+  assert.equal(result.message, null);
+  assert.equal("initiatives" in result, false);
+  assert.equal((await r.listInitiatives()).find((item) => item.id === "initiative_legacy_should_be_ignored")?.status, "pending");
   repository = previousRepository;
 });
 
@@ -2138,14 +2209,131 @@ await test("sleep routine keeps an awakened conversation alive briefly, then let
   assert.equal(quiet.world.isAwake, false);
   assert.equal(quiet.world.availability, "sleeping");
 });
+await test("ordinary active chat is not reset to the scheduled activity between quick messages", () => {
+  const zone = "UTC";
+  let baseNow = Date.UTC(2026, 0, 1, 8, 0, 0);
+  for (let hour = 0; hour < 24; hour += 1) {
+    const candidate = Date.UTC(2026, 0, 1, hour, 0, 0);
+    if (resolveRoutine(candidate, zone).availability !== "sleeping") {
+      baseNow = candidate;
+      break;
+    }
+  }
+  const scheduled = resolveRoutine(baseNow, zone);
+  const activeChat = {
+    ...createInitialWorldState(baseNow - 60_000, zone),
+    currentLocation: scheduled.location,
+    currentActivity: "chatting",
+    availability: "free",
+    isAwake: true,
+    lastUserInteractionAt: baseNow - 30_000,
+    lastSimulatedAt: baseNow - 60_000,
+  };
+  const held = simulateWorld(activeChat, initialEmotionalState, baseNow);
+  assert.equal(held.world.currentActivity, "chatting");
+  assert.equal(held.world.isAwake, true);
+
+  const released = simulateWorld(held.world, initialEmotionalState, baseNow + 3 * 60_000);
+  assert.equal(released.world.currentActivity, resolveRoutine(baseNow + 3 * 60_000, zone).activity);
+});
+
+await test("v0.19 runtime keeps current input out of recent history and uses only manual narrative context", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  assert.match(runtimeSource, /const stableHistory = history\.filter\(\(line\) => line\.id !== input\.id\)/);
+  assert.match(runtimeSource, /personality: editableContext\.personality/);
+  assert.match(runtimeSource, /memory: editableContext\.memory/);
+  assert.match(runtimeSource, /const recentHistory = selectBalancedRecentHistory\(stableHistory, 15\)/);
+  assert.doesNotMatch(runtimeSource, /retrieveMemoryContext\(/);
+  assert.doesNotMatch(runtimeSource, /recoverRecentMemory\(/);
+  assert.doesNotMatch(runtimeSource, /persistCloudOpenThread\(/);
+});
+
+await test("GPT short-term context keeps up to fifteen messages from each side in chronological order", () => {
+  const lines = [];
+  for (let index = 0; index < 20; index += 1) {
+    lines.push({ id: `u${index}`, role: "user", text: `u${index}`, timestamp: index * 2 + 1 });
+    lines.push({ id: `c${index}`, role: "character", text: `c${index}`, timestamp: index * 2 + 2 });
+  }
+  const selected = selectBalancedRecentHistory(lines, 15);
+  assert.equal(selected.length, 30);
+  assert.equal(selected.filter((line) => line.role === "user").length, 15);
+  assert.equal(selected.filter((line) => line.role === "character").length, 15);
+  assert.equal(selected[0].id, "u5");
+  assert.equal(selected.at(-1).id, "c19");
+  assert.ok(selected.every((line, index) => index === 0 || selected[index - 1].timestamp <= line.timestamp));
+});
+
+await test("v0.19.3 initiative is queue-less and GPT decides from manual context and state", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const cloudSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  assert.doesNotMatch(runtimeSource, /CharacterInitiative/);
+  assert.doesNotMatch(runtimeSource, /refreshInitiatives\(/);
+  assert.doesNotMatch(runtimeSource, /initiativeSemanticBridge\(/);
+  assert.doesNotMatch(runtimeSource, /renderLocalInitiative\(/);
+  assert.match(runtimeSource, /mode: "initiative"/);
+  assert.match(runtimeSource, /kind: "autonomous_check"/);
+  assert.match(runtimeSource, /quietMinutes: Math\.round\(quietMs \/ 60_000\)/);
+  assert.match(runtimeSource, /personality: proactiveEditableContext\.personality/);
+  assert.match(runtimeSource, /memory: proactiveEditableContext\.memory/);
+  assert.match(runtimeSource, /selectBalancedRecentHistory\(proactiveHistory, 15\)/);
+  assert.match(runtimeSource, /proactiveLanguage\.shouldInitiate === true/);
+  assert.match(cloudSource, /if \(input\.mode === "initiative"\) return true/);
+  assert.match(workerSource, /shouldInitiate=false/);
+  assert.match(workerSource, /proactive\.quietMinutes/);
+  assert.match(workerSource, /\.slice\(-30\)/);
+});
+
+await test("v0.19.3 GPT emotional reaction is bounded by engine inertia", () => {
+  const nowReaction = Date.now();
+  const baseEmotion = { ...initialEmotionalState, updatedAt: nowReaction };
+  const baseRelationship = { ...initialRelationshipState, updatedAt: nowReaction };
+  const reacted = applyBoundedCloudReaction(
+    baseEmotion,
+    baseRelationship,
+    {
+      attempted: true, used: true,
+      emotionReaction: {
+        happiness: 1, sadness: -1, irritation: 1, anxiety: 1,
+        curiosity: 1, boredom: 1, affection: 1, romanticInterest: 1,
+      },
+      relationshipReaction: {
+        trust: -1, closeness: 1, attachment: 1, security: -1, respect: -1, unresolvedTension: 1,
+      },
+    },
+    nowReaction,
+  );
+  assert.equal(reacted.source, "gpt");
+  assert.ok(reacted.emotion.irritation - baseEmotion.irritation <= 0.100001);
+  assert.ok(reacted.emotion.affection - baseEmotion.affection <= 0.025001);
+  assert.ok(reacted.emotion.romanticInterest - baseEmotion.romanticInterest <= 0.020001);
+  assert.ok(baseRelationship.trust - reacted.relationship.trust <= 0.008001);
+  assert.ok(reacted.relationship.unresolvedTension - baseRelationship.unresolvedTension <= 0.025001);
+});
+
+await test("v0.19.3 cloud failure does not invoke a second local emotional interpreter", () => {
+  const nowReaction = Date.now();
+  const baseEmotion = { ...initialEmotionalState, updatedAt: nowReaction };
+  const baseRelationship = { ...initialRelationshipState, updatedAt: nowReaction };
+  const reacted = applyBoundedCloudReaction(
+    baseEmotion,
+    baseRelationship,
+    { attempted: true, used: false, reason: "offline" },
+    nowReaction,
+  );
+  assert.equal(reacted.source, "unchanged-fallback");
+  assert.deepEqual(reacted.emotion, baseEmotion);
+  assert.deepEqual(reacted.relationship, baseRelationship);
+});
+
 await test("sleep wake flow uses the second recent message as the wake signal without regressing GPT-first", () => {
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
   assert.match(runtimeSource, /previousUserLine[\s\S]*recentSleepPing/);
   assert.match(runtimeSource, /recentSleepPing[\s\S]*currentActivity: "chatting"[\s\S]*isAwake: true/);
   assert.match(runtimeSource, /engaged: !silent && turnWorld\.availability !== "sleeping"/);
   assert.doesNotMatch(runtimeSource, /localDraft:\s*localGuarded\.text/);
-  assert.match(runtimeSource, /lastCharacterTopic: dialogueFrame\.lastCharacterTopic/);
-  assert.match(runtimeSource, /await recoverRecentMemory\(repository, 120\)/);
+  assert.match(runtimeSource, /personality: editableContext\.personality/);
+  assert.doesNotMatch(runtimeSource, /recoverRecentMemory\(/);
   assert.match(runtimeSource, /return normalizeAmbientAppearance\(reconciled, \[\], now\)/);
 });
 await test("character stage uses one full-scene media pack and ignores the old overlay pack", () => {
@@ -2932,7 +3120,47 @@ await test("Firestore snapshot codec preserves romance in the committed turn", a
   assert.equal(await r.getEvent("romance_conflict_reply"), null);
 });
 
-const { selectAppearance, selectAmbientAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, parseActivitySceneFilename, parseSequenceSceneFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
+await test("generic action verbs do not masquerade as photo requests", () => {
+  assert.equal(detectAppearanceRequest("сделай мне чай").requested, false);
+  assert.equal(detectAppearanceRequest("покажи код").requested, false);
+  assert.equal(detectAppearanceRequest("измени текст вот тут").requested, false);
+  assert.equal(detectAppearanceRequest("покажи другую позу").requested, true);
+  assert.equal(detectAppearanceRequest("повернись ко мне").requested, true);
+});
+
+await test("conversation corrections do not masquerade as intimacy stop while real stop still stops", () => {
+  const correction = detectIntimacySignal("стоп, я про другое");
+  assert.equal(correction.kind, "none");
+  const signal = detectIntimacySignal("Стоп");
+  assert.equal(signal.kind, "stop");
+  const base = romanticInput("");
+  const idle = createInitialIntimacyState(now - 1000);
+  const ordinary = planIntimacyTurn({
+    character: defaultCharacter,
+    previous: idle,
+    preferences: createInitialIntimacyPreferences(now - 1000),
+    signal: correction,
+    emotion: base.emotion,
+    relationship: base.relationship,
+    world: base.world,
+    now,
+  });
+  assert.ok(!["stop", "pause", "check_in"].includes(ordinary.action));
+  const active = { ...idle, adultModeEnabled: true, phase: "close", interactionStatus: "open", lastInteractionAt: now - 1000 };
+  const stopped = planIntimacyTurn({
+    character: defaultCharacter,
+    previous: active,
+    preferences: createInitialIntimacyPreferences(now - 1000),
+    signal,
+    emotion: base.emotion,
+    relationship: base.relationship,
+    world: base.world,
+    now,
+  });
+  assert.equal(stopped.action, "stop");
+});
+
+const { selectAppearance, selectAmbientAppearance, selectAmbientOrEmotionAppearance, transitionKind, decodeAppearance, parseVisualEmotionFilename, parseActivitySceneFilename, parseSequenceSceneFilename, resolveVisualEmotionState, resolveAvailableVisualEmotion } = await import("../src/avatar/avatar-model.ts");
 const { characterAssets, validateAssetCatalog } = await import("../src/avatar/avatar-model.ts");
 const baseAsset = characterAssets[0];
 const visualAssets = [baseAsset,
@@ -2949,13 +3177,26 @@ await test("full-scene catalog keeps a stable neutral still fallback without har
 });
 await test("ready-to-chat is a one-turn bridge and releases control back to emotion photos", () => {
   const r = visualRuntime();
+  r.world.currentActivity = "sleeping";
+  r.world.availability = "sleeping";
+  r.world.isAwake = false;
+  r.appearance = { version: 1, assetId: "activity.sleeping.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
+  assert.equal(shouldShowReadyToChat(r, now), false);
+
   r.world.currentActivity = "chatting";
+  r.world.availability = "free";
+  r.world.isAwake = true;
   r.world.lastUserInteractionAt = now - 5_000;
   r.appearance = { version: 1, assetId: "activity.ready_to_chat.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
   assert.equal(shouldShowReadyToChat(r, now), false);
 
   r.appearance = { ...r.appearance, assetId: "activity.reading.1" };
   assert.equal(shouldShowReadyToChat(r, now), true);
+});
+
+await test("waking-up routine can use the existing stretching activity photo", () => {
+  const source = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
+  assert.match(source, /waking_up:\s*\["waking_up", "sitting_up", "stretching"\]/);
 });
 
 await test("current scene filename formats accept the real mixed-case photo pack", () => {
@@ -2979,6 +3220,23 @@ await test("ambient selector can replace a stale chat emotion with the current a
   };
   const next = selectAmbientAppearance(r, now, { assets: [baseAsset, readingAsset], seed: "reading-test" });
   assert.equal(next?.assetId, "activity.reading.1");
+});
+
+await test("unsupported ambient activity falls back to a current emotion portrait instead of a stale old scene", () => {
+  const r = visualRuntime();
+  r.world.currentActivity = "personal_project";
+  r.world.availability = "occupied";
+  const staleReading = {
+    ...baseAsset,
+    id: "activity.reading.1",
+    src: "assets/character/scenes/reading.1.png",
+    visualEmotion: undefined,
+    transitionGroup: "activity-reading",
+  };
+  r.appearance = { version: 1, assetId: staleReading.id, selectedAt: now - 5 * 60_000, outfitChangedAt: now - 5 * 60_000 };
+  const next = selectAmbientOrEmotionAppearance(r, now, { assets: [baseAsset, staleReading], seed: "unsupported-activity" });
+  assert.notEqual(next.assetId, staleReading.id);
+  assert.equal(next.assetId, baseAsset.id);
 });
 
 await test("intimacy sequence photos are held only while the scene is actually current", () => {
@@ -3167,14 +3425,9 @@ await test("horny and hornys are reachable as distinct internal versus outward s
       initiativeDrive: 0.8,
     },
   };
-  const context = {
-    decision: { ...base.decision, confidence: 0.8 },
-    responsePlan: base.plan,
-    sourceIntent: "answer",
-    eventIntensity: 0.7,
-  };
-  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: [] }).emotion, "horny");
-  assert.equal(resolveVisualEmotionState(runtime, { ...context, dialogueActs: ["INTIMACY_RECIPROCATE"] }).emotion, "hornys");
+  const context = { eventIntensity: 0.7 };
+  assert.equal(resolveVisualEmotionState(runtime, { ...context, intimacySignalKind: "none" }).emotion, "horny");
+  assert.equal(resolveVisualEmotionState(runtime, { ...context, intimacySignalKind: "consent" }).emotion, "hornys");
 });
 await test("earned jealousy is exposed to the visual emotion resolver", () => {
   const base = romanticInput("");
@@ -3185,13 +3438,7 @@ await test("earned jealousy is exposed to the visual emotion resolver", () => {
     world: base.world,
     romance: { ...initialRomance(now), phase: "romantic" },
   };
-  const context = {
-    decision: { ...base.decision, confidence: 0.85 },
-    responsePlan: base.plan,
-    dialogueActs: ["JEALOUSY"],
-    sourceIntent: "statement",
-    eventIntensity: 0.8,
-  };
+  const context = { emotionTone: "jealous", eventIntensity: 0.8 };
   assert.equal(resolveVisualEmotionState(runtime, context).emotion, "jealous");
 });
 await test("visual emotion resolver picks nearest available level and avoids a recent variant", () => {
@@ -3353,39 +3600,43 @@ await test("age weakens a memory without hiding it from relevance retrieval", as
   assert.ok(aged.retrievalStrength < original.retrievalStrength);
   assert.ok((await retrieveMemoryContext("Где телескоп?", r, now)).memories.some(m => m.id === "memory_old-low"));
 });
-await test("parallel turn preparation keeps retrieval budgets and publishes before commit", async () => {
+await test("parallel turn preparation loads manual context and publishes before commit", async () => {
   const underlying = new InMemoryCompanionRepository();
+  await underlying.saveEditableContext({
+    ...createDefaultEditableContext(now),
+    memory: "Ручная память",
+    updatedAt: now,
+  });
   const c = new AbortController();
   repository = underlying;
   const boot = await bootstrapRuntime("A", c.signal);
   const calls = [];
-  const observed = [];
   let published = false;
   repository = new Proxy(underlying, {get(target, key) {
     const method = Reflect.get(target,key); if(typeof method!=="function")return method;
     return async (...args) => {
       calls.push(String(key));
-      if(key==="listMemories") observed.push(args[0].limit);
       if(key==="getEvent") { await Promise.resolve(); assert.ok(calls.includes("loadRuntimeState")); }
-      if(key==="appendEvent") { await Promise.resolve(); assert.ok(calls.includes("listMemories")); }
       if(key==="commitTurn") assert.equal(published,true);
       return method.apply(target,args);
     };
   }});
-  // A boundary is a local non-silent turn, so no provider latency obscures the I/O checks.
   const state = {...boot.state,romance:{...initialRomance(now),phase:"playful"}};
   const result = await handleUserMessage({id:"parallel",text:"Стоп",timestamp:now}, state,
     {uid:"A",signal:c.signal,history:[],onChunk:text=>{published=Boolean(text);}});
-  assert.deepEqual(observed.sort((a,b)=>a-b),[36,72]);
+  assert.ok(calls.includes("appendEvent"));
+  assert.ok(calls.includes("loadEditableContext"));
+  assert.equal(result.trace.manualContext?.memoryChars, "Ручная память".length);
   assert.equal(result.state.romance.phase,"paused");
   assert.ok(result.trace.timings.firstTextMs !== null);
   assert.ok(result.trace.timings.totalMs >= result.trace.timings.firstTextMs);
 });
-await test("memory read failure never falls back to an empty context", async () => {
+await test("manual context read failure never silently substitutes another memory source", async () => {
   repository = new InMemoryCompanionRepository();
-  const c = new AbortController();const boot = await bootstrapRuntime("A",c.signal);
-  repository.listMemories = async()=>{throw Error("memory-offline");};
-  await assert.rejects(handleUserMessage({id:"no-memory",text:"Привет",timestamp:now},boot.state,{uid:"A",signal:c.signal,history:[]}),/memory-offline/);
+  const c = new AbortController();
+  const boot = await bootstrapRuntime("A",c.signal);
+  repository.loadEditableContext = async()=>{throw Error("manual-context-offline");};
+  await assert.rejects(handleUserMessage({id:"no-memory",text:"Привет",timestamp:now},boot.state,{uid:"A",signal:c.signal,history:[]}),/manual-context-offline/);
   assert.equal(await repository.getEvent("reply_no-memory"),null);
   assert.equal(await repository.loadSnapshot(),null);
 });
@@ -3564,6 +3815,14 @@ await test("chat only auto-scrolls while the reader is near the bottom", () => {
   );
 });
 
+await test("loaded photos survive Safari decode optimization failures", () => {
+  const source = readFileSync(new URL("../src/avatar/AssetScene.tsx", import.meta.url), "utf8");
+  assert.match(source, /img\.decode\(\)\.then\(\(\) => finish\(\), \(\) => finish\(\)\)/);
+  assert.doesNotMatch(source, /finish\(new Error\("image-decode"\)\)/);
+  assert.match(source, /image-timeout"\)\), 20000/);
+  assert.match(source, /video-timeout"\)\), 25000/);
+});
+
 await test("initial avatar asset participates in preload failure and retry", () => {
   const source = readFileSync(
     new URL("../src/avatar/AssetScene.tsx", import.meta.url),
@@ -3601,7 +3860,12 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(clientSource, /runtimeCloudLanguageEndpoint/);
   assert.match(clientSource, /Authorization:\s*`Bearer \${idToken}`/);
   assert.match(clientSource, /"X-Firebase-AppCheck": appCheckToken/);
-  assert.match(clientSource, /getFirebaseAppCheckToken\(false\)/);
+  assert.match(clientSource, /getFirebaseAppCheckToken\(forceRefresh\)/);
+  assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 7_500/);
+  assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 17_000/);
+  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 10_000/);
+  assert.match(clientSource, /response\.status === 401 && attempt === 0/);
+  assert.match(workerSource, /APP_CHECK_JWKS_URL[\s\S]*signal: controller\.signal/);
   assert.doesNotMatch(clientSource, /api\.openai\.com|OPENAI_API_KEY/);
   assert.match(workerSource, /env\.OPENAI_API_KEY/);
   assert.match(workerSource, /const MODEL = "gpt-6-luna"/);
@@ -3610,54 +3874,93 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(workerSource, /store:\s*false/);
   assert.match(workerSource, /X-Firebase-AppCheck/);
   assert.match(workerSource, /Authorization/);
-  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 240);
+  assert.ok(Number(workerSource.match(/const MAX_OUTPUT_TOKENS = (\d+)/)?.[1] ?? 999) <= 320);
   assert.match(workerSource, /format:\s*RESPONSE_FORMAT/);
   assert.match(workerSource, /name:\s*"yuzuki_dialogue_turn"/);
-  assert.match(workerSource, /slice\(-12\)/);
+  assert.match(workerSource, /slice\(-30\)/);
   assert.doesNotMatch(workerSource, /high-intimacy-local/);
   assert.match(clientSource, /return Boolean\(input\.userText\.trim\(\)\)/);
 });
 
 await test("close adult flirting carries intimacy mind and bond-gated arousal into GPT", () => {
-  const nluSource = readFileSync(new URL("../src/local-dialogue/nlu.ts", import.meta.url), "utf8");
+  const mechanicsSource = readFileSync(new URL("../src/mechanics/turn-signals.ts", import.meta.url), "utf8");
   const intimacySource = readFileSync(new URL("../src/intimacy/intimacy.ts", import.meta.url), "utf8");
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
   const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
-  assert.match(nluSource, /suggestiveCompliment/);
-  assert.match(nluSource, /strength:\s*0\.9/);
+  assert.match(mechanicsSource, /suggestiveCompliment/);
+  assert.match(mechanicsSource, /strength:\s*0\.9/);
   assert.match(intimacySource, /closeEnoughForArousal/);
   assert.match(intimacySource, /inwardArousal = active/);
   assert.match(intimacySource, /outwardArousal = active/);
   assert.match(runtimeSource, /inwardArousal:\s*intimacyMind\.inwardArousal/);
   assert.match(runtimeSource, /outwardArousal:\s*intimacyMind\.outwardArousal/);
-  assert.match(runtimeSource, /kind:\s*nlu\.semantic\.intimacy\.kind/);
-  assert.match(workerSource, /Флирт, комплименты и влечение:/);
-  assert.match(workerSource, /intimacy\.mind\.inwardArousal=true/);
-  assert.match(workerSource, /intimacy\.mind\.outwardArousal=true/);
+  assert.match(runtimeSource, /kind:\s*intimacySignal\.kind/);
+  assert.match(workerSource, /intimacy доступна только/);
+  assert.match(workerSource, /Stop\/pause\/boundary/);
   assert.match(workerSource, /raw\.intimacy\?\.mind\?\.inwardArousal/);
+  assert.match(workerSource, /raw\.intimacy\?\.mind\?\.outwardArousal/);
   assert.match(workerSource, /raw\.intimacy\?\.signal\?\.kind/);
 });
 
-await test("GPT-first chat can use weighted memory, visible affect and several saved bubbles", () => {
+await test("v0.19 GPT hot path uses editable personality, manual memory and recent 15+15 only", () => {
   const clientSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
   const storeSource = readFileSync(new URL("../src/app/store.ts", import.meta.url), "utf8");
-  const memorySource = readFileSync(new URL("../src/memory/memory-consolidation.ts", import.meta.url), "utf8");
   const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
-  assert.match(clientSource, /emotionalWeight:\s*number/);
-  assert.match(clientSource, /memoryUsed\?: boolean/);
-  assert.match(workerSource, /function memoryItems/);
-  assert.match(workerSource, /function deriveAffectProfile/);
-  assert.match(workerSource, /\["memoryEcho", rawThought\.memoryEcho/);
-  assert.match(workerSource, /messages:\s*\{[\s\S]*maxItems:\s*3/);
-  assert.match(runtimeSource, /const explicitMemoryLookup =/);
-  assert.match(runtimeSource, /await recoverRecentMemory\(repository, 120\)/);
-  assert.match(runtimeSource, /const memoryQuery = explicitMemoryLookup/);
+  assert.match(clientSource, /personality: string/);
+  assert.match(clientSource, /memory: string/);
+  assert.doesNotMatch(clientSource, /memories:\s*Array/);
+  assert.doesNotMatch(clientSource, /facts:\s*Array/);
+  assert.match(workerSource, /MEMORY — единственная каноническая долговременная память/);
+  assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
+  assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
+  assert.match(workerSource, /\.slice\(-30\)/);
+  const sanitizeStart = workerSource.indexOf("function sanitizePacket");
+  const sanitizeEnd = workerSource.indexOf("function extractOutputText", sanitizeStart);
+  const sanitizeBlock = workerSource.slice(sanitizeStart, sanitizeEnd);
+  assert.doesNotMatch(sanitizeBlock, /raw\.facts/);
+  assert.doesNotMatch(sanitizeBlock, /raw\.memories/);
+  assert.doesNotMatch(sanitizeBlock, /raw\.openThreads/);
+  assert.doesNotMatch(sanitizeBlock, /raw\.recoveredHistory/);
+  assert.match(runtimeSource, /personality: editableContext\.personality/);
+  assert.match(runtimeSource, /memory: editableContext\.memory/);
+  assert.match(runtimeSource, /const recentHistory = selectBalancedRecentHistory\(stableHistory, 15\)/);
+  assert.doesNotMatch(runtimeSource, /MemoryContext|memoryContext/);
+  assert.doesNotMatch(runtimeSource, /retrieveMemoryContext\(/);
+  assert.doesNotMatch(runtimeSource, /recoverRecentMemory\(/);
   assert.match(runtimeSource, /const characterEvents = \(silent \? \[""\] : replyParts\)/);
-  assert.match(runtimeSource, /messagePart:\s*\{ index: index \+ 1, count: all\.length \}/);
-  assert.match(storeSource, /result\.replyMessages\?\.length/);
-  assert.match(memorySource, /payload\.messagePart\?\.index/);
-  assert.match(memorySource, /payload\.memoryText/);
+  assert.match(storeSource, /editablePersonality/);
+  assert.match(storeSource, /editableMemory/);
+  assert.match(storeSource, /exportConversation/);
+});
+
+await test("v0.19 manual-context UI, App Check rotation and unobscured photo stay hardened", () => {
+  const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
+  const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
+  const stageSource = readFileSync(new URL("../src/ui/CharacterStage.tsx", import.meta.url), "utf8");
+  const settingsSource = readFileSync(new URL("../src/ui/SettingsScreen.tsx", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(workerSource, /async function getAppCheckJwks\(forceRefresh = false\)/);
+  assert.match(workerSource, /getAppCheckJwks\(true\)/);
+  assert.match(runtimeSource, /cloudPartsOrFallback\(cloudLanguage, constraintKind\)/);
+  assert.match(settingsSource, /Личность Yuzuki/);
+  assert.match(settingsSource, /Память Yuzuki/);
+  assert.match(settingsSource, /Весь диалог/);
+  assert.match(settingsSource, /Скопировать/);
+  assert.match(settingsSource, /Скачать \.txt/);
+  assert.doesNotMatch(stageSource, /className="stage-bottom"/);
+  assert.doesNotMatch(stageSource, /onNavigate/);
+  assert.doesNotMatch(appSource, /onNavigate=\{setActiveTab\}/);
+  assert.doesNotMatch(appSource, /responseGuardFallback|responsePlan\.visualCue/);
+  assert.doesNotMatch(settingsSource, /responseGuardFallback|responseGuardReason/);
+  assert.doesNotMatch(stageSource, /visualCueKey|transientCue/);
+  assert.match(workerSource, /clipped\(raw\.userText, 12000\)/);
+  assert.match(workerSource, /text: clipped\(line\?\.text, 800\)/);
+  assert.match(workerSource, /function clippedMultiline/);
+  assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
+  assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
+  assert.match(settingsSource, /then\(\(saved\) => \{[\s\S]*if \(saved\) setEditingPersonality\(false\)/);
+  assert.match(settingsSource, /if \(saved\) setEditingMemory\(false\)/);
 });
 
 console.log(

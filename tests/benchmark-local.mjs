@@ -11,8 +11,10 @@ let generate = async (request, options) => {
   options.onChunk?.("Привет");
   return "Привет! Рада тебя видеть.";
 };
+let cloudHandler = async () => ({ attempted: false, used: false, reason: "benchmark-local" });
 globalThis.__getRepo = () => repository;
 globalThis.__generate = (...args) => generate(...args);
+globalThis.__cloud = (...args) => cloudHandler(...args);
 globalThis.__uid = "A";
 const db = new Map();
 const snap = (ref) => ({
@@ -47,6 +49,19 @@ const sdk = {
     }
     return result;
   },
+  writeBatch: () => {
+    const writes = [];
+    return {
+      delete: (ref) => writes.push(["delete", ref]),
+      set: (ref, value) => writes.push(["set", ref, value]),
+      commit: async () => {
+        for (const [op, r, v] of writes) {
+          if (op === "delete") db.delete(r);
+          else db.set(r, structuredClone(v));
+        }
+      },
+    };
+  },
 };
 globalThis.__sdk = sdk;
 registerHooks({
@@ -66,7 +81,7 @@ registerHooks({
   load(url, context, next) {
     let source;
     if (url === "mock:firestore")
-      source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction}=globalThis.__sdk;`;
+      source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction,writeBatch}=globalThis.__sdk;`;
     else if (url.endsWith("/storage/repository-factory.ts"))
       source =
         "export const getCompanionRepository=(...a)=>globalThis.__getRepo(...a);";
@@ -77,6 +92,8 @@ registerHooks({
     else if (url.endsWith("/ai/gemini-client.ts"))
       source =
         'export const generateCharacterReply=(...a)=>globalThis.__generate(...a); export const generateInitiativeMessage=async()=>"Как твои дела?";';
+    else if (url.endsWith("/ai/cloud-language.ts"))
+      source = 'export const renderCloudLanguage=(...a)=>globalThis.__cloud(...a);';
     else if (url.endsWith(".ts"))
       source = stripTypeScriptTypes(readFileSync(fileURLToPath(url), "utf8"), {
         mode: "transform",
@@ -214,30 +231,42 @@ function cognitionFor(text, emotion = initialEmotionalState, relationship = init
   return { perception, interpretation, decision, plan };
 }
 
-const {pathToFileURL}=await import('node:url');
-const oldRuntime=process.env.VC_BASELINE_RUNTIME ? await import(pathToFileURL(process.env.VC_BASELINE_RUNTIME).href) : null;
+const { createDefaultEditableContext } = await import("../src/context/yuzuki-context.ts");
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
-const timed=new Set(['getEvent','loadRuntimeState','appendEvent','listMemories','listKnowledgeFacts','listOpenThreads','commitTurn']);
-async function measure(handler,label) {
+const timed=new Set(['getEvent','loadRuntimeState','appendEvent','loadEditableContext','commitTurn']);
+async function measure() {
  const base=new InMemoryCompanionRepository();
- await consolidateEvents([ev('evidence','Я люблю кофе.',Date.now()-5000)],base);
- let start,modelAt,firstAt;const reads=[];
+ // Deliberately leave legacy automatic memory behind: v0.19 must not read it.
+ await consolidateEvents([ev('legacy-evidence','Я раньше любил кофе.',Date.now()-5000)],base);
+ await base.saveEditableContext({
+   ...createDefaultEditableContext(Date.now()-1000),
+   memory:'Он сейчас предпочитает чай. Это каноническая ручная память.',
+   updatedAt:Date.now()-1000,
+ });
+ let modelAt,firstAt;const reads=[];
  repository=new Proxy(base,{get(target,key){const method=Reflect.get(target,key);if(typeof method!=='function')return method;return async(...args)=>{
+   reads.push(String(key));
    if(timed.has(key))await delay(80);
-   if(['listMemories','listKnowledgeFacts','listOpenThreads'].includes(key))reads.push([key,args[0]]);
    return method.apply(target,args);
  };}});
  const t=Date.now();
  const zones=Array.from({length:25},(_,i)=>i-12).map(n=>n===0?'Etc/GMT':`Etc/GMT${n>0?'+':''}${n}`);
  const world=zones.map(z=>createInitialWorldState(t,z)).find(w=>w.isAwake&&w.availability==='free');
- generate=async(req,options)=>{modelAt=performance.now();assert.ok(req.memoryContext.facts.some(f=>f.value==='like'));await delay(120);options.onChunk?.('У меня всё спокойно.');return 'У меня всё спокойно.';};
- start=performance.now();
- await handler({id:'bench-'+label,text:'Помнишь, что я говорил про кофе?',timestamp:t},
+ cloudHandler=async(input)=>{
+   modelAt=performance.now();
+   assert.match(input.memory,/предпочитает чай/u);
+   assert.equal('facts' in input,false);
+   assert.equal('memories' in input,false);
+   await delay(120);
+   return {attempted:true,used:true,text:'У меня всё спокойно.',messages:['У меня всё спокойно.'],model:'mock'};
+ };
+ const start=performance.now();
+ await handleUserMessage({id:'bench-v019',text:'Помнишь, что я люблю?',timestamp:t},
    {revision:0,emotion:{...initialEmotionalState,updatedAt:t},relationship:{...initialRelationshipState,updatedAt:t},world},
    {uid:'A',signal:new AbortController().signal,history:[],onChunk:()=>{firstAt??=performance.now();}});
- return {label,beforeModelMs:Math.round(modelAt-start),firstTextMs:Math.round(firstAt-start),totalMs:Math.round(performance.now()-start),reads};
+ const legacyReads=reads.filter(key=>['listMemories','listKnowledgeFacts','listOpenThreads'].includes(key));
+ assert.deepEqual(legacyReads,[]);
+ return {label:'v0.19.3',beforeModelMs:Math.round(modelAt-start),firstTextMs:Math.round(firstAt-start),totalMs:Math.round(performance.now()-start),reads};
 }
-const baseline=oldRuntime ? await measure(oldRuntime.handleUserMessage,'baseline') : null;
-const improved=await measure(handleUserMessage,'v0.8.0');
-if (baseline) assert.deepEqual(improved.reads,baseline.reads);
-console.log(JSON.stringify({conditions:'80ms per repository operation, 120ms mocked model, same fact and retrieval budgets',baseline,improved},null,2));
+const improved=await measure();
+console.log(JSON.stringify({conditions:'80ms mocked persistence operations + 120ms mocked GPT; manual context only, no legacy retrieval reads',improved},null,2));

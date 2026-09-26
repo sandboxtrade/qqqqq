@@ -11,19 +11,7 @@ import {
 } from "../relationship/relationship";
 import type { EmotionalState } from "../emotions/emotions";
 import type { RelationshipState } from "../relationship/relationship";
-import {
-  buildThought,
-  decide,
-  interpret,
-  localPerception,
-  planResponse,
-} from "../cognition/local-cognition";
-import { inferStateEffects } from "../cognition/state-effects";
 import { getCompanionRepository } from "../storage/repository-factory";
-import { guardCharacterReply, guardCloudCharacterReply } from "../dialogue/dialogue";
-import { factKeysForQuery, isMemoryRecallQuery, retrieveMemoryContext } from "../memory/retrieval";
-import { recoverRecentMemory } from "../memory/memory-consolidation";
-import { characterViewTopicKey, getMemoryHealth } from "../memory/model";
 import {
   applyWorldSimulationEmotion,
   createInitialWorldState,
@@ -32,12 +20,12 @@ import {
 } from "../world/world";
 import type { WorldState, WorldSimulationResult } from "../world/world";
 import { describeWorldActivityDetail, worldClock } from "../world/world";
-import { refreshInitiatives, renderLocalInitiative, sanitizeProactiveDialogueText } from "../initiative/initiative";
 import { checkSignal } from "../core/async";
-import type { CompanionRepository, ConversationCursor } from "../storage/repositories/interfaces";
-import { renderCloudLanguage, type CloudLanguageResult } from "../ai/cloud-language";
+import type { ConversationCursor } from "../storage/repositories/interfaces";
+import { renderCloudLanguage, type CloudConversationMetadata, type CloudLanguageResult } from "../ai/cloud-language";
+import { createDefaultEditableContext, normalizeEditableContext } from "../context/yuzuki-context";
 
-import { currentRomance, initialRomance, planRomance, type RomanceState } from "../relationship/relationship";
+import { currentRomance, initialRomance, type RomanceState } from "../relationship/relationship";
 import {
   buildIntimacyMind,
   createInitialIntimacyPreferences,
@@ -47,13 +35,14 @@ import {
   planIntimacyTurn,
   type IntimacyPreferencesDocument,
   type IntimacyState,
+  type IntimacyTurnAction,
 } from "../intimacy/intimacy";
 
 import {
   parseActivitySceneId,
   parseSequenceSceneId,
   resolveVisualEmotionState,
-  selectAmbientAppearance,
+  selectAmbientOrEmotionAppearance,
   selectAppearance,
   selectReadyToChatAppearance,
   selectSequenceAppearance,
@@ -62,26 +51,12 @@ import {
 import { resolveAppearanceRequest } from "../avatar/appearance-request";
 
 import {
-  analyzeLocalNLU,
-  applyLocalNLUToPerception,
-  detectLocalAppearanceRequest,
-  applyRetrospectiveNLU,
-  buildCausalRelations,
-  buildDialogueContext,
-  buildDialogueFrame,
-  buildRetrospectiveContext,
-  initiativeSemanticBridge,
-  logLocalDialogueTrace,
-  localDialogueRenderer,
-  planAutonomousDialogue,
-  planLocalDialogue,
-  resolveContextualNLU,
-  shouldUseRetrospectivePass,
-  type DialogueAct,
-  type DialogueConversationHint,
-  type LocalNLUResult,
-  type RenderDebug,
-} from "../local-dialogue/index";
+  detectAppearanceRequest,
+  detectExplicitSilenceRequest,
+  detectIntimacySignal,
+} from "../mechanics/turn-signals";
+import type { IntimacySignal } from "../intimacy/intimacy";
+
 
 export interface RuntimeState {
   appearance?: AppearanceState;
@@ -100,22 +75,12 @@ export interface ConversationLine {
   timestamp: number;
   proactive?: boolean;
   silent?: boolean;
-  templateId?: string;
-  dialogueActs?: DialogueAct[];
   appearanceAssetId?: string;
   languageSource?: "gpt" | "local";
   languageReason?: string;
-  conversationHint?: DialogueConversationHint;
+  conversationHint?: CloudConversationMetadata;
 }
 export interface RuntimeTrace {
-  usedGeminiPerception: boolean;
-  usedGeminiReply: boolean;
-  responseGuardFallback?: boolean;
-  responseGuardReason?: string;
-  decision: ReturnType<typeof decide>;
-  responsePlan: ReturnType<typeof planResponse>;
-  nlu?: LocalNLUResult;
-  localRenderer?: RenderDebug;
   cloudLanguage?: CloudLanguageResult;
   intimacy?: { enabled: boolean; phase: IntimacyState["phase"]; action: string };
   appearanceRequest?: {
@@ -125,8 +90,13 @@ export interface RuntimeTrace {
     selectedEmotion: string;
     reason: string;
   };
-  memoryContext: { memories: string[]; facts: string[]; openThreads: string[] };
-  reasoning?: { retrospective: boolean; recovered: boolean; scannedLines: number; causalRelations: number };
+  mechanics?: {
+    silenceRequested: boolean;
+    intimacySignal: IntimacySignal["kind"];
+    hardConstraint?: string;
+    reactionSource?: "gpt" | "unchanged-fallback";
+  };
+  manualContext?: { personalityChars: number; memoryChars: number; recentMessages: number };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
   maintenance?: Awaited<ReturnType<typeof maintainRuntime>>;
 }
@@ -208,59 +178,39 @@ export function reconcileRuntimeState(
   return normalizeAmbientAppearance(reconciled, [], now);
 }
 export function conversationFrom(events: CharacterEvent[]): ConversationLine[] {
-  return events
-    .flatMap((e): ConversationLine[] => {
-      if (
-        (e.type !== "message" && e.type !== "character_action") ||
-        e.source === "system"
-      )
-        return [];
-      const payload = e.payload as {
-        text?: string;
-        silent?: boolean;
-        localDialogue?: { templateId?: string; dialogueActs?: string[] };
-        appearanceAssetId?: string;
-        language?: {
-          source?: string;
-          reason?: string;
-          conversation?: DialogueConversationHint;
-        };
+  return events.flatMap((event): ConversationLine[] => {
+    if ((event.type !== "message" && event.type !== "character_action") || event.source === "system")
+      return [];
+    const payload = event.payload as {
+      text?: string;
+      silent?: boolean;
+      appearanceAssetId?: string;
+      language?: {
+        source?: string;
+        reason?: string;
+        conversation?: CloudConversationMetadata;
       };
-      const rawText = String(payload?.text ?? "").trim();
-      const text = e.type === "character_action"
-        ? sanitizeProactiveDialogueText(rawText)
-        : rawText;
-      const silent = e.source === "character" && payload?.silent === true;
-      const dialogueActs = Array.isArray(payload.localDialogue?.dialogueActs)
-        ? payload.localDialogue.dialogueActs.filter((act) => typeof act === "string") as DialogueAct[]
-        : undefined;
-      return text || silent
-        ? [
-            {
-              id: e.id,
-              role: e.source,
-              text,
-              timestamp: e.timestamp,
-              proactive: e.type === "character_action",
-              silent,
-              templateId: typeof payload.localDialogue?.templateId === "string" ? payload.localDialogue.templateId : undefined,
-              dialogueActs,
-              appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
-              languageSource: payload.language?.source === "gpt" || payload.language?.source === "local"
-                ? payload.language.source
-                : undefined,
-              languageReason: typeof payload.language?.reason === "string" ? payload.language.reason : undefined,
-              conversationHint: payload.language?.conversation && typeof payload.language.conversation === "object"
-                ? {
-                    topic: typeof payload.language.conversation.topic === "string" ? payload.language.conversation.topic : undefined,
-                    continuesPrevious: typeof payload.language.conversation.continuesPrevious === "boolean" ? payload.language.conversation.continuesPrevious : undefined,
-                    openThread: typeof payload.language.conversation.openThread === "string" ? payload.language.conversation.openThread : undefined,
-                  }
-                : undefined,
-            },
-          ]
-        : [];
-    });
+    };
+    const text = String(payload.text ?? "").trim();
+    const silent = event.source === "character" && payload.silent === true;
+    if (!text && !silent) return [];
+    return [{
+      id: event.id,
+      role: event.source,
+      text,
+      timestamp: event.timestamp,
+      proactive: event.type === "character_action",
+      silent,
+      appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
+      languageSource: payload.language?.source === "gpt" || payload.language?.source === "local"
+        ? payload.language.source
+        : undefined,
+      languageReason: typeof payload.language?.reason === "string" ? payload.language.reason : undefined,
+      conversationHint: payload.language?.conversation && typeof payload.language.conversation === "object"
+        ? payload.language.conversation
+        : undefined,
+    }];
+  });
 }
 
 function recentCharacterAppearanceIds(lines: ConversationLine[], limit = 6) {
@@ -270,10 +220,92 @@ function recentCharacterAppearanceIds(lines: ConversationLine[], limit = 6) {
     .map((line) => line.appearanceAssetId!);
 }
 
-const SX_TURN_PATTERN = /(поцел|целу|обними|раздень|возьми|ласкай|трогай|горяч|возбуд|секс|sex|эрот|интим|пошл|хочу тебя|хочу тебя|давай продолжим|продолжай|кончи|конч)/iu;
+/**
+ * Short-term dialogue window for GPT: keep both voices represented instead of
+ * allowing a run of multi-bubble character messages to push the user side out.
+ * The selected lines are returned in their original chronological order.
+ */
+export function selectBalancedRecentHistory(
+  lines: readonly ConversationLine[],
+  perRole = 15,
+) {
+  const users = lines.filter((line) => line.role === "user" && line.text.trim()).slice(-perRole);
+  const characters = lines.filter((line) => line.role === "character" && line.text.trim()).slice(-perRole);
+  const keep = new Set([...users, ...characters].map((line) => line.id));
+  return lines
+    .filter((line) => keep.has(line.id))
+    .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+}
+
+const EMOTION_REACTION_LIMITS = {
+  happiness: 0.08,
+  sadness: 0.08,
+  irritation: 0.10,
+  anxiety: 0.08,
+  curiosity: 0.05,
+  boredom: 0.05,
+  affection: 0.025,
+  romanticInterest: 0.02,
+} as const;
+
+const RELATIONSHIP_REACTION_LIMITS = {
+  trust: 0.008,
+  closeness: 0.010,
+  attachment: 0.006,
+  security: 0.012,
+  respect: 0.008,
+  unresolvedTension: 0.025,
+} as const;
+
+function normalizedReaction(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(-1, Math.min(1, value));
+}
+
+/**
+ * GPT judges the direction/relative strength of a social-emotional reaction.
+ * The engine remains authoritative over inertia by scaling every normalized
+ * request into a small per-turn delta. If cloud failed, no second semantic
+ * interpreter invents an emotional reaction; only ordinary time/world decay applies.
+ */
+export function applyBoundedCloudReaction(
+  emotion: EmotionalState,
+  relationship: RelationshipState,
+  cloud: CloudLanguageResult,
+  now: number,
+) {
+  if (cloud.used && cloud.emotionReaction && cloud.relationshipReaction) {
+    const emotionDelta = Object.fromEntries(
+      Object.entries(EMOTION_REACTION_LIMITS).map(([key, limit]) => [
+        key,
+        normalizedReaction(cloud.emotionReaction?.[key as keyof typeof EMOTION_REACTION_LIMITS]) * limit,
+      ]),
+    );
+    const relationshipDelta = Object.fromEntries(
+      Object.entries(RELATIONSHIP_REACTION_LIMITS).map(([key, limit]) => [
+        key,
+        normalizedReaction(cloud.relationshipReaction?.[key as keyof typeof RELATIONSHIP_REACTION_LIMITS]) * limit,
+      ]),
+    );
+    return {
+      emotion: applyEmotionDelta(emotion, emotionDelta, now),
+      relationship: applyRelationshipDelta(relationship, relationshipDelta, now),
+      source: "gpt" as const,
+    };
+  }
+  // If cloud is unavailable, do not let a second local interpretation layer
+  // invent emotional meaning. Time/world decay still applies in advance().
+  return {
+    emotion,
+    relationship,
+    source: "unchanged-fallback" as const,
+  };
+}
+
+const SX_TURN_PATTERN = /(поцел|целу|обними|раздень|возьми|ласкай|трогай|горяч|возбуд|секс|sex|эрот|интим|пошл|хочу тебя|давай продолжим|продолжай|кончи|конч)/iu;
 
 function shouldTriggerSequence(
-  nlu: LocalNLUResult,
+  signal: IntimacySignal,
   text: string,
   intimacy?: IntimacyState,
 ) {
@@ -281,10 +313,9 @@ function shouldTriggerSequence(
   const arousal = intimacy.arousal ?? 0;
   const highPhase = intimacy.phase === "intimate" || intimacy.phase === "high_intimacy";
   if (arousal < 0.72 && !highPhase) return false;
-  const kind = nlu.semantic.intimacy.kind;
-  if (["stop", "pause", "hesitant", "aftercare"].includes(kind)) return false;
-  if (["flirt", "approach", "consent", "resume"].includes(kind)) return true;
-  return nlu.semantic.intimacy.intimacyContext === true && SX_TURN_PATTERN.test(text);
+  if (["stop", "pause", "hesitant", "aftercare"].includes(signal.kind)) return false;
+  if (["flirt", "approach", "consent", "resume"].includes(signal.kind)) return true;
+  return signal.intimacyContext === true && SX_TURN_PATTERN.test(text);
 }
 
 const READY_TRANSITION_ACTIVITIES = new Set([
@@ -295,6 +326,9 @@ const READY_TRANSITION_ACTIVITIES = new Set([
 ]);
 
 export function shouldShowReadyToChat(state: RuntimeState, now: number) {
+  // A sleepy acknowledgement is not a wake-up transition. The first message
+  // received while she is still asleep must never produce ready_to_chat.
+  if (!state.world.isAwake || state.world.availability === "sleeping") return false;
   const currentActivityAsset = parseActivitySceneId(state.appearance?.assetId);
   const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
   // ready_to_chat (and the small transition poses leading into it) are one-turn
@@ -340,11 +374,14 @@ function normalizeAmbientAppearance(
   const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
   if (state.world.currentActivity === "chatting" && sinceLastInteraction < 90_000 && state.appearance?.assetId)
     return state;
-  const ambient = selectAmbientAppearance(state, now, {
-    recentAssetIds: recentCharacterAppearanceIds(history),
-    seed: `ambient|${state.world.currentActivity}|${state.world.timeOfDay}|${state.revision}`,
-  });
-  return ambient ? { ...state, appearance: ambient } : state;
+  const recentAssetIds = recentCharacterAppearanceIds(history);
+  return {
+    ...state,
+    appearance: selectAmbientOrEmotionAppearance(state, now, {
+      recentAssetIds,
+      seed: `ambient|${state.world.currentActivity}|${state.world.timeOfDay}|${state.revision}`,
+    }),
+  };
 }
 export async function bootstrapRuntime(
   uid: string | null,
@@ -506,39 +543,6 @@ export async function setIntimacyAdultMode(
   checkSignal(signal);
   return { ...current, intimacy: persisted };
 }
-const RETROSPECTIVE_MAX_LINES = 720;
-
-async function loadRetrospectiveConversation(
-  repository: CompanionRepository,
-  signal: AbortSignal,
-  currentHistory: readonly ConversationLine[],
-  excludeEventId: string,
-) {
-  const byId = new Map<string, ConversationLine>();
-  for (const line of currentHistory) if (line.id !== excludeEventId) byId.set(line.id, line);
-  let before: ConversationCursor | null = null;
-  let hasMore = true;
-  let pages = 0;
-  let previousCursorKey = "";
-  while (hasMore && byId.size < RETROSPECTIVE_MAX_LINES && pages < 6) {
-    const page = await repository.listConversationEvents({ before, limit: 120 });
-    checkSignal(signal);
-    for (const line of conversationFrom(page.events)) {
-      if (line.id !== excludeEventId) byId.set(line.id, line);
-    }
-    pages += 1;
-    hasMore = page.hasMore;
-    const next = page.nextCursor;
-    const cursorKey = next ? `${next.timestamp}:${next.id}` : "";
-    if (!next || cursorKey === previousCursorKey) break;
-    previousCursorKey = cursorKey;
-    before = next;
-  }
-  return [...byId.values()]
-    .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id))
-    .slice(-RETROSPECTIVE_MAX_LINES);
-}
-
 export interface TurnInput {
   id: string;
   text: string;
@@ -551,6 +555,113 @@ export interface TurnOptions {
   onChunk?: (text: string) => void;
   onPhase?: (text: string) => void;
 }
+function compactReplyBubble(value: string, max = 1400) {
+  const clean = value.replace(/\s+/gu, " ").trim();
+  if (clean.length <= max) return clean;
+  const slice = clean.slice(0, max + 1);
+  const boundary = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("? "),
+  );
+  if (boundary >= Math.floor(max * 0.55)) return slice.slice(0, boundary + 1).trim();
+  return `${clean.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
+const INTERNAL_LANGUAGE_LEAK_RE = /(?:openai|json\s*schema|system\s*prompt|local\s*brain|internal\s*state|внутренн(?:ий|ее)\s+(?:промпт|состояние)|системн(?:ый|ого)\s+промпт)/iu;
+
+function fallbackReply(kind?: string) {
+  if (kind === "sleeping") return "Мм… я ещё сплю. Я увидела сообщение, просто сейчас совсем сонная.";
+  if (kind === "intimacy_stop") return "Хорошо, остановимся.";
+  if (kind === "intimacy_pause") return "Хорошо, давай без спешки.";
+  return "Я сейчас что-то туплю, секунду.";
+}
+
+function hardConstraintKind(
+  world: WorldState,
+  intimacyAction: IntimacyTurnAction,
+  romancePhase: RomanceState["phase"],
+  signal: IntimacySignal,
+) {
+  if (!world.isAwake || world.availability === "sleeping") return "sleeping";
+  // The intimacy engine already decides whether a generic "стоп/подожди" is
+  // actually about an active intimate interaction. A private romance scene is
+  // also a real boundary-bearing scene even if the adult module itself is idle.
+  const romanceBoundary = romancePhase !== "neutral";
+  if (intimacyAction === "stop" || (romanceBoundary && signal.kind === "stop"))
+    return "intimacy_stop";
+  if (
+    intimacyAction === "pause" ||
+    intimacyAction === "check_in" ||
+    (romanceBoundary && ["pause", "hesitant"].includes(signal.kind))
+  ) return "intimacy_pause";
+  return undefined;
+}
+
+function hardConstraintSummary(kind: string | undefined) {
+  if (kind === "sleeping")
+    return "Yuzuki сейчас спит. Ответ должен быть очень коротким и сонным; не изображай полностью бодрствующую беседу.";
+  if (kind === "intimacy_stop")
+    return "Пользователь явно остановил интимное взаимодействие. Сразу остановись, не уговаривай и не продолжай интимный тон.";
+  if (kind === "intimacy_pause")
+    return "Пользователь попросил паузу/медленнее или выражает явное сомнение. Снизь темп и не продавливай продолжение.";
+  return undefined;
+}
+
+function cloudPartsOrFallback(cloud: CloudLanguageResult, kind?: string) {
+  if (cloud.used) {
+    const raw = cloud.messages?.length ? cloud.messages : cloud.text ? [cloud.text] : [];
+    const parts = raw
+      .map((part) => compactReplyBubble(String(part ?? "")))
+      .filter(Boolean)
+      .slice(0, 3);
+    const joined = parts.join(" ");
+    const hardMismatch =
+      kind === "sleeping"
+        ? joined.length > 320 || !/(?:спл|сонн|разбуд|мм|сон)/iu.test(joined)
+        : kind === "intimacy_stop"
+          ? !/(?:останов|стоп|не\s+буду|хорошо|понял|поняла|прекрат)/iu.test(joined)
+          : kind === "intimacy_pause"
+            ? !/(?:медлен|не\s+спеш|пауза|хорошо|спокойн|без\s+спеш)/iu.test(joined)
+            : false;
+    if (parts.length && !INTERNAL_LANGUAGE_LEAK_RE.test(joined) && !hardMismatch)
+      return { parts, usedCloud: true };
+  }
+  return { parts: [fallbackReply(kind)], usedCloud: false };
+}
+
+function syncRomanceState(
+  previous: RomanceState | undefined,
+  emotion: EmotionalState,
+  relationship: RelationshipState,
+  intimacy: IntimacyState,
+  intimacyAction: IntimacyTurnAction,
+  signal: IntimacySignal,
+  now: number,
+) {
+  const current = currentRomance(previous, now);
+  let phase: RomanceState["phase"] = "neutral";
+  if (
+    (["stop", "pause", "check_in"].includes(intimacyAction) ||
+      ["stop", "pause", "hesitant"].includes(signal.kind)) &&
+    current.phase !== "neutral"
+  ) phase = "paused";
+  else if ((intimacyAction === "resume" || signal.kind === "resume") && current.phase === "paused") phase = "neutral";
+  else if (current.phase === "paused") phase = "paused";
+  else if (["paused", "stopped"].includes(intimacy.interactionStatus)) phase = "paused";
+  else if (["intimate", "high_intimacy"].includes(intimacy.phase)) phase = "private";
+  else if (current.phase === "private") phase = "private";
+  else if (emotion.romanticInterest >= 0.52 && relationship.closeness >= 0.55) phase = "romantic";
+  else if (emotion.romanticInterest >= 0.34 && emotion.happiness >= 0.44) phase = "playful";
+  return {
+    ...current,
+    phase,
+    pending: null,
+    pendingUntil: 0,
+    updatedAt: now,
+  };
+}
+
 export async function handleUserMessage(
   input: TurnInput,
   current: RuntimeState,
@@ -566,6 +677,7 @@ export async function handleUserMessage(
   const { uid, signal } = options;
   const repository = repo(uid, signal);
   const replyId = `reply_${input.id}`;
+
   options.onPhase?.("Проверяем сохранение…");
   const [existing, persisted, persistedIntimacy, persistedIntimacyPreferences] = await Promise.all([
     repository.getEvent(replyId),
@@ -575,20 +687,13 @@ export async function handleUserMessage(
   ]);
   checkSignal(signal);
   const preflightMs = Math.round(performance.now() - started);
+
   if (existing) {
     await repository.dismissPendingTurn(input.id);
     const boot = await bootstrapRuntime(uid, signal);
-    const payload = existing.payload as {
-      text?: string;
-      silent?: boolean;
-      localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
-      appearanceAssetId?: string;
-    };
+    const payload = existing.payload as { text?: string; silent?: boolean; appearanceAssetId?: string };
     const recoveredReplies = boot.recentConversation
-      .filter((line) =>
-        line.role === "character" &&
-        (line.id === replyId || line.id.startsWith(`${replyId}_`)),
-      )
+      .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     const replyMessages = recoveredReplies.length
       ? recoveredReplies
@@ -598,8 +703,6 @@ export async function handleUserMessage(
           text: String(payload.text ?? ""),
           timestamp: existing.timestamp,
           silent: payload.silent === true,
-          templateId: payload.localDialogue?.templateId,
-          dialogueActs: payload.localDialogue?.dialogueActs,
           appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
         }];
     return {
@@ -609,16 +712,11 @@ export async function handleUserMessage(
       replyId,
       replyTimestamp: existing.timestamp,
       appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
-      renderMeta: payload.localDialogue
-        ? {
-            templateId: payload.localDialogue.templateId,
-            dialogueActs: payload.localDialogue.dialogueActs,
-          }
-        : undefined,
       state: boot.state,
       trace: null as RuntimeTrace | null,
     };
   }
+
   const { snapshot, world: latestWorld } = persisted;
   const base = snapshot
     ? {
@@ -645,67 +743,28 @@ export async function handleUserMessage(
     payload: { text: input.text },
     importance: 0.35,
   });
-  options.onPhase?.("Вспоминаем разговор…");
+
+  options.onPhase?.("Собираем контекст…");
   const contextStarted = performance.now();
-  const initialNlu = analyzeLocalNLU(input.text);
-  const explicitMemoryLookup =
-    ["memory_question", "ask_user_memory"].includes(initialNlu.intent) ||
-    isMemoryRecallQuery(input.text) ||
-    factKeysForQuery(input.text).length > 0;
-  // Short ordinary follow-ups need recent surface context for retrieval. Direct
-  // memory questions do not: mixing the last chat lines into "где я работаю?"
-  // can drown the very fact the user is testing.
-  const memoryQuery = explicitMemoryLookup
-    ? input.text
-    : input.text.trim().split(/\s+/u).filter(Boolean).length <= 8
-      ? [...options.history.slice(-2).map((line) => line.text), input.text]
-          .filter(Boolean)
-          .join("\n")
-      : input.text;
   const historyPromise = base.revision !== current.revision
-    ? repository.listConversationEvents({ limit: 80 }).then(page => conversationFrom(page.events))
+    ? repository.listConversationEvents({ limit: 80 }).then((page) => conversationFrom(page.events))
     : Promise.resolve(options.history);
-  let memoryContext: Awaited<ReturnType<typeof retrieveMemoryContext>>;
-  let history: ConversationLine[];
-  if (explicitMemoryLookup) {
-    // Memory consolidation normally runs after a turn. A direct recall question
-    // must not race that background job, otherwise Yuzuki can "forget" a fact
-    // that was written only one turn ago. Flush pending evidence only for recall
-    // turns so ordinary chat keeps the fast parallel path.
-    await repository.appendEvent(userEvent);
-    await recoverRecentMemory(repository, 120);
-    [memoryContext, history] = await Promise.all([
-      retrieveMemoryContext(memoryQuery, repository, now),
-      historyPromise,
-    ]);
-  } else {
-    [, memoryContext, history] = await Promise.all([
-      repository.appendEvent(userEvent),
-      retrieveMemoryContext(memoryQuery, repository, now),
-      historyPromise,
-    ]);
-  }
+  const [, history, storedEditableContext] = await Promise.all([
+    repository.appendEvent(userEvent),
+    historyPromise,
+    repository.loadEditableContext(),
+  ]);
   checkSignal(signal);
-  let contextMs = Math.round(performance.now() - contextStarted);
-  memoryContext.memories = memoryContext.memories.filter(
-    (m) => !m.sourceEventIds.includes(input.id),
+  const editableContext = normalizeEditableContext(
+    storedEditableContext ?? createDefaultEditableContext(now),
+    now,
   );
-  memoryContext.facts = memoryContext.facts.filter(
-    (f) => !f.sourceEventIds.includes(input.id),
-  );
-  const historyForDialogue = history.slice(-24).map((line) => ({
-    id: line.id,
-    role: line.role,
-    text: line.text,
-    timestamp: line.timestamp,
-    templateId: line.templateId,
-    dialogueActs: line.dialogueActs,
-    conversationHint: line.conversationHint,
-  }));
+  const contextMs = Math.round(performance.now() - contextStarted);
+  const stableHistory = history.filter((line) => line.id !== input.id);
+  const recentHistory = selectBalancedRecentHistory(stableHistory, 15);
+
   const baseTurnWorld = before.world;
-  const previousUserLine = [...history]
-    .reverse()
-    .find((line) => line.role === "user" && line.id !== input.id);
+  const previousUserLine = [...stableHistory].reverse().find((line) => line.role === "user");
   const recentSleepPing = Boolean(
     baseTurnWorld.availability === "sleeping" &&
       previousUserLine &&
@@ -714,9 +773,6 @@ export async function handleUserMessage(
       now - baseTurnWorld.lastUserInteractionAt >= 0 &&
       now - baseTurnWorld.lastUserInteractionAt <= SLEEP_WAKE_FOLLOWUP_MS,
   );
-  // First message while Yuzuki is asleep gets a sleepy acknowledgement. A
-  // second recent message means the user is continuing the conversation, so
-  // this turn wakes her and the normal dialogue/world pipeline takes over.
   const turnWorld: WorldState = recentSleepPing
     ? {
         ...baseTurnWorld,
@@ -726,100 +782,18 @@ export async function handleUserMessage(
         updatedAt: now,
       }
     : baseTurnWorld;
-  const initialFrame = buildDialogueFrame(historyForDialogue, initialNlu);
-  let nlu = resolveContextualNLU(initialNlu, initialFrame, input.text);
-  let dialogueFrame = buildDialogueFrame(historyForDialogue, nlu);
-  let retrospective: ReturnType<typeof buildRetrospectiveContext> | undefined;
-  let reasoningHistory = historyForDialogue;
-  if (shouldUseRetrospectivePass(nlu, dialogueFrame, input.text)) {
-    options.onPhase?.("Перечитываем контекст…");
-    const retrospectiveConversation = await loadRetrospectiveConversation(repository, signal, history, input.id);
-    const retrospectiveHistory = retrospectiveConversation.map((line) => ({
-      id: line.id, role: line.role, text: line.text, timestamp: line.timestamp,
-      templateId: line.templateId, dialogueActs: line.dialogueActs, conversationHint: line.conversationHint,
-    }));
-    retrospective = buildRetrospectiveContext(retrospectiveHistory, nlu, dialogueFrame, input.text);
-    nlu = applyRetrospectiveNLU(nlu, retrospective, input.text);
-    dialogueFrame = buildDialogueFrame(historyForDialogue, nlu);
-    reasoningHistory = retrospectiveHistory;
-    contextMs = Math.round(performance.now() - contextStarted);
-  }
-  const causalRelations = buildCausalRelations(reasoningHistory, input.text);
-  const currentCausal = causalRelations.find((relation) => relation.sourceId === "current-turn");
-  const causalFocus = currentCausal ?? retrospective?.causalRelations[0];
-  const previousNlu = dialogueFrame.previousUserText
-    ? analyzeLocalNLU(dialogueFrame.previousUserText)
-    : undefined;
-  const counterArgumentCue = nlu.isQuestion && /(?:разве|но\s+ведь|с\s+другой\s+стороны|а\s+если)/iu.test(input.text);
-  const continuityFocus = nlu.semantic.focus ?? (
-    ["ask_followup", "reference_previous_topic", "ask_character_opinion", "ask_character_preference", "ask_why"].includes(nlu.intent) || counterArgumentCue
-      ? previousNlu?.semantic.focus
-      : undefined
-  );
-  const needsSelfContinuity = Boolean(
-    continuityFocus && (
-      nlu.semantic.asksCharacterView || counterArgumentCue ||
-      ["ask_character_opinion", "ask_character_preference", "ask_for_opinion", "ask_followup", "reference_previous_topic", "ask_why"].includes(nlu.intent) ||
-      ["believe", "like", "dislike", "change_mind"].includes(nlu.semantic.stance)
-    )
-  );
-  if (needsSelfContinuity && continuityFocus) {
-    const key = characterViewTopicKey(continuityFocus);
-    if (key) {
-      const neededKeys = [`character.opinion.${key}`, `character.tension.${key}`]
-        .filter((factKey) => !memoryContext.facts.some((fact) => fact.status === "active" && fact.key === factKey));
-      if (neededKeys.length) {
-        const continuityFacts = (await Promise.all(
-          neededKeys.map((factKey) => repository.listKnowledgeFacts({ key: factKey, statuses: ["active"], limit: 4 })),
-        )).flat();
-        const mergedFacts = new Map(memoryContext.facts.map((fact) => [fact.id, fact]));
-        for (const fact of continuityFacts) mergedFacts.set(fact.id, fact);
-        memoryContext.facts = [...mergedFacts.values()];
-        checkSignal(signal);
-      }
-    }
-  }
-  const perception = applyLocalNLUToPerception(
-    localPerception(
-      input.text,
-      history.slice(-6).map((line) => ({ role: line.role, text: line.text })),
-    ),
-    nlu,
-  );
-  const interpretation = interpret(
-    perception,
-    memoryContext,
-    before.emotion,
-    before.relationship,
-  );
-  const preliminary = decide(
-    defaultCharacter,
-    perception,
-    interpretation,
-    before.emotion,
-    before.relationship,
-    turnWorld,
-  );
-  const appearanceRequest = detectLocalAppearanceRequest(input.text);
-  const effects = inferStateEffects(
-    perception,
-    preliminary,
-    nlu.intent,
-    before.emotion,
-    before.relationship,
-    appearanceRequest,
-  );
-  const emotion = applyEmotionDelta(before.emotion, effects.emotion, now);
-  const relationship = applyRelationshipDelta(
-    before.relationship,
-    effects.relationship,
-    now,
-  );
+
+  const silenceRequested = detectExplicitSilenceRequest(input.text);
+  const intimacySignal = detectIntimacySignal(input.text);
+  const appearanceRequest = detectAppearanceRequest(input.text);
+  let emotion = before.emotion;
+  let relationship = before.relationship;
+
   const intimacy = planIntimacyTurn({
     character: defaultCharacter,
     previous: before.intimacy,
     preferences: intimacyPreferences,
-    signal: nlu.semantic.intimacy,
+    signal: intimacySignal,
     emotion,
     relationship,
     world: turnWorld,
@@ -828,145 +802,51 @@ export async function handleUserMessage(
   const intimacyMind = buildIntimacyMind({
     state: intimacy.state,
     preferences: intimacyPreferences,
-    signal: nlu.semantic.intimacy,
+    signal: intimacySignal,
     emotion,
     relationship,
     world: turnWorld,
   });
-  const thought = buildThought(
-    defaultCharacter,
-    perception,
-    interpretation,
-    emotion,
-    relationship,
-    memoryContext,
-    {
-      userText: input.text,
-      previousUserText: dialogueFrame.previousUserText,
-      topic: nlu.topic ?? dialogueFrame.previousTopic,
-      focus: continuityFocus,
-      semanticStance: nlu.semantic.stance,
-      reason: nlu.semantic.reason,
-      sentiment: nlu.sentiment,
-      asksCharacterView: nlu.semantic.asksCharacterView ||
-        ["ask_character_opinion", "ask_character_preference", "ask_for_opinion"].includes(nlu.intent),
-      negation: nlu.negation,
-      meaningfulTokens: nlu.semantic.meaningfulTokens,
-      intimacyMind,
-      causalCause: causalFocus?.cause,
-      causalEffect: causalFocus?.effect,
-      causalRelation: causalFocus?.kind,
-      causalConfidence: causalFocus?.confidence,
-      retrospectiveEcho: retrospective?.summary,
-      retrospectiveRecovered: retrospective?.recovered === true,
-    },
-  );
-  let decision = decide(
-    defaultCharacter,
-    perception,
-    interpretation,
-    emotion,
-    relationship,
+  const constraintKind = hardConstraintKind(
     turnWorld,
-    thought,
+    intimacy.action,
+    currentRomance(before.romance, now).phase,
+    intimacySignal,
   );
-  let responsePlan = planResponse(
-    defaultCharacter,
-    perception,
-    interpretation,
-    decision,
-    emotion,
-    turnWorld,
-  );
-  const romance = planRomance({ text: input.text, previous: before.romance, now,
-    character: defaultCharacter, emotion, relationship,
-    world: turnWorld, decision, plan: responsePlan });
-  decision = romance.decision;
-  responsePlan = romance.plan;
-  if (turnWorld.availability === "sleeping" && decision.action === "stay_silent" && decision.content.mode !== "silence") {
-    const sleepyReply = "Мм… я ещё сплю. Я увидела сообщение, просто сейчас совсем сонная.";
-    decision = {
-      ...decision,
-      action: "acknowledge",
-      tone: "sleepy_soft",
-      shouldAskFollowUp: false,
-      content: {
-        ...decision.content,
-        mode: "support",
-        summary: "Короткая сонная реакция вместо полного молчания.",
-        locked: true,
-        fallbackText: sleepyReply,
-      },
-    };
-    responsePlan = {
-      ...responsePlan,
-      intent: "acknowledge",
-      tone: "sleepy_soft",
-      length: "very_short",
-      questionMode: "none",
-    };
-  }
-  const silent = decision.action === "stay_silent";
+  const silent = silenceRequested;
   options.onPhase?.(silent ? "Она решила промолчать…" : "Она отвечает…");
   const generationStarted = performance.now();
-  const dialogueContext = buildDialogueContext({
-    userText: input.text,
-    turnId: input.id,
-    now,
-    character: defaultCharacter,
-    emotion,
-    relationship,
-    world: turnWorld,
-    romance: romance.state,
-    intimacy: intimacy.state,
-    intimacyMind,
-    intimacyPreferences,
-    memoryContext,
-    history: historyForDialogue,
-    nlu,
-    perception,
-    thought,
-    decision,
-    responsePlan,
-    retrospective,
-    causalRelations,
-  });
-  const localPlan = planLocalDialogue(dialogueContext, romance.localText);
-  const visualRuntime = {
+
+  let romance = syncRomanceState(before.romance, emotion, relationship, intimacy.state, intimacy.action, intimacySignal, now);
+  const visualRuntime: RuntimeState = {
     ...before,
     world: turnWorld,
     emotion,
     relationship,
-    romance: romance.state,
+    romance,
     intimacy: intimacy.state,
   };
-  const baseVisualEmotion = resolveVisualEmotionState(
-    visualRuntime,
-    {
-      decision,
-      responsePlan,
-      dialogueActs: localPlan.dialogueActs,
-      sourceIntent: localPlan.sourceIntent,
-      eventIntensity: nlu.intensity,
-    },
-  );
+  const baseVisualEmotion = resolveVisualEmotionState(visualRuntime, {
+    intimacySignalKind: intimacySignal.kind,
+    eventIntensity: intimacySignal.strength,
+    hardConstraintKind: constraintKind,
+  });
   const appearanceResolution = resolveAppearanceRequest(
     visualRuntime,
     baseVisualEmotion,
     appearanceRequest,
     input.id,
   );
-  const visualEmotion = appearanceResolution.visualEmotion;
-  const recentAppearanceIds = recentCharacterAppearanceIds(history);
-  const sequenceAppearance = shouldTriggerSequence(nlu, input.text, intimacy.state)
+  const recentAppearanceIds = recentCharacterAppearanceIds(stableHistory);
+  const sequenceAppearance = shouldTriggerSequence(intimacySignal, input.text, intimacy.state)
     ? selectSequenceAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
     : null;
   const readyAppearance = !sequenceAppearance && shouldShowReadyToChat(visualRuntime, now)
     ? selectReadyToChatAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
     : null;
-  const appearance = sequenceAppearance?.appearance ?? readyAppearance ?? selectAppearance(
+  let appearance = sequenceAppearance?.appearance ?? readyAppearance ?? selectAppearance(
     visualRuntime,
-    visualEmotion,
+    appearanceResolution.visualEmotion,
     now,
     { recentAssetIds: recentAppearanceIds, seed: input.id },
   );
@@ -984,68 +864,37 @@ export async function handleUserMessage(
           family: parseActivitySceneId(readyAppearance.assetId)?.activity ?? "ready_to_chat",
         }
       : undefined;
-  const rendered = await localDialogueRenderer.render(localPlan, dialogueContext, { emergencyFallback: true });
-  logLocalDialogueTrace({ userText: input.text, nlu, plan: localPlan, rendered });
-  checkSignal(signal);
-  const localGuarded = guardCharacterReply(rendered.text, input.text, decision, responsePlan);
-  let guarded = localGuarded;
-  let replyParts = localGuarded.text ? [localGuarded.text] : [];
-  let cloudLanguage: CloudLanguageResult = { attempted: false, used: false, reason: "local-only" };
+
+  let cloudLanguage: CloudLanguageResult = {
+    attempted: false,
+    used: false,
+    reason: silent ? "explicit-silence" : "not-attempted",
+  };
+  let replyParts: string[] = [];
+
   if (!silent) {
     cloudLanguage = await renderCloudLanguage({
+      mode: "reply",
       userText: input.text,
-      intent: nlu.intent,
-      dialogueActs: localPlan.dialogueActs,
-      goal: localPlan.goal,
-      tone: responsePlan.tone,
-      length: responsePlan.length,
+      personality: editableContext.personality,
+      memory: editableContext.memory,
       sceneMechanic,
-      semantic: {
-        topic: nlu.topic,
-        focus: nlu.semantic.focus,
-        subject: nlu.semantic.subject,
-        stance: nlu.semantic.stance,
-        questionType: nlu.questionType,
-        isQuestion: nlu.isQuestion,
-        reciprocal: nlu.semantic.reciprocal,
-        asksCharacterView: nlu.semantic.asksCharacterView,
-        wantsAdvice: nlu.semantic.wantsAdvice,
-        wantsListening: nlu.semantic.wantsListening,
-        confidence: nlu.confidence,
-        appearanceRequest: appearanceResolution.requested
-          ? {
-              requestedVibe: appearanceResolution.requestedVibe,
-              outcome: appearanceResolution.outcome,
-              reason: appearanceResolution.reason,
-              selectedEmotion: appearanceResolution.selectedEmotion,
-              suggestive: appearanceResolution.suggestive,
-            }
-          : undefined,
-      },
-      decision: {
-        action: decision.action,
-        mode: decision.content.mode,
-        stance: decision.content.stance,
-        summary: decision.content.summary,
-        locked: decision.content.locked,
-        shouldAskFollowUp: decision.shouldAskFollowUp,
-        shouldReferenceMemory: decision.shouldReferenceMemory,
-      },
-      continuity: {
-        currentTopic: dialogueFrame.currentTopic,
-        previousTopic: dialogueFrame.previousTopic,
-        pendingQuestion: dialogueFrame.pendingQuestion,
-        previousUserText: dialogueFrame.previousUserText,
-        previousUserTextBeforeLast: dialogueFrame.previousUserTextBeforeLast,
-        previousCharacterText: dialogueFrame.previousCharacterText,
-        previousCharacterTextBeforeLast: dialogueFrame.previousCharacterTextBeforeLast,
-        lastUserIntent: dialogueFrame.lastUserIntent,
-        lastCharacterIntent: dialogueFrame.lastCharacterIntent,
-        lastCharacterTopic: dialogueFrame.lastCharacterTopic,
-        lastCharacterOpenThread: dialogueFrame.lastCharacterOpenThread,
-        lastCharacterContinuesPrevious: dialogueFrame.lastCharacterContinuesPrevious,
-        turnsOnTopic: dialogueFrame.turnsOnTopic,
-      },
+      appearanceRequest: appearanceResolution.requested
+        ? {
+            requestedVibe: appearanceResolution.requestedVibe,
+            outcome: appearanceResolution.outcome,
+            reason: appearanceResolution.reason,
+            selectedEmotion: appearanceResolution.selectedEmotion,
+            suggestive: appearanceResolution.suggestive,
+          }
+        : undefined,
+      constraint: constraintKind
+        ? {
+            locked: true,
+            kind: constraintKind,
+            summary: hardConstraintSummary(constraintKind),
+          }
+        : undefined,
       world: {
         timeOfDay: turnWorld.timeOfDay,
         location: turnWorld.currentLocation,
@@ -1076,7 +925,7 @@ export async function handleUserMessage(
         affection: emotion.affection,
         romanticInterest: emotion.romanticInterest,
       },
-      romancePhase: romance.state.phase,
+      romancePhase: romance.phase,
       intimacy: {
         enabled: intimacy.state.adultModeEnabled,
         phase: intimacy.state.phase,
@@ -1086,10 +935,10 @@ export async function handleUserMessage(
         arousal: intimacy.state.arousal,
         initiativeDrive: intimacy.state.initiativeDrive,
         signal: {
-          kind: nlu.semantic.intimacy.kind,
-          strength: nlu.semantic.intimacy.strength,
-          explicit: nlu.semantic.intimacy.explicit,
-          intimacyContext: nlu.semantic.intimacy.intimacyContext === true,
+          kind: intimacySignal.kind,
+          strength: intimacySignal.strength,
+          explicit: intimacySignal.explicit,
+          intimacyContext: intimacySignal.intimacyContext === true,
         },
         mind: {
           active: intimacyMind.active,
@@ -1108,90 +957,55 @@ export async function handleUserMessage(
           reflection: intimacyMind.reflection,
         },
       },
-      thought: {
-        observation: thought.observation,
-        interpretation: thought.interpretation,
-        feeling: thought.feeling,
-        desire: thought.desire,
-        concern: thought.concern,
-        stance: thought.stance,
-        memoryEcho: thought.memoryEcho,
-        reconsideration: thought.reconsideration,
-        relationalEmotion: thought.relationalEmotion,
-        relationalReflection: thought.relationalReflection,
-        retrospectiveEcho: thought.retrospectiveEcho,
-      },
-      // v0.17: GPT owns normal conversational continuity. Give it a real
-      // short-term dialogue window; durable memory still comes from Local Brain.
-      recentHistory: historyForDialogue.slice(-14).map((line) => ({
-        role: line.role,
-        text: line.text,
-      })),
-      recoveredHistory: retrospective?.evidence.slice(-4).map((line) => ({
-        role: line.role,
-        text: line.text,
-      })),
-      memories: memoryContext.memories.slice(0, 6).map((memory) => ({
-        summary: memory.summary,
-        kind: memory.kind,
-        importance: memory.importance,
-        emotionalWeight: memory.emotionalWeight,
-        confidence: memory.confidence,
-        retrievalStrength: memory.retrievalStrength,
-      })),
-      facts: memoryContext.facts.slice(0, 6).map((fact) => ({
-        statement: fact.statement,
-        subject: fact.subject,
-        confidence: fact.confidence,
-      })),
-      openThreads: memoryContext.openThreads.slice(0, 3).map((thread) => ({
-        summary: thread.summary,
-        priority: thread.priority,
-      })),
-      retrospective: retrospective?.summary,
-      causal: causalRelations.slice(0, 2).map((relation) =>
-        `${relation.cause} → ${relation.effect}`,
-      ),
-      locked: decision.content.locked,
-      silent,
+      recentHistory: recentHistory.map((line) => ({ role: line.role, text: line.text })),
+      silent: false,
     }, signal);
     checkSignal(signal);
-    if (cloudLanguage.used && cloudLanguage.text) {
-      const candidateParts = (cloudLanguage.messages?.length
-        ? cloudLanguage.messages
-        : [cloudLanguage.text])
-        .map((part) => part.replace(/\s+/gu, " ").trim())
-        .filter(Boolean)
-        .slice(0, 3);
-      const candidateText = candidateParts.join(" ");
-      const cloudGuarded = guardCloudCharacterReply(
-        candidateText,
-        input.text,
-        decision,
-        responsePlan,
-      );
-      // GPT owns ordinary conversational wording/continuity. Local Guard now
-      // protects only durable invariants; if one is violated we keep the local
-      // fallback rather than persisting a contradictory character state.
-      if (!cloudGuarded.usedFallback && candidateParts.length) {
-        replyParts = candidateParts;
-        guarded = { ...cloudGuarded, text: candidateParts.join("\n") };
-      } else {
-        cloudLanguage = { ...cloudLanguage, used: false, reason: cloudGuarded.reason ?? "response-guard" };
-      }
+    const selected = cloudPartsOrFallback(cloudLanguage, constraintKind);
+    replyParts = selected.parts;
+    if (!selected.usedCloud && cloudLanguage.used) {
+      cloudLanguage = { ...cloudLanguage, used: false, reason: "minimal-response-guard" };
     }
   }
-  if (!replyParts.length && guarded.text) replyParts = [guarded.text];
+
+  const stateReaction = applyBoundedCloudReaction(
+    before.emotion,
+    before.relationship,
+    cloudLanguage,
+    now,
+  );
+  emotion = stateReaction.emotion;
+  relationship = stateReaction.relationship;
+  romance = syncRomanceState(romance, emotion, relationship, intimacy.state, intimacy.action, intimacySignal, now);
+
+  if (!sequenceAppearance && !readyAppearance && !appearanceResolution.requested) {
+    const reactedVisualRuntime: RuntimeState = {
+      ...visualRuntime,
+      emotion,
+      relationship,
+      romance,
+      intimacy: intimacy.state,
+    };
+    const reactedVisualEmotion = resolveVisualEmotionState(reactedVisualRuntime, {
+      emotionTone: cloudLanguage.signals?.emotionTone,
+      userTone: cloudLanguage.signals?.userTone,
+      relationshipEvent: cloudLanguage.signals?.relationshipEvent,
+      intimacySignalKind: intimacySignal.kind,
+      eventIntensity: intimacySignal.strength,
+      hardConstraintKind: constraintKind,
+    });
+    appearance = selectAppearance(
+      reactedVisualRuntime,
+      reactedVisualEmotion,
+      now,
+      { recentAssetIds: recentAppearanceIds, seed: `${input.id}:reaction` },
+    );
+  }
+
   const reply = replyParts.join("\n");
   const generationMs = Math.round(performance.now() - generationStarted);
-  // Show one temporary combined bubble while the turn is still unsaved. After
-  // commit, a cloud turn may materialize as 2–3 separate human-like bubbles.
   if (!silent) publish(reply);
-  const replyTimestamp = runtimeNow({
-    ...before,
-    emotion,
-    relationship,
-  });
+  const replyTimestamp = runtimeNow({ ...before, emotion, relationship });
   const characterEvents = (silent ? [""] : replyParts).map((part, index, all) =>
     createEvent({
       id: index === 0 ? replyId : `${replyId}_${index + 1}`,
@@ -1204,53 +1018,16 @@ export async function handleUserMessage(
         silent,
         inReplyTo: input.id,
         messagePart: { index: index + 1, count: all.length },
-        decision: decision.action,
-        tone: responsePlan.tone,
-        contentMode: decision.content.mode,
-        contentStance: decision.content.stance,
-        contentLocked: decision.content.locked,
-        visualCue: responsePlan.visualCue,
-        mindContinuity:
-          index === 0 && thought.topic && thought.topicKey && thought.position && thought.positionReason && thought.persistence >= 0.58
-            ? {
-                topic: thought.topic,
-                topicKey: thought.topicKey,
-                position: thought.position,
-                reason: thought.positionReason,
-                confidence: thought.positionConfidence,
-                persistence: thought.persistence,
-                reconsideration: thought.reconsideration,
-                challengeDirection: thought.challengeDirection,
-                changedFrom: thought.changedFrom,
-              }
-            : undefined,
-        romanceAction: index === 0 ? romance.action : "none",
-        romancePhase: romance.state.phase,
+        romanceAction: index === 0 && ["intimacy_stop", "intimacy_pause"].includes(constraintKind ?? "") ? "pause" : "none",
+        romancePhase: romance.phase,
         intimacyAction: index === 0 ? intimacy.action : "none",
         intimacyPhase: intimacy.state.phase,
-        intimacyMind: index === 0 && intimacyMind.active
-          ? {
-              desire: intimacyMind.desire,
-              tenderness: intimacyMind.tenderness,
-              caution: intimacyMind.caution,
-              conflicted: intimacyMind.conflicted,
-              preferredPace: intimacyMind.preferredPace,
-              wantsCloseness: intimacyMind.wantsCloseness,
-              wantsMore: intimacyMind.wantsMore,
-            }
-          : undefined,
         appearanceAssetId: appearance.assetId,
         language: {
           source: cloudLanguage.used ? "gpt" : "local",
           reason: cloudLanguage.used ? undefined : cloudLanguage.reason,
           model: cloudLanguage.model,
           conversation: cloudLanguage.used ? cloudLanguage.conversation : undefined,
-        },
-        localDialogue: {
-          templateId: rendered.templateId,
-          dialogueActs: rendered.dialogueActs,
-          openingPhrase: index === 0 ? rendered.openingPhrase : undefined,
-          fallbackLevel: rendered.fallbackLevel,
         },
       },
       importance: index === 0 ? 0.35 : 0.2,
@@ -1259,6 +1036,7 @@ export async function handleUserMessage(
   const world = markUserInteraction(turnWorld, replyTimestamp, {
     engaged: !silent && turnWorld.availability !== "sleeping",
   });
+
   options.onPhase?.("Сохраняем ответ…");
   const saveStarted = performance.now();
   try {
@@ -1270,24 +1048,18 @@ export async function handleUserMessage(
           [
             ...(current.pendingWorldEvents ?? []),
             ...worldEvents(advanced.simulation),
-          ].map((e) => [e.id, e]),
+          ].map((event) => [event.id, event]),
         ).values(),
       ],
-      { emotion, relationship, romance: romance.state, appearance },
+      { emotion, relationship, romance, appearance },
       world,
       base.revision,
     );
   } catch (error) {
-    if (!(error instanceof Error) || error.message !== "turn-already-committed")
-      throw error;
+    if (!(error instanceof Error) || error.message !== "turn-already-committed") throw error;
     const saved = await repository.getEvent(replyId);
     const boot = await bootstrapRuntime(uid, signal);
-    const savedPayload = saved!.payload as {
-      text?: string;
-      silent?: boolean;
-      localDialogue?: { templateId?: string; dialogueActs?: DialogueAct[] };
-      appearanceAssetId?: string;
-    };
+    const savedPayload = saved!.payload as { text?: string; silent?: boolean; appearanceAssetId?: string };
     const savedReplies = boot.recentConversation
       .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
@@ -1298,23 +1070,16 @@ export async function handleUserMessage(
       replyId,
       replyTimestamp: saved!.timestamp,
       appearanceAssetId: typeof savedPayload.appearanceAssetId === "string" ? savedPayload.appearanceAssetId : undefined,
-      renderMeta: savedPayload.localDialogue
-        ? {
-            templateId: savedPayload.localDialogue.templateId,
-            dialogueActs: savedPayload.localDialogue.dialogueActs,
-          }
-        : undefined,
       state: boot.state,
       trace: null,
     };
   }
+
   let savedIntimacy = intimacy.state;
   if (intimacy.changed) {
     try {
       savedIntimacy = await repository.commitIntimacyState(intimacy.state, intimacy.state.revision);
     } catch (error) {
-      // The chat turn is already durably committed. An intimacy revision race
-      // must not turn a saved message into a failed message; use the newer state.
       const latest = await repository.loadIntimacyState();
       if (latest) savedIntimacy = latest;
       else if (!(error instanceof Error && error.message.includes("intimacy-state-conflict"))) throw error;
@@ -1323,7 +1088,7 @@ export async function handleUserMessage(
   const evolvedIntimacyPreferences = evolveIntimacyPreferences(intimacyPreferences, {
     before: before.intimacy ?? createInitialIntimacyState(now),
     after: savedIntimacy,
-    signal: nlu.semantic.intimacy,
+    signal: intimacySignal,
     eventId: replyId,
     now: replyTimestamp,
   });
@@ -1334,28 +1099,20 @@ export async function handleUserMessage(
         intimacyPreferences.revision,
       );
     } catch (error) {
-      // Preference learning is secondary to the already committed chat turn.
-      // A concurrent window may have learned from another interaction first.
       if (!(error instanceof Error && error.message.includes("intimacy-preferences-conflict"))) throw error;
     }
   }
   checkSignal(signal);
-  // Reinforcement is deliberately outside the response critical path. The
-  // answer is already validated and committed; a separate repository instance
-  // has no turn AbortSignal, so the write can finish after the UI becomes idle.
-  if (memoryContext.memories.length) {
-    const accessedMemoryIds = memoryContext.memories.map((memory) => memory.id);
-    void getCompanionRepository(defaultCharacter.id, uid)
-      .reinforceMemories(accessedMemoryIds, replyTimestamp)
-      .catch(() => {});
-  }
+
   const trace: RuntimeTrace = {
-    timings: { preflightMs, contextMs, generationMs, saveMs: Math.round(performance.now() - saveStarted),
-      totalMs: Math.round(performance.now() - started), firstTextMs },
-    usedGeminiPerception: false,
-    usedGeminiReply: false,
-    nlu,
-    localRenderer: rendered.debug,
+    timings: {
+      preflightMs,
+      contextMs,
+      generationMs,
+      saveMs: Math.round(performance.now() - saveStarted),
+      totalMs: Math.round(performance.now() - started),
+      firstTextMs,
+    },
     cloudLanguage,
     intimacy: { enabled: savedIntimacy.adultModeEnabled, phase: savedIntimacy.phase, action: intimacy.action },
     appearanceRequest: {
@@ -1365,22 +1122,19 @@ export async function handleUserMessage(
       selectedEmotion: appearanceResolution.selectedEmotion,
       reason: appearanceResolution.reason,
     },
-    responseGuardFallback: guarded.usedFallback,
-    responseGuardReason: guarded.reason,
-    decision,
-    responsePlan,
-    reasoning: {
-      retrospective: retrospective?.triggered === true,
-      recovered: retrospective?.recovered === true,
-      scannedLines: retrospective?.scannedLines ?? historyForDialogue.length,
-      causalRelations: causalRelations.length,
+    mechanics: {
+      silenceRequested,
+      intimacySignal: intimacySignal.kind,
+      hardConstraint: constraintKind,
+      reactionSource: stateReaction.source,
     },
-    memoryContext: {
-      memories: memoryContext.memories.map((m) => m.summary),
-      facts: memoryContext.facts.map((f) => f.statement),
-      openThreads: memoryContext.openThreads.map((t) => t.summary),
+    manualContext: {
+      personalityChars: editableContext.personality.length,
+      memoryChars: editableContext.memory.length,
+      recentMessages: recentHistory.length,
     },
   };
+
   return {
     reply,
     replyMessages: characterEvents.map((event) => ({
@@ -1389,16 +1143,24 @@ export async function handleUserMessage(
       text: String((event.payload as { text?: string }).text ?? ""),
       timestamp: event.timestamp,
       silent,
-      templateId: rendered.templateId,
-      dialogueActs: rendered.dialogueActs,
       appearanceAssetId: appearance.assetId,
+      languageSource: cloudLanguage.used ? "gpt" as const : "local" as const,
+      languageReason: cloudLanguage.used ? undefined : cloudLanguage.reason,
+      conversationHint: cloudLanguage.used ? cloudLanguage.conversation : undefined,
     })),
     silent,
     replyId,
     replyTimestamp,
     appearanceAssetId: appearance.assetId,
-    renderMeta: { templateId: rendered.templateId, dialogueActs: rendered.dialogueActs },
-    state: { emotion, relationship, world, romance: romance.state, intimacy: savedIntimacy, appearance, revision: base.revision + 1 },
+    state: {
+      emotion,
+      relationship,
+      world,
+      romance,
+      intimacy: savedIntimacy,
+      appearance,
+      revision: base.revision + 1,
+    },
     trace,
   };
 }
@@ -1433,27 +1195,14 @@ export async function maintainRuntime(
   for (const event of state.pendingWorldEvents ?? []) {
     await repository.appendEvent(event);
   }
-  const consolidation = await recoverRecentMemory(repository, 12);
   checkSignal(signal);
   const maintenanceNow = runtimeNow(state);
   const advanced = advance(state, maintenanceNow);
-  const initiatives = await refreshInitiatives(
-    repository,
-    defaultCharacter,
-    advanced.state.emotion,
-    advanced.state.relationship,
-    advanced.state.world,
-    maintenanceNow,
-    advanced.state.romance,
-    advanced.state.intimacy,
-  );
-  const [recovery, pending] = await Promise.all([
-    repository.loadMemoryRecoveryState(), repository.listPendingMemoryEvents(1),
-  ]);
-  const memoryBacklog = pending.length > 0 || recovery?.backfillComplete === false;
-  const memoryHealth = memoryBacklog ? null : await getMemoryHealth(repository);
+  // v0.19.2: there is no local initiative topic queue anymore. The engine only
+  // decides whether it is mechanically valid to CHECK for initiative; GPT then
+  // decides whether Yuzuki actually wants to write and what she wants to say.
   const proactiveConversation = allowInitiative
-    ? (await repository.listConversationEvents({ limit: 24 })).events
+    ? (await repository.listConversationEvents({ limit: 60 })).events
     : [];
   const lastProactive = latestProactiveEvent(proactiveConversation);
   const unansweredProactive = Boolean(
@@ -1462,6 +1211,8 @@ export async function maintainRuntime(
   const proactiveCooldownOpen = !lastProactive ||
     maintenanceNow - lastProactive.timestamp >= PROACTIVE_MESSAGE_COOLDOWN_MS;
   let message: ConversationLine | null = null;
+  let proactiveAppearance: AppearanceState | null = null;
+  const quietMs = Math.max(0, maintenanceNow - advanced.state.world.lastUserInteractionAt);
   const initiativeWindowOpen = () =>
     allowInitiative &&
     !unansweredProactive &&
@@ -1469,128 +1220,137 @@ export async function maintainRuntime(
     canSurfaceInitiative() &&
     !initiativeSignal.aborted &&
     advanced.state.world.isAwake &&
-    advanced.state.world.availability !== "sleeping" &&
-    maintenanceNow - advanced.state.world.lastUserInteractionAt > 6 * 60_000;
+    !["sleeping", "occupied"].includes(advanced.state.world.availability) &&
+    quietMs >= 10 * 60_000;
 
   if (initiativeWindowOpen()) {
-    const initiative = initiatives.find(
-      (i) => i.notBefore <= maintenanceNow && i.expiresAt > maintenanceNow,
+    const [storedEditableContext, proactivePage] = await Promise.all([
+      repository.loadEditableContext(),
+      repository.listConversationEvents({ limit: 60 }),
+    ]);
+    const proactiveEditableContext = normalizeEditableContext(
+      storedEditableContext ?? createDefaultEditableContext(maintenanceNow),
+      maintenanceNow,
     );
-    if (initiative) {
-      const id = `proactive_${initiative.id}`;
-      const existing = await repository.getEvent(id);
-      if (!existing && initiativeWindowOpen()) {
-        let text: string | null = null;
-        let proactiveRender: Awaited<ReturnType<typeof localDialogueRenderer.render>> | null = null;
-        if (!initiativeSignal.aborted) {
-          const [proactiveMemory, proactivePage] = await Promise.all([
-            retrieveMemoryContext(initiative.topic, repository, maintenanceNow),
-            repository.listConversationEvents({ limit: 40 }),
-          ]);
-          checkSignal(signal);
-          if (!initiativeSignal.aborted) {
-            const proactiveHistory = conversationFrom(proactivePage.events);
-            const bridge = initiativeSemanticBridge(
-              initiative,
-              advanced.state.emotion,
-              advanced.state.relationship,
-            );
-            const proactiveNlu = analyzeLocalNLU(initiative.topic);
-            const proactivePerception = applyLocalNLUToPerception(
-              localPerception(initiative.topic),
-              proactiveNlu,
-            );
-            const proactiveContext = buildDialogueContext({
-              turnId: id,
-              now: maintenanceNow,
-              character: defaultCharacter,
-              emotion: advanced.state.emotion,
-              relationship: advanced.state.relationship,
-              world: advanced.state.world,
-              romance: advanced.state.romance,
-              intimacy: advanced.state.intimacy,
-              memoryContext: proactiveMemory,
-              history: proactiveHistory.slice(-24),
-              nlu: proactiveNlu,
-              perception: proactivePerception,
-              decision: bridge.decision,
-              responsePlan: bridge.responsePlan,
-              initiative,
-            });
-            const proactivePlan = planAutonomousDialogue(proactiveContext);
-            proactiveRender = await localDialogueRenderer.render(proactivePlan, proactiveContext);
-            logLocalDialogueTrace({
-              userText: undefined,
-              nlu: proactiveNlu,
-              plan: proactivePlan,
-              rendered: proactiveRender,
-            });
-            text = sanitizeProactiveDialogueText(proactiveRender.text);
-            if (!text) text = renderLocalInitiative(initiative);
-          }
-        }
+    const proactiveHistory = conversationFrom(proactivePage.events);
+    checkSignal(signal);
 
-        // A real user turn may have started while local initiative text was being prepared.
-        // Re-check immediately before publishing so initiative work yields to conversation.
-        if (text && initiativeWindowOpen()) {
-          const publishNow = runtimeNow(advanced.state);
-          const publishState = advance(advanced.state, publishNow).state;
-          if (
-            publishState.world.isAwake &&
-            publishState.world.availability !== "sleeping" &&
-            initiative.notBefore <= publishNow &&
-            initiative.expiresAt > publishNow
-          ) {
-            const event = createEvent({
-              id,
+    if (initiativeWindowOpen()) {
+      const proactiveLanguage = await renderCloudLanguage({
+        mode: "initiative",
+        userText: "",
+        personality: proactiveEditableContext.personality,
+        memory: proactiveEditableContext.memory,
+        proactive: {
+          kind: "autonomous_check",
+          reason: "Проверка, есть ли у Yuzuki естественное желание самой выйти на связь.",
+          quietMinutes: Math.round(quietMs / 60_000),
+        },
+        world: {
+          timeOfDay: advanced.state.world.timeOfDay,
+          location: advanced.state.world.currentLocation,
+          activity: advanced.state.world.currentActivity,
+          availability: advanced.state.world.availability,
+          isAwake: advanced.state.world.isAwake,
+          connectionDrive: advanced.state.world.connectionDrive,
+          activityDetail: describeWorldActivityDetail(advanced.state.world.currentActivity, maintenanceNow),
+        },
+        relationship: {
+          stage: advanced.state.relationship.stage,
+          trust: advanced.state.relationship.trust,
+          closeness: advanced.state.relationship.closeness,
+          attachment: advanced.state.relationship.attachment,
+          security: advanced.state.relationship.security,
+          respect: advanced.state.relationship.respect,
+          unresolvedTension: advanced.state.relationship.unresolvedTension,
+        },
+        emotion: {
+          mood: advanced.state.emotion.mood,
+          energy: advanced.state.emotion.energy,
+          happiness: advanced.state.emotion.happiness,
+          sadness: advanced.state.emotion.sadness,
+          irritation: advanced.state.emotion.irritation,
+          anxiety: advanced.state.emotion.anxiety,
+          curiosity: advanced.state.emotion.curiosity,
+          boredom: advanced.state.emotion.boredom,
+          affection: advanced.state.emotion.affection,
+          romanticInterest: advanced.state.emotion.romanticInterest,
+        },
+        romancePhase: advanced.state.romance?.phase,
+        recentHistory: selectBalancedRecentHistory(proactiveHistory, 15).map((line) => ({
+          role: line.role,
+          text: line.text,
+        })),
+        silent: false,
+      }, initiativeSignal);
+
+      // A real user turn may have started while GPT was thinking. Re-check right
+      // before persistence. A declined initiative intentionally writes nothing.
+      if (
+        proactiveLanguage.used &&
+        proactiveLanguage.shouldInitiate === true &&
+        proactiveLanguage.text &&
+        initiativeWindowOpen()
+      ) {
+        const publishNow = runtimeNow(advanced.state);
+        const publishState = advance(advanced.state, publishNow).state;
+        if (
+          publishState.world.isAwake &&
+          !["sleeping", "occupied"].includes(publishState.world.availability)
+        ) {
+          const parts = (proactiveLanguage.messages?.length
+            ? proactiveLanguage.messages
+            : [proactiveLanguage.text])
+            .map((part) => part.replace(/\s+/gu, " ").trim())
+            .filter(Boolean)
+            .slice(0, 3);
+          if (parts.length) {
+            const idBase = `proactive_auto_${publishNow}`;
+            const proactiveVisualEmotion = resolveVisualEmotionState(publishState, {
+              emotionTone: proactiveLanguage.signals?.emotionTone,
+              relationshipEvent: proactiveLanguage.signals?.relationshipEvent,
+            });
+            proactiveAppearance = selectAppearance(
+              publishState,
+              proactiveVisualEmotion,
+              publishNow,
+              {
+                recentAssetIds: recentCharacterAppearanceIds(proactiveHistory),
+                seed: `${idBase}:initiative`,
+              },
+            );
+            const events = parts.map((part, index) => createEvent({
+              id: index === 0 ? idBase : `${idBase}_${index + 1}`,
               type: "character_action",
               source: "character",
-              timestamp: publishNow,
+              timestamp: publishNow + index * 700,
               payload: {
-                text,
-                initiativeId: initiative.id,
-                localDialogue: proactiveRender ? {
-                  templateId: proactiveRender.templateId,
-                  dialogueActs: proactiveRender.dialogueActs,
-                  openingPhrase: proactiveRender.openingPhrase,
-                  fallbackLevel: proactiveRender.fallbackLevel,
-                } : undefined,
+                text: part,
+                initiativeId: idBase,
+                messagePart: { index: index + 1, count: parts.length },
+                appearanceAssetId: proactiveAppearance?.assetId,
+                language: {
+                  source: "gpt",
+                  model: proactiveLanguage.model,
+                  conversation: proactiveLanguage.conversation,
+                },
               },
-              importance: 0.4,
-            });
-            await repository.appendEvent(event);
-            await repository.saveInitiative({ ...initiative, status: "surfaced" });
-            initiative.status = "surfaced";
+              importance: index === 0 ? 0.4 : 0.2,
+            }));
+            for (const event of events) await repository.appendEvent(event);
             message = {
-              id,
+              id: events[0].id,
               role: "character",
-              text,
-              timestamp: event.timestamp,
+              text: parts.join("\n"),
+              timestamp: events[0].timestamp,
               proactive: true,
-              templateId: proactiveRender?.templateId,
-              dialogueActs: proactiveRender?.dialogueActs,
+              languageSource: "gpt",
+              conversationHint: proactiveLanguage.conversation,
             };
           }
         }
-      } else if (existing) {
-        await repository.saveInitiative({ ...initiative, status: "surfaced" });
-        initiative.status = "surfaced";
       }
     }
   }
-  if (allowInitiative && (unansweredProactive || !proactiveCooldownOpen)) {
-    const cooldownUntil = lastProactive
-      ? lastProactive.timestamp + PROACTIVE_MESSAGE_COOLDOWN_MS
-      : maintenanceNow;
-    const deferredUntil = unansweredProactive
-      ? Math.max(maintenanceNow + PROACTIVE_BLOCK_RECHECK_MS, cooldownUntil)
-      : Math.max(maintenanceNow + 60_000, cooldownUntil);
-    for (const item of initiatives) {
-      if (item.status !== "pending" || item.notBefore >= deferredUntil) continue;
-      const deferred = { ...item, notBefore: deferredUntil };
-      await repository.saveInitiative(deferred);
-      item.notBefore = deferredUntil;
-    }
-  }
-  return { consolidation, memoryHealth, memoryBacklog, initiatives, message };
+  return { message, appearance: proactiveAppearance };
 }

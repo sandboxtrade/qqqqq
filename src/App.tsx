@@ -47,14 +47,17 @@ export default function App() {
     hasOlderMessages,
     loadingOlder,
     loadOlder,
+    editablePersonality,
+    editableMemory,
+    editableContextUpdatedAt,
+    editableContextBusy,
+    exportBusy,
+    loadEditableContext,
+    saveEditablePersonality,
+    saveEditableMemory,
+    exportConversation,
   } = useAppStore();
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
-  const visualCueKey = lastTrace
-    ? [...messages]
-        .reverse()
-        .find((message) => message.role === "character" && !message.proactive)?.id ?? null
-    : null;
-
   useEffect(() => {
     void initialize();
   }, [initialize]);
@@ -87,7 +90,7 @@ export default function App() {
     ? "config"
     : lastTrace?.cloudLanguage?.used
       ? "gpt"
-      : lastTrace?.cloudLanguage?.attempted || lastTrace?.responseGuardFallback
+      : lastTrace?.cloudLanguage?.attempted
         ? "local"
         : isLocalRepositoryAllowed
           ? "local"
@@ -127,9 +130,6 @@ export default function App() {
       <CharacterStage
         runtime={runtime}
         busy={busy}
-        visualCue={lastTrace?.responsePlan.visualCue ?? null}
-        visualCueKey={visualCueKey}
-        onNavigate={setActiveTab}
         onQuietAction={(text) => {
           setActiveTab("chat");
           void send(text);
@@ -188,6 +188,15 @@ export default function App() {
             intimacyPhase={runtime?.intimacy?.phase ?? "normal"}
             intimacyUpdating={updatingIntimacyMode}
             onSetIntimacyEnabled={setIntimacyAdultMode}
+            personality={editablePersonality}
+            memory={editableMemory}
+            contextUpdatedAt={editableContextUpdatedAt}
+            contextBusy={editableContextBusy}
+            onReloadContext={loadEditableContext}
+            onSavePersonality={saveEditablePersonality}
+            onSaveMemory={saveEditableMemory}
+            exportBusy={exportBusy}
+            onExportConversation={exportConversation}
           />
         )}
       </div>

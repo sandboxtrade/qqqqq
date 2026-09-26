@@ -2,12 +2,19 @@
  * Consolidated avatar domain: motion state, media catalog, visual emotion
  * resolution and persisted appearance selection.
  */
-import type { CharacterDecision, ResponsePlan } from "../cognition/cognition-types";
 import type { RuntimeState } from "../engine/runtime";
 import type { WorldLocation } from "../world/world";
 
 // ---- visual-state.ts ----
-export type AvatarVisualCue = ResponsePlan["visualCue"];
+export type AvatarVisualCue =
+  | "neutral"
+  | "warm"
+  | "soft_smile"
+  | "curious"
+  | "annoyed_soft"
+  | "guarded"
+  | "sad_soft"
+  | "playful";
 
 export interface AvatarVisualState {
   cue: AvatarVisualCue;
@@ -109,11 +116,18 @@ export interface VisualEmotionState {
 }
 
 export interface VisualEmotionContext {
-  decision: CharacterDecision;
-  responsePlan: ResponsePlan;
-  dialogueActs?: readonly string[];
-  sourceIntent?: string;
+  /** Optional GPT-observed emotional color of the current turn. */
+  emotionTone?: string;
+  /** Optional GPT-observed tone of the user's current message. */
+  userTone?: string;
+  /** Optional GPT-observed relationship event for this turn. */
+  relationshipEvent?: string;
+  /** Mechanical intimacy signal only; never narrative intent/NLU. */
+  intimacySignalKind?: string;
+  /** Strength of the current event/request when known. */
   eventIntensity?: number;
+  /** Hard mechanical context such as sleeping, pause or stop. */
+  hardConstraintKind?: string;
 }
 
 interface EmotionCandidate {
@@ -122,9 +136,14 @@ interface EmotionCandidate {
   magnitude: number;
 }
 
+/**
+ * Visuals are derived from persisted mechanical state plus the very small set
+ * of cloud/mechanical turn signals above. Dialogue planning, intent labels,
+ * templates and semantic memory no longer participate in image selection.
+ */
 export function resolveVisualEmotionState(
   runtime: RuntimeState,
-  context: VisualEmotionContext,
+  context: VisualEmotionContext = {},
 ): VisualEmotionState {
   const e = runtime.emotion;
   const r = runtime.relationship;
@@ -132,9 +151,11 @@ export function resolveVisualEmotionState(
   const intimacy = runtime.intimacy;
   const adultVisuals = intimacy?.adultModeEnabled === true;
   const intimacyPhase = adultVisuals ? intimacy?.phase ?? "normal" : "normal";
-  const acts = new Set(context.dialogueActs ?? []);
-  const intent = context.sourceIntent ?? "";
-  const eventIntensity = clamp01(context.eventIntensity ?? 0.45);
+  const eventIntensity = clamp01(context.eventIntensity ?? 0.42);
+  const emotionTone = context.emotionTone ?? "";
+  const userTone = context.userTone ?? "";
+  const relationshipEvent = context.relationshipEvent ?? "";
+  const intimacySignal = context.intimacySignalKind ?? "none";
   const candidates: EmotionCandidate[] = [];
   const add = (emotion: VisualEmotionName, score: number, magnitude = score) => {
     candidates.push({ emotion, score: clamp01(score), magnitude: clamp01(magnitude) });
@@ -146,85 +167,82 @@ export function resolveVisualEmotionState(
   const lowEnergy = 1 - e.energy;
 
   add("neutral", 0.34, 0.25);
-  add("happy", 0.24 + e.happiness * 0.68, e.happiness);
-  add("excited", e.happiness * 0.42 + e.energy * 0.48 + (acts.has("HAPPINESS") ? 0.2 : 0), e.energy * e.happiness);
-  add("gentle", e.affection * 0.36 + (1 - tension) * 0.25 + (1 - e.energy) * 0.18, e.affection * 0.55);
+  add("happy", 0.24 + e.happiness * 0.68 + (emotionTone === "warm" ? 0.08 : 0), e.happiness);
+  add("excited", e.happiness * 0.42 + e.energy * 0.48, e.energy * e.happiness);
+  add("gentle", e.affection * 0.36 + (1 - tension) * 0.25 + (1 - e.energy) * 0.18 + (relationshipEvent === "repair" ? 0.22 : 0), e.affection * 0.55);
   add("relaxed", (1 - e.anxiety) * 0.35 + (1 - e.irritation) * 0.26 + (1 - Math.abs(e.energy - 0.48)) * 0.18, 1 - e.anxiety);
   add("comfortable", closeness * 0.45 + r.security * 0.28 + positive * 0.2, closeness);
-  const confidenceSceneDamping = romance === "private" ? 0.72 : romance === "romantic" ? 0.88 : 1;
-  add("confident", ((1 - e.anxiety) * 0.35 + r.security * 0.24 + r.respect * 0.18 + (context.decision.confidence * 0.2)) * confidenceSceneDamping, context.decision.confidence);
+  add("confident", ((1 - e.anxiety) * 0.42 + r.security * 0.28 + r.respect * 0.2) * (romance === "private" ? 0.72 : 1), 1 - e.anxiety);
 
-  add("curious", e.curiosity * 0.58 + (acts.has("CURIOSITY") || context.decision.action === "ask" ? 0.28 : 0), e.curiosity);
-  add("thinking", e.curiosity * 0.34 + (context.decision.content.stance === "uncertain" ? 0.32 : 0) + (acts.has("CLARIFY") ? 0.18 : 0), Math.max(e.curiosity, eventIntensity));
-  add("confused", (acts.has("CLARIFY") ? 0.62 : 0) + (intent === "unknown" ? 0.28 : 0), Math.max(0.35, eventIntensity));
-  add("serious", (["set_boundary", "refuse"].includes(context.decision.action) ? 0.68 : 0.12) + context.responsePlan.directness * 0.2, Math.max(tension, context.responsePlan.directness));
-  add("focused", (context.decision.content.mode === "factual" ? 0.46 : 0.12) + context.responsePlan.directness * 0.28 + e.curiosity * 0.16, context.responsePlan.directness);
-  add("skeptical", (context.decision.action === "challenge" ? 0.78 : context.decision.action === "disagree" ? 0.55 : 0.06) + (context.decision.content.stance === "uncertain" ? 0.12 : 0), context.decision.confidence);
+  add("curious", e.curiosity * 0.66 + (emotionTone === "curious" ? 0.22 : 0), e.curiosity);
+  add("thinking", e.curiosity * 0.34 + (userTone === "confused" ? 0.14 : 0), Math.max(e.curiosity, eventIntensity));
+  add("confused", userTone === "confused" ? 0.58 : 0.02, eventIntensity);
+  add("serious", 0.12 + tension * 0.4 + (relationshipEvent === "boundary" ? 0.4 : 0), Math.max(tension, eventIntensity));
+  add("focused", 0.18 + e.curiosity * 0.28 + r.respect * 0.12, e.curiosity);
+  add("skeptical", 0.08 + (relationshipEvent === "tension" ? 0.2 : 0), Math.max(tension, eventIntensity));
 
-  add("annoyed", e.irritation * 0.7 + r.unresolvedTension * 0.18, e.irritation);
+  add("annoyed", e.irritation * 0.7 + r.unresolvedTension * 0.18 + (emotionTone === "irritated" ? 0.16 : 0), e.irritation);
   add("angry", Math.max(0, e.irritation - 0.35) * 1.25 + r.unresolvedTension * 0.14, e.irritation);
-  add("furious", Math.max(0, e.irritation - 0.7) * 2.25 + (context.decision.action === "set_boundary" ? 0.08 : 0), e.irritation);
-  add("pouting", e.irritation * 0.32 + e.affection * 0.25 + (context.decision.tone.includes("restrained") ? 0.16 : 0), Math.max(e.irritation, e.affection * 0.6));
-  add("jealous", (acts.has("JEALOUSY") ? 0.82 : 0) + e.affection * r.attachment * 0.16, eventIntensity);
+  add("furious", Math.max(0, e.irritation - 0.7) * 2.25, e.irritation);
+  add("pouting", e.irritation * 0.32 + e.affection * 0.25, Math.max(e.irritation, e.affection * 0.6));
+  add("jealous", emotionTone === "jealous" ? 0.98 : e.affection * r.attachment * 0.16, Math.max(eventIntensity, r.attachment));
 
-  add("sad", e.sadness * 0.72 + (acts.has("SADNESS") ? 0.18 : 0), e.sadness);
-  add("upset", e.sadness * 0.5 + tension * 0.32 + (context.decision.tone.includes("hurt") ? 0.16 : 0), Math.max(e.sadness, tension));
-  add("hurt", e.sadness * 0.46 + r.unresolvedTension * 0.28 + (context.decision.tone.includes("hurt") ? 0.34 : 0), Math.max(e.sadness, r.unresolvedTension));
-  add("crying", Math.max(0, e.sadness - 0.65) * 1.9 + (acts.has("SADNESS") ? 0.08 : 0), e.sadness);
+  add("sad", e.sadness * 0.72 + (emotionTone === "sad" ? 0.18 : 0), e.sadness);
+  add("upset", e.sadness * 0.5 + tension * 0.32, Math.max(e.sadness, tension));
+  add("hurt", e.sadness * 0.46 + r.unresolvedTension * 0.28 + (emotionTone === "hurt" ? 0.32 : 0), Math.max(e.sadness, r.unresolvedTension));
+  add("crying", Math.max(0, e.sadness - 0.65) * 1.9, e.sadness);
   add("lonely", e.sadness * 0.28 + runtime.world.connectionDrive * 0.48 + r.attachment * 0.14, runtime.world.connectionDrive);
-  add("anxious", e.anxiety * 0.78 + (runtime.world.availability === "occupied" ? 0.08 : 0), e.anxiety);
-  add("nervous", e.anxiety * 0.5 + (romance === "playful" || romance === "romantic" ? 0.18 : 0) + e.affection * 0.12, e.anxiety);
+  add("anxious", e.anxiety * 0.78 + (emotionTone === "anxious" ? 0.16 : 0), e.anxiety);
+  add("nervous", e.anxiety * 0.5 + e.affection * 0.12, e.anxiety);
 
   add("tired", lowEnergy * 0.66 + (runtime.world.availability === "resting" ? 0.2 : 0), lowEnergy);
   add("sleepy", (!runtime.world.isAwake || runtime.world.availability === "sleeping" ? 0.94 : lowEnergy * 0.48), lowEnergy);
-  add("bored", e.boredom * 0.82 + lowEnergy * 0.08, e.boredom);
+  add("bored", e.boredom * 0.82 + lowEnergy * 0.08 + (emotionTone === "bored" ? 0.12 : 0), e.boredom);
 
-  add("caring", (acts.has("CARE") || acts.has("COMFORT") || acts.has("REASSURE") ? 0.72 : 0.08) + e.affection * 0.16, Math.max(e.affection, eventIntensity));
-  add("affectionate", e.affection * 0.58 + closeness * 0.2 + (context.decision.action === "show_affection" ? 0.26 : 0), e.affection);
+  add("caring", (relationshipEvent === "repair" ? 0.58 : 0.08) + e.affection * 0.22, Math.max(e.affection, eventIntensity));
+  add("affectionate", e.affection * 0.58 + closeness * 0.2 + (["warmth", "affection"].includes(relationshipEvent) ? 0.24 : 0), e.affection);
   add("loving", Math.max(0, e.affection - 0.48) * 0.7 + closeness * 0.34 + (romance === "romantic" ? 0.18 : 0) + (intimacyPhase === "aftercare" ? 0.24 : 0), Math.max(e.affection, closeness));
   if (intimacyPhase === "aftercare") {
     add("gentle", 0.78 + e.affection * 0.14, Math.max(e.affection, intimacy?.comfort ?? 0));
     add("affectionate", 0.72 + closeness * 0.18, Math.max(e.affection, closeness));
     add("caring", 0.7 + (intimacy?.comfort ?? 0) * 0.2, Math.max(e.affection, intimacy?.comfort ?? 0));
   }
-  add("welcoming", (acts.has("WELCOME_BACK") ? 0.82 : 0) + positive * 0.1, eventIntensity);
-  add("missing_you", (acts.has("MISS_USER") ? 0.88 : 0) + runtime.world.connectionDrive * r.attachment * 0.35, Math.max(runtime.world.connectionDrive, r.attachment));
+  add("welcoming", relationshipEvent === "warmth" ? 0.48 + positive * 0.18 : positive * 0.1, eventIntensity);
+  add("missing_you", runtime.world.connectionDrive * r.attachment * 0.48, Math.max(runtime.world.connectionDrive, r.attachment));
 
-  const flirtSignal = acts.has("FLIRT") || acts.has("INTIMACY_APPROACH") || acts.has("INTIMACY_RECIPROCATE") || romance === "playful" || romance === "romantic" || romance === "private";
+  const flirtSuppressed = ["jealous", "hurt", "irritated", "sad", "anxious"].includes(emotionTone);
+  const flirtSignal = !flirtSuppressed && (["flirt", "approach", "consent"].includes(intimacySignal) || romance === "playful" || romance === "romantic" || romance === "private");
   const romanticDrive = clamp01(
     e.romanticInterest * 0.42 + e.affection * 0.2 + closeness * 0.16 + e.energy * 0.08 +
     (adultVisuals ? (intimacy?.interest ?? 0) * 0.08 + (intimacy?.arousal ?? 0) * 0.06 : 0),
   );
-  add("playful", (acts.has("TEASE") || acts.has("JOKE") ? 0.66 : 0.08) + (romance === "playful" ? 0.32 : 0) + e.happiness * 0.12, Math.max(e.happiness, e.energy));
-  add("amused", (acts.has("JOKE") ? 0.68 : 0.04) + e.happiness * 0.22, e.happiness);
-  add("laughing", (acts.has("JOKE") && e.happiness > 0.65 ? 0.72 : 0) + Math.max(0, e.happiness - 0.75) * 0.55, e.happiness);
-  add("mischievous", (acts.has("TEASE") ? 0.66 : 0.04) + (romance === "playful" ? 0.25 : 0) + e.energy * 0.1, Math.max(e.energy, e.happiness));
-  add("teasing", (acts.has("TEASE") ? 0.82 : 0) + (romance === "playful" ? 0.18 : 0), eventIntensity);
+  add("playful", 0.08 + (emotionTone === "warm" ? 0.06 : 0) + (romance === "playful" ? 0.32 : 0) + e.happiness * 0.12, Math.max(e.happiness, e.energy));
+  add("amused", 0.04 + e.happiness * 0.24, e.happiness);
+  add("laughing", Math.max(0, e.happiness - 0.75) * 0.7, e.happiness);
+  add("mischievous", 0.04 + (romance === "playful" ? 0.25 : 0) + e.energy * 0.1, Math.max(e.energy, e.happiness));
+  add("teasing", romance === "playful" ? 0.42 : 0.02, eventIntensity);
   add("flirty", (flirtSignal ? 0.52 : 0.02) + romanticDrive * 0.38, romanticDrive);
-  add("shy", (flirtSignal ? 0.24 : 0.02) + e.anxiety * 0.34 + e.affection * 0.2 + (acts.has("FLIRT") ? 0.18 : 0), Math.max(e.anxiety, romanticDrive * 0.7));
-  add("bashful", (acts.has("FLIRT") ? 0.38 : 0) + e.anxiety * 0.24 + romanticDrive * 0.3, Math.max(e.anxiety, romanticDrive));
-  add("embarrassed", (acts.has("FLIRT") && e.anxiety > 0.3 ? 0.46 : 0.02) + e.anxiety * 0.32, e.anxiety);
-  add("blushing", (acts.has("FLIRT") && romanticDrive > 0.58 ? 0.5 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
+  add("shy", (flirtSignal ? 0.24 : 0.02) + e.anxiety * 0.34 + e.affection * 0.2, Math.max(e.anxiety, romanticDrive * 0.7));
+  add("bashful", (flirtSignal ? 0.28 : 0) + e.anxiety * 0.24 + romanticDrive * 0.3, Math.max(e.anxiety, romanticDrive));
+  add("embarrassed", (flirtSignal && e.anxiety > 0.3 ? 0.32 : 0.02) + e.anxiety * 0.32, e.anxiety);
+  add("blushing", (flirtSignal && romanticDrive > 0.58 ? 0.38 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
 
-  // Mature visual states are driven by the dedicated intimacy state. A private
-  // romance scene alone is not enough to produce explicit arousal visuals.
   if (adultVisuals) {
     const arousal = intimacy?.arousal ?? 0;
     const phaseClose = intimacyPhase === "close";
     const phaseIntimate = intimacyPhase === "intimate";
     const phaseHigh = intimacyPhase === "high_intimacy";
     add("intimate", (phaseIntimate ? 0.64 : phaseHigh ? 0.56 : phaseClose ? 0.28 : 0) + romanticDrive * 0.16, Math.max(romanticDrive, arousal));
-    add("seductive", (phaseIntimate || phaseHigh ? 0.34 : phaseClose ? 0.16 : 0) + romanticDrive * 0.28 + (acts.has("FLIRT") ? 0.1 : 0), Math.max(romanticDrive, arousal));
+    add("seductive", (phaseIntimate || phaseHigh ? 0.34 : phaseClose ? 0.16 : 0) + romanticDrive * 0.28 + (intimacySignal === "flirt" ? 0.1 : 0), Math.max(romanticDrive, arousal));
     add("passionate", (phaseHigh ? 0.5 : phaseIntimate ? 0.26 : 0) + Math.max(0, arousal - 0.48) * 0.85, Math.max(romanticDrive, arousal));
     add("desiring", (phaseHigh ? 0.4 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.58) * 1.05, Math.max(romanticDrive, arousal));
-    // horny is internal arousal; hornys additionally requires outward intimate behaviour.
     add("horny", (phaseHigh ? 0.5 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.68) * 1.5, arousal);
-    add("hornys", (phaseHigh && acts.has("INTIMACY_RECIPROCATE") ? 0.66 : 0) + Math.max(0, arousal - 0.8) * (acts.has("INTIMACY_RECIPROCATE") ? 2.2 : 0.35), arousal);
+    add("hornys", (phaseHigh && intimacySignal === "consent" ? 0.62 : 0) + Math.max(0, arousal - 0.8) * (intimacySignal === "consent" ? 2.0 : 0.3), arousal);
   }
 
-  add("surprised", (acts.has("SURPRISE") ? 0.76 : 0) + (intent === "share_good_event" ? eventIntensity * 0.12 : 0), eventIntensity);
-  add("shocked", (acts.has("SURPRISE") && eventIntensity > 0.78 ? 0.66 + eventIntensity * 0.18 : 0), eventIntensity);
-  add("smug", (context.decision.confidence > 0.86 && ["agree", "disagree"].includes(context.decision.action) ? 0.38 : 0) + positive * 0.18, context.decision.confidence);
+  if (context.hardConstraintKind === "sleeping") add("sleepy", 1, 1);
+  if (["intimacy_stop", "intimacy_pause"].includes(context.hardConstraintKind ?? ""))
+    add("serious", 0.78, Math.max(0.6, eventIntensity));
 
   candidates.sort((a, b) => b.score - a.score || b.magnitude - a.magnitude || a.emotion.localeCompare(b.emotion));
   const first = candidates[0] ?? { emotion: "neutral" as const, score: 0.34, magnitude: 0.25 };
@@ -745,7 +763,7 @@ function directAppearance(selected: CharacterAsset, previous: AppearanceState | 
 
 const ambientFamiliesByWorldActivity: Record<string, readonly ActivitySceneName[]> = {
   sleeping: ["sleeping", "lying"],
-  waking_up: ["waking_up", "sitting_up"],
+  waking_up: ["waking_up", "sitting_up", "stretching"],
   breakfast: ["drinking", "eating"],
   personal_project: ["working", "writing", "drawing", "thinking_activity"],
   reading: ["reading"],
@@ -785,6 +803,27 @@ export function selectAmbientAppearance(
   const selected = chooseVariant(candidates, recent, `${options.seed ?? "ambient"}|${family}|${runtime.world.currentLocation}|${Math.floor(now / 60_000)}`);
   if (previous && selected.id === previous.assetId) return previous;
   return directAppearance(selected, previous, current, now);
+}
+
+/**
+ * Resolve a background/ambient activity scene when the current photo pack has
+ * one. If it does not, deliberately switch to a state-driven portrait instead
+ * of carrying a stale scene from the previous activity.
+ */
+export function selectAmbientOrEmotionAppearance(
+  runtime: RuntimeState,
+  now: number,
+  options: AppearanceSelectionOptions = {},
+): AppearanceState {
+  const ambient = selectAmbientAppearance(runtime, now, options);
+  if (ambient) return ambient;
+  const visualEmotion = resolveVisualEmotionState(runtime, {
+    hardConstraintKind:
+      !runtime.world.isAwake || runtime.world.availability === "sleeping"
+        ? "sleeping"
+        : undefined,
+  });
+  return selectAppearance(runtime, visualEmotion, now, options);
 }
 
 export function selectReadyToChatAppearance(
