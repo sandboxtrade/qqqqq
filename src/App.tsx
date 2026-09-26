@@ -58,6 +58,7 @@ export default function App() {
     exportConversation,
   } = useAppStore();
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
+  const settingsOpen = activeTab === "settings";
   useEffect(() => {
     void initialize();
   }, [initialize]);
@@ -112,7 +113,7 @@ export default function App() {
       : "подключение…";
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${settingsOpen ? " settings-mode" : ""}`}>
       <header className="topbar">
         <div className="brand-block">
           <span className="mini-avatar">{defaultCharacter.name.slice(0, 1)}</span>
@@ -127,15 +128,17 @@ export default function App() {
         </div>
       </header>
 
-      <CharacterStage
-        runtime={runtime}
-        busy={busy}
-        onQuietAction={(text) => {
-          setActiveTab("chat");
-          void send(text);
-        }}
-        quietActionDisabled={!ready || busy}
-      />
+      {!settingsOpen && (
+        <CharacterStage
+          runtime={runtime}
+          busy={busy}
+          onQuietAction={(text) => {
+            setActiveTab("chat");
+            void send(text);
+          }}
+          quietActionDisabled={!ready || busy}
+        />
+      )}
 
       {error && (
         <div className="error-banner">
@@ -152,7 +155,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="content-area">
+      <div className={`content-area${settingsOpen ? " settings-content-area" : ""}`}>
         {activeTab === "chat" && (
           <ChatScreen
             messages={messages}

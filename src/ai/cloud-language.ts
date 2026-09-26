@@ -219,6 +219,7 @@ interface WorkerReply {
 const TOKEN_PREP_TIMEOUT_MS = 7_500;
 const WORKER_REQUEST_TIMEOUT_MS = 17_000;
 const TRANSIENT_CIRCUIT_MS = 5_000;
+const TRANSIENT_RETRY_DELAY_MS = 180;
 const NOT_FOUND_CIRCUIT_MS = 10 * 60_000;
 let unavailableUntil = 0;
 
@@ -351,6 +352,27 @@ function circuitDuration(status?: number) {
   if (status === 404) return NOT_FOUND_CIRCUIT_MS;
   if (status && status >= 400 && status < 500 && status !== 401) return 0;
   return TRANSIENT_CIRCUIT_MS;
+}
+
+function isRetryableCloudFailure(status: number, reason: string) {
+  if (status >= 500 || status === 408) return true;
+  return /^(?:openai-timeout|openai-unavailable|openai-http-5\d\d|invalid-structured-output)$/u.test(reason);
+}
+
+async function waitBeforeCloudRetry(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason ?? new Error("aborted");
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new Error("aborted"));
+    };
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, TRANSIENT_RETRY_DELAY_MS);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function acquireCloudTokens(
@@ -500,12 +522,22 @@ export async function renderCloudLanguage(
       }
 
       if (!response.ok) {
+        if (attempt === 0 && isRetryableCloudFailure(response.status, reason)) {
+          await waitBeforeCloudRetry(signal);
+          continue;
+        }
         const duration = circuitDuration(response.status);
         if (duration) unavailableUntil = Date.now() + duration;
         return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction };
       }
 
       if (data.skipped === true) {
+        if (attempt === 0 && isRetryableCloudFailure(response.status, reason)) {
+          await waitBeforeCloudRetry(signal);
+          continue;
+        }
+        if (isRetryableCloudFailure(response.status, reason))
+          unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
         return {
           attempted: true,
           used: false,
@@ -568,6 +600,14 @@ export async function renderCloudLanguage(
       };
     } catch (error) {
       if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
+      if (attempt === 0) {
+        try {
+          await waitBeforeCloudRetry(signal);
+          continue;
+        } catch {
+          return { attempted: true, used: false, reason: "aborted" };
+        }
+      }
       unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
       return { attempted: true, used: false, reason: reasonFromError(error) };
     }

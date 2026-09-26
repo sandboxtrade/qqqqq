@@ -32,6 +32,16 @@ export type WorldActivity =
 
 export type Availability = "sleeping" | "free" | "occupied" | "resting";
 
+const HOME_LOCATIONS = new Set<WorldLocation>(["bedroom", "living_room", "kitchen"]);
+
+export function isHomeLocation(location: WorldLocation) {
+  return HOME_LOCATIONS.has(location);
+}
+
+function homeSafeLocation(location: WorldLocation, fallback: WorldLocation = "living_room"): WorldLocation {
+  return isHomeLocation(location) ? location : fallback;
+}
+
 export interface WorldEventSnapshot {
   id: string;
   at: number;
@@ -64,7 +74,17 @@ export interface WorldSimulationResult {
   generatedEvents: WorldEventSnapshot[];
 }
 
+const ACTIVE_CHAT_GRACE_MS = 2 * 60_000;
 const SLEEP_CHAT_GRACE_MS = 10 * 60_000;
+
+export function isActiveChatGraceActive(world: WorldState, now = Date.now()) {
+  return Boolean(
+    world.isAwake &&
+      world.currentActivity === "chatting" &&
+      now - world.lastUserInteractionAt >= 0 &&
+      now - world.lastUserInteractionAt <= ACTIVE_CHAT_GRACE_MS,
+  );
+}
 
 export function isSleepChatGraceActive(world: WorldState, now = Date.now()) {
   return Boolean(
@@ -265,55 +285,42 @@ export function resolveRoutine(
   }
   if (hour < 15) {
     const activity = pick(
-      ["walk", "cafe_break", "errands"] as const,
+      ["reading", "music", "relaxing"] as const,
       timestamp,
-      "midday",
+      "midday-home",
     );
-    const location = activity === "cafe_break" ? "cafe" : "outside";
     return {
       activity,
-      location,
-      availability: activity === "cafe_break" ? "free" : "occupied",
+      location: "living_room",
+      availability: activity === "relaxing" ? "resting" : "free",
       isAwake: true,
       targetEnergy: 0.66,
     };
   }
   if (hour < 18) {
     const activity = pick(
-      ["personal_project", "reading", "errands"] as const,
+      ["personal_project", "reading", "music"] as const,
       timestamp,
-      "afternoon",
+      "afternoon-home",
     );
-    const location =
-      activity === "errands"
-        ? "outside"
-        : activity === "reading"
-          ? "living_room"
-          : "bedroom";
     return {
       activity,
-      location,
-      availability: "occupied",
+      location: activity === "personal_project" ? "bedroom" : "living_room",
+      availability: activity === "personal_project" ? "occupied" : "free",
       isAwake: true,
       targetEnergy: 0.58,
     };
   }
   if (hour < 21) {
     const activity = pick(
-      ["cooking", "walk", "music"] as const,
+      ["cooking", "music", "relaxing"] as const,
       timestamp,
-      "evening",
+      "evening-home",
     );
-    const location =
-      activity === "cooking"
-        ? "kitchen"
-        : activity === "walk"
-          ? "outside"
-          : "living_room";
     return {
       activity,
-      location,
-      availability: "free",
+      location: activity === "cooking" ? "kitchen" : "living_room",
+      availability: activity === "relaxing" ? "resting" : "free",
       isAwake: true,
       targetEnergy: 0.5,
     };
@@ -584,16 +591,22 @@ export function simulateWorld(
   // stay awake for a short grace period instead of being reset to sleeping on
   // every simulation tick. Once the user goes quiet, the normal sleep routine
   // takes over again automatically.
-  const currentRoutine: RoutineSlot =
-    scheduledRoutine.availability === "sleeping" && isSleepChatGraceActive(state, now)
-      ? {
-          activity: "chatting",
-          location: state.currentLocation === "unknown" ? "bedroom" : state.currentLocation,
-          availability: "free",
-          isAwake: true,
-          targetEnergy: Math.max(0.28, Math.min(0.42, emotion.energy)),
-        }
-      : scheduledRoutine;
+  const preserveActiveChat =
+    scheduledRoutine.availability === "sleeping"
+      ? isSleepChatGraceActive(state, now)
+      : isActiveChatGraceActive(state, now);
+  const currentRoutine: RoutineSlot = preserveActiveChat
+    ? {
+        activity: "chatting",
+        location: homeSafeLocation(state.currentLocation, scheduledRoutine.location),
+        availability: "free",
+        isAwake: true,
+        targetEnergy:
+          scheduledRoutine.availability === "sleeping"
+            ? Math.max(0.28, Math.min(0.42, emotion.energy))
+            : scheduledRoutine.targetEnergy,
+      }
+    : scheduledRoutine;
   const targetEnergyAdjustment =
     (currentRoutine.targetEnergy - emotion.energy) *
     (1 - Math.exp(-0.16 * elapsedHours));
@@ -662,6 +675,7 @@ export function markUserInteraction(
   if (!engaged) {
     return {
       ...world,
+      currentLocation: homeSafeLocation(world.currentLocation),
       connectionDrive: Math.max(0.04, world.connectionDrive * 0.8),
       lastUserInteractionAt: now,
       updatedAt: now,
@@ -671,6 +685,7 @@ export function markUserInteraction(
   if (world.availability === "occupied") {
     return {
       ...world,
+      currentLocation: homeSafeLocation(world.currentLocation),
       connectionDrive: Math.max(0.04, world.connectionDrive * 0.5),
       lastUserInteractionAt: now,
       updatedAt: now,
@@ -679,6 +694,7 @@ export function markUserInteraction(
 
   return {
     ...world,
+    currentLocation: homeSafeLocation(world.currentLocation),
     currentActivity: "chatting",
     availability: "free",
     isAwake: true,

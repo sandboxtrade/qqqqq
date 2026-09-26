@@ -211,7 +211,7 @@ export function ChatScreen({
         )}
       </div>
 
-      {ready && !busy && !draft.trim() && (
+      {ready && !busy && !draft.trim() && messages.length === 0 && (
         <div className="starter-row" aria-label="Быстрые подсказки">
           {starterPrompts.map((prompt) => (
             <button

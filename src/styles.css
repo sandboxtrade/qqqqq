@@ -929,3 +929,440 @@ body { overscroll-behavior: none; }
     animation: none !important;
   }
 }
+
+/* v0.19.0 manual personality / memory test */
+.manual-context-card,
+.conversation-export-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 16px;
+  background: rgba(255,255,255,.025);
+}
+
+.manual-context-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.manual-context-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.manual-context-head strong {
+  color: #e3d7e7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.manual-context-head span,
+.manual-context-meta {
+  color: #958a98;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.manual-context-head > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.manual-context-preview {
+  max-height: 230px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0,0,0,.18);
+  border: 1px solid rgba(255,255,255,.045);
+  color: #cfc4d3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.55;
+  scrollbar-width: none;
+}
+
+.manual-context-preview::-webkit-scrollbar,
+.conversation-export-preview::-webkit-scrollbar,
+.manual-context-editor::-webkit-scrollbar {
+  display: none;
+}
+
+.manual-context-editor,
+.conversation-export-preview {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px;
+  background: rgba(0,0,0,.2);
+  color: #e4dce7;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.55;
+  padding: 12px;
+  outline: none;
+}
+
+.manual-context-editor:focus,
+.conversation-export-preview:focus {
+  border-color: rgba(215,199,232,.22);
+}
+
+.personality-editor { min-height: 270px; }
+.memory-editor { min-height: 240px; }
+.conversation-export-preview { min-height: 260px; max-height: 520px; }
+
+.manual-context-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.manual-context-actions .manual-context-meta {
+  margin-right: auto;
+}
+
+.manual-context-actions button,
+.export-choice-row button {
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.07);
+  background: rgba(255,255,255,.045);
+  color: #d7ceda;
+  font: inherit;
+  font-size: 10px;
+}
+
+.manual-context-actions button:disabled,
+.export-choice-row button:disabled {
+  opacity: .45;
+}
+
+.export-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+@media (max-width: 520px) {
+  .manual-context-head {
+    display: grid;
+  }
+  .manual-context-head > span {
+    white-space: normal;
+  }
+  .personality-editor { min-height: 230px; }
+  .memory-editor { min-height: 220px; }
+}
+
+/* v0.19.4 full-screen settings and mobile context editing */
+.app-shell.settings-mode {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.app-shell.settings-mode:has(> .error-banner) {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.settings-content-area {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 26px;
+}
+.settings-screen {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+.settings-home {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 18px;
+  -webkit-overflow-scrolling: touch;
+}
+.settings-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.settings-page-head h2 {
+  margin: 0;
+  font-size: 25px;
+  letter-spacing: -.035em;
+}
+.settings-page-head p {
+  max-width: 360px;
+  margin: 7px 0 0;
+  color: #948b9f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.settings-page-head > button,
+.settings-back-button,
+.settings-save-button,
+.settings-editor-footer button,
+.settings-wide-button,
+.settings-inline-confirmation button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.075);
+  border-radius: 12px;
+  color: #ddd3e5;
+  background: rgba(255,255,255,.045);
+}
+.settings-page-head > button:disabled,
+.settings-back-button:disabled,
+.settings-save-button:disabled,
+.settings-editor-footer button:disabled,
+.settings-wide-button:disabled,
+.settings-inline-confirmation button:disabled {
+  opacity: .45;
+}
+.settings-section-card,
+.settings-details-card {
+  border: 1px solid rgba(255,255,255,.065);
+  border-radius: 18px;
+  background: rgba(255,255,255,.025);
+  overflow: hidden;
+}
+.settings-section-card {
+  padding: 14px;
+}
+.settings-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.settings-section-title strong {
+  color: #eee6f2;
+  font-size: 13px;
+  font-weight: 650;
+}
+.settings-section-title span {
+  color: #8f8698;
+  font-size: 9px;
+  text-align: right;
+}
+.settings-section-copy {
+  margin: -2px 0 12px;
+  color: #968c9f;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.settings-entry {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 0;
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.05);
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+.settings-entry:first-of-type {
+  border-top: 0;
+  padding-top: 5px;
+}
+.settings-entry:last-child {
+  padding-bottom: 3px;
+}
+.settings-entry > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.settings-entry strong {
+  color: #e2d8e8;
+  font-size: 12px;
+}
+.settings-entry span {
+  overflow: hidden;
+  color: #8f8698;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.settings-entry small {
+  color: #a493b4;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.settings-export-choices {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+.settings-export-choices button:last-child {
+  grid-column: 1 / -1;
+}
+.settings-wide-button {
+  width: 100%;
+}
+.settings-inline-confirmation {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border-radius: 13px;
+  background: rgba(255,255,255,.025);
+}
+.settings-inline-confirmation > span {
+  color: #b9afbf;
+  font-size: 10px;
+}
+.settings-inline-confirmation > div {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 8px;
+}
+.settings-details-card > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px;
+  color: #c9becf;
+  font-size: 11px;
+}
+.settings-details-card > summary::-webkit-details-marker { display: none; }
+.settings-details-card > summary::after {
+  content: "›";
+  float: right;
+  color: #887a93;
+  transition: transform 160ms ease;
+}
+.settings-details-card[open] > summary::after { transform: rotate(90deg); }
+.settings-details-card[open] > .settings-list,
+.settings-details-card[open] > .error-card,
+.settings-details-card[open] > .debug-panel,
+.settings-details-card[open] > .debug-empty {
+  margin: 0 12px 12px;
+}
+.settings-danger-card {
+  border-color: rgba(238,118,137,.10);
+}
+.settings-signout {
+  flex: 0 0 auto;
+  margin: 0;
+  min-height: 42px;
+}
+
+.settings-editor-view {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  background: rgba(7,6,10,.46);
+}
+.settings-editor-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  background: rgba(11,9,15,.92);
+  backdrop-filter: blur(18px);
+}
+.settings-editor-toolbar > div {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+.settings-editor-toolbar strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #f0e8f4;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.settings-editor-toolbar span {
+  color: #8f8498;
+  font-size: 9px;
+}
+.settings-back-button,
+.settings-save-button {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+.settings-save-button:not(:disabled) {
+  border-color: rgba(177,125,244,.22);
+  background: rgba(159,95,236,.12);
+  color: #e6d4fa;
+}
+.settings-editor-note {
+  margin: 0;
+  padding: 10px 13px;
+  border-bottom: 1px solid rgba(255,255,255,.045);
+  color: #92879b;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.settings-full-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 15px;
+  color: #f0eaf3;
+  background: rgba(0,0,0,.16);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 16px;
+  line-height: 1.5;
+  tab-size: 2;
+  -webkit-overflow-scrolling: touch;
+}
+.settings-full-editor::placeholder { color: #665f6d; }
+.settings-full-editor:focus { outline: none; }
+.settings-export-editor {
+  font-family: inherit;
+  font-size: 14px;
+}
+.settings-editor-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  background: rgba(11,9,15,.92);
+}
+.settings-editor-footer span {
+  margin-left: auto;
+  color: #8f8498;
+  font-size: 9px;
+  text-align: right;
+}
+
+@media (max-width: 420px) {
+  .settings-home { padding: 14px; }
+  .settings-page-head p { font-size: 10px; }
+  .settings-entry { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .settings-entry small { justify-self: start; }
+  .settings-editor-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 9px; }
+  .settings-back-button, .settings-save-button { padding: 0 8px; font-size: 9px; }
+  .settings-editor-note { padding: 9px 11px; }
+  .settings-full-editor { padding: 12px; }
+}

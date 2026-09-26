@@ -1919,6 +1919,15 @@ await test("world routine uses its persisted timezone instead of device-local ho
   assert.equal(resolveTimeOfDay(stamp, "Asia/Tokyo"), "morning");
   assert.equal(calendarDateKey(stamp, "America/Los_Angeles"), "2025-12-31");
 });
+await test("v0.19.4 home-bound routine never schedules Yuzuki outside", () => {
+  const homeLocations = new Set(["bedroom", "living_room", "kitchen"]);
+  const outsideActivities = new Set(["walk", "errands", "cafe_break"]);
+  for (let hour = 0; hour < 24; hour += 1) {
+    const routine = resolveRoutine(Date.UTC(2026, 0, 2, hour, 15, 0), "UTC");
+    assert.ok(homeLocations.has(routine.location), `${hour}: ${routine.location}`);
+    assert.equal(outsideActivities.has(routine.activity), false, `${hour}: ${routine.activity}`);
+  }
+});
 await test("storage v1 world migrates to a persistent timezone and invalid v2 timezone is rejected", () => {
   const base = createInitialWorldState(now, "UTC");
   const { timeZone: _removed, ...v1World } = base;
@@ -3863,7 +3872,9 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(clientSource, /getFirebaseAppCheckToken\(forceRefresh\)/);
   assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 7_500/);
   assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 17_000/);
-  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 10_000/);
+  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 13_000/);
+  assert.match(clientSource, /isRetryableCloudFailure/);
+  assert.match(clientSource, /TRANSIENT_RETRY_DELAY_MS = 180/);
   assert.match(clientSource, /response\.status === 401 && attempt === 0/);
   assert.match(workerSource, /APP_CHECK_JWKS_URL[\s\S]*signal: controller\.signal/);
   assert.doesNotMatch(clientSource, /api\.openai\.com|OPENAI_API_KEY/);
@@ -3934,20 +3945,31 @@ await test("v0.19 GPT hot path uses editable personality, manual memory and rece
   assert.match(storeSource, /exportConversation/);
 });
 
-await test("v0.19 manual-context UI, App Check rotation and unobscured photo stay hardened", () => {
+await test("v0.19.4 full-screen settings, context editors and unobscured photo stay hardened", () => {
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
   const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
   const stageSource = readFileSync(new URL("../src/ui/CharacterStage.tsx", import.meta.url), "utf8");
   const settingsSource = readFileSync(new URL("../src/ui/SettingsScreen.tsx", import.meta.url), "utf8");
+  const chatSource = readFileSync(new URL("../src/ui/ChatScreen.tsx", import.meta.url), "utf8");
   const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(workerSource, /async function getAppCheckJwks\(forceRefresh = false\)/);
   assert.match(workerSource, /getAppCheckJwks\(true\)/);
   assert.match(runtimeSource, /cloudPartsOrFallback\(cloudLanguage, constraintKind\)/);
   assert.match(settingsSource, /Личность Yuzuki/);
   assert.match(settingsSource, /Память Yuzuki/);
+  assert.match(settingsSource, /settings-editor-view/);
+  assert.match(settingsSource, /settings-full-editor/);
+  assert.match(settingsSource, /Вставить из буфера/);
   assert.match(settingsSource, /Весь диалог/);
   assert.match(settingsSource, /Скопировать/);
   assert.match(settingsSource, /Скачать \.txt/);
+  assert.match(appSource, /settingsOpen = activeTab === "settings"/);
+  assert.match(appSource, /!settingsOpen && \(/);
+  assert.match(appSource, /settings-content-area/);
+  assert.match(stylesSource, /\.app-shell\.settings-mode/);
+  assert.match(stylesSource, /font-size: 16px/);
+  assert.match(chatSource, /messages\.length === 0/);
   assert.doesNotMatch(stageSource, /className="stage-bottom"/);
   assert.doesNotMatch(stageSource, /onNavigate/);
   assert.doesNotMatch(appSource, /onNavigate=\{setActiveTab\}/);
@@ -3959,8 +3981,9 @@ await test("v0.19 manual-context UI, App Check rotation and unobscured photo sta
   assert.match(workerSource, /function clippedMultiline/);
   assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
   assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
-  assert.match(settingsSource, /then\(\(saved\) => \{[\s\S]*if \(saved\) setEditingPersonality\(false\)/);
-  assert.match(settingsSource, /if \(saved\) setEditingMemory\(false\)/);
+  assert.match(settingsSource, /if \(ok\) setView\("home"\)/);
+  assert.match(workerSource, /Не перезапускай беседу generic-фразами/);
+  assert.match(workerSource, /Эмодзи используй редко/);
 });
 
 console.log(
