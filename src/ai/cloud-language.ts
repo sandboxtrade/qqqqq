@@ -5,16 +5,25 @@ import {
   isFirebaseConfigured,
 } from "../storage/firebase";
 import { runtimeCloudLanguageEndpoint } from "../config/runtime-config";
+import { bounded } from "../core/async";
 
 export type CloudLanguageRole = "user" | "character";
 
 export interface CloudLanguageInput {
+  mode?: "reply" | "initiative";
+  /** Current user text. Initiative mode intentionally sends an empty string. */
   userText: string;
-  intent: string;
-  dialogueActs: readonly string[];
-  goal: string;
-  tone: string;
-  length: string;
+  /** User-editable stable character description. */
+  personality: string;
+  /** User-editable canonical long-term memory. */
+  memory: string;
+  proactive?: {
+    kind: string;
+    topic?: string;
+    reason?: string;
+    priority?: number;
+    quietMinutes?: number;
+  };
   sceneMechanic?: {
     mode: string;
     family?: string;
@@ -22,49 +31,17 @@ export interface CloudLanguageInput {
     maxStep?: number;
     heat?: number;
   };
-  semantic: {
-    topic?: string;
-    focus?: string;
-    subject: string;
-    stance: string;
-    questionType?: string;
-    isQuestion: boolean;
-    reciprocal: boolean;
-    asksCharacterView: boolean;
-    wantsAdvice: boolean;
-    wantsListening: boolean;
-    confidence: number;
-    appearanceRequest?: {
-      requestedVibe: string;
-      outcome: string;
-      reason: string;
-      selectedEmotion: string;
-      suggestive: boolean;
-    };
+  appearanceRequest?: {
+    requestedVibe: string;
+    outcome: string;
+    reason: string;
+    selectedEmotion: string;
+    suggestive: boolean;
   };
-  decision: {
-    action: string;
-    mode: string;
-    stance: string;
-    summary: string;
+  constraint?: {
     locked: boolean;
-    shouldAskFollowUp: boolean;
-    shouldReferenceMemory: boolean;
-  };
-  continuity: {
-    currentTopic?: string;
-    previousTopic?: string;
-    pendingQuestion?: string;
-    previousUserText?: string;
-    previousUserTextBeforeLast?: string;
-    previousCharacterText?: string;
-    previousCharacterTextBeforeLast?: string;
-    lastUserIntent?: string;
-    lastCharacterIntent?: string;
-    lastCharacterTopic?: string;
-    lastCharacterOpenThread?: string;
-    lastCharacterContinuesPrevious?: boolean;
-    turnsOnTopic: number;
+    kind: string;
+    summary?: string;
   };
   world: {
     timeOfDay: string;
@@ -128,43 +105,8 @@ export interface CloudLanguageInput {
       reflection: string;
     };
   };
-  thought?: {
-    observation?: string;
-    interpretation?: string;
-    feeling?: string;
-    desire?: string;
-    concern?: string;
-    stance?: string;
-    memoryEcho?: string;
-    reconsideration?: string;
-    relationalEmotion?: string;
-    relationalReflection?: string;
-    retrospectiveEcho?: string;
-  };
-  /** Recent chronological surface dialogue. The current user message is sent separately. */
+  /** Recent chronological surface dialogue. Current user message is separate. */
   recentHistory: Array<{ role: CloudLanguageRole; text: string }>;
-  /** Older lines selected by the local retrospective/retrieval pass. */
-  recoveredHistory?: Array<{ role: CloudLanguageRole; text: string }>;
-  memories: Array<{
-    summary: string;
-    kind: string;
-    importance: number;
-    emotionalWeight: number;
-    confidence: number;
-    retrievalStrength: number;
-  }>;
-  facts: Array<{
-    statement: string;
-    subject: string;
-    confidence: number;
-  }>;
-  openThreads: Array<{
-    summary: string;
-    priority: number;
-  }>;
-  retrospective?: string;
-  causal: string[];
-  locked: boolean;
   silent: boolean;
 }
 
@@ -188,7 +130,6 @@ export interface CloudLanguageBudget {
 export interface CloudConversationMetadata {
   topic?: string;
   continuesPrevious?: boolean;
-  openThread?: string;
 }
 
 export interface CloudLanguageSignals {
@@ -196,6 +137,26 @@ export interface CloudLanguageSignals {
   relationshipEvent?: string;
   memoryUsed?: boolean;
   emotionTone?: string;
+}
+
+export interface CloudEmotionReaction {
+  happiness: number;
+  sadness: number;
+  irritation: number;
+  anxiety: number;
+  curiosity: number;
+  boredom: number;
+  affection: number;
+  romanticInterest: number;
+}
+
+export interface CloudRelationshipReaction {
+  trust: number;
+  closeness: number;
+  attachment: number;
+  security: number;
+  respect: number;
+  unresolvedTension: number;
 }
 
 export interface CloudLanguageResult {
@@ -210,6 +171,11 @@ export interface CloudLanguageResult {
   budget?: CloudLanguageBudget;
   conversation?: CloudConversationMetadata;
   signals?: CloudLanguageSignals;
+  /** Initiative mode may deliberately decide not to send anything. */
+  shouldInitiate?: boolean;
+  /** Raw model-requested deltas. Runtime clamps them before persistence. */
+  emotionReaction?: CloudEmotionReaction;
+  relationshipReaction?: CloudRelationshipReaction;
   reason?: string;
 }
 
@@ -223,7 +189,6 @@ interface WorkerReply {
   conversation?: {
     topic?: unknown;
     continuesPrevious?: unknown;
-    openThread?: unknown;
   };
   signals?: {
     userTone?: unknown;
@@ -231,6 +196,9 @@ interface WorkerReply {
     memoryUsed?: unknown;
     emotionTone?: unknown;
   };
+  shouldInitiate?: unknown;
+  emotionReaction?: Record<string, unknown>;
+  relationshipReaction?: Record<string, unknown>;
   usage?: {
     inputTokens?: unknown;
     cachedInputTokens?: unknown;
@@ -248,7 +216,10 @@ interface WorkerReply {
   };
 }
 
-const CALL_TIMEOUT_MS = 11_000;
+const TOKEN_PREP_TIMEOUT_MS = 7_500;
+const WORKER_REQUEST_TIMEOUT_MS = 17_000;
+const TRANSIENT_CIRCUIT_MS = 5_000;
+const NOT_FOUND_CIRCUIT_MS = 10 * 60_000;
 let unavailableUntil = 0;
 
 function asNumber(value: unknown) {
@@ -305,7 +276,6 @@ function parseConversation(raw: WorkerReply["conversation"]): CloudConversationM
   return {
     topic: asOptionalString(raw.topic, 100),
     continuesPrevious: typeof raw.continuesPrevious === "boolean" ? raw.continuesPrevious : undefined,
-    openThread: asOptionalString(raw.openThread, 180),
   };
 }
 
@@ -319,6 +289,36 @@ function parseSignals(raw: WorkerReply["signals"]): CloudLanguageSignals | undef
   };
 }
 
+function boundedDelta(value: unknown, limit = 1) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(-limit, Math.min(limit, value));
+}
+
+function parseEmotionReaction(raw: WorkerReply["emotionReaction"]): CloudEmotionReaction | undefined {
+  if (!raw) return undefined;
+  return {
+    happiness: boundedDelta(raw.happiness),
+    sadness: boundedDelta(raw.sadness),
+    irritation: boundedDelta(raw.irritation),
+    anxiety: boundedDelta(raw.anxiety),
+    curiosity: boundedDelta(raw.curiosity),
+    boredom: boundedDelta(raw.boredom),
+    affection: boundedDelta(raw.affection),
+    romanticInterest: boundedDelta(raw.romanticInterest),
+  };
+}
+
+function parseRelationshipReaction(raw: WorkerReply["relationshipReaction"]): CloudRelationshipReaction | undefined {
+  if (!raw) return undefined;
+  return {
+    trust: boundedDelta(raw.trust),
+    closeness: boundedDelta(raw.closeness),
+    attachment: boundedDelta(raw.attachment),
+    security: boundedDelta(raw.security),
+    respect: boundedDelta(raw.respect),
+    unresolvedTension: boundedDelta(raw.unresolvedTension),
+  };
+}
 
 function parseMessages(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -347,12 +347,80 @@ function bindAbort(source: AbortSignal | undefined, target: AbortController) {
   return () => source.removeEventListener("abort", abort);
 }
 
+function circuitDuration(status?: number) {
+  if (status === 404) return NOT_FOUND_CIRCUIT_MS;
+  if (status && status >= 400 && status < 500 && status !== 401) return 0;
+  return TRANSIENT_CIRCUIT_MS;
+}
+
+async function acquireCloudTokens(
+  user: { getIdToken: (forceRefresh?: boolean) => Promise<string> },
+  forceRefresh: boolean,
+  signal?: AbortSignal,
+) {
+  return Promise.all([
+    bounded(
+      user.getIdToken(forceRefresh),
+      TOKEN_PREP_TIMEOUT_MS,
+      "Firebase auth token",
+      signal,
+    ),
+    bounded(
+      getFirebaseAppCheckToken(forceRefresh),
+      TOKEN_PREP_TIMEOUT_MS,
+      "App Check token",
+      signal,
+    ),
+  ]);
+}
+
+async function callLanguageWorker(
+  input: CloudLanguageInput,
+  idToken: string,
+  appCheckToken: string,
+  signal?: AbortSignal,
+) {
+  const controller = new AbortController();
+  const detachAbort = bindAbort(signal, controller);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error("cloud-language-timeout"));
+  }, WORKER_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(runtimeCloudLanguageEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+        "X-Firebase-AppCheck": appCheckToken,
+      },
+      body: JSON.stringify(input),
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    const data = (await response.json().catch(() => ({}))) as WorkerReply;
+    return { response, data };
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
+    if (timedOut) throw new Error("cloud-language-timeout");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+    detachAbort();
+  }
+}
+
 /**
  * v0.17: cloud is the normal dialogue path. Local dialogue is the resilient
  * fallback, not a router for "simple" messages. Only explicit silence stays local.
  */
 export function shouldUseCloudLanguage(input: CloudLanguageInput) {
   if (input.silent) return false;
+  if (input.mode === "initiative") return true;
   return Boolean(input.userText.trim());
 }
 
@@ -372,99 +440,138 @@ export async function renderCloudLanguage(
   const user = getAuth(app).currentUser;
   if (!user) return { attempted: false, used: false, reason: "unauthenticated" };
 
-  const controller = new AbortController();
-  const detachAbort = bindAbort(signal, controller);
-  let timedOut = false;
-  const timeout = window.setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error("cloud-language-timeout"));
-  }, CALL_TIMEOUT_MS);
-
+  let idToken: string;
+  let appCheckToken: string;
   try {
-    const [idToken, appCheckToken] = await Promise.all([
-      user.getIdToken(false),
-      getFirebaseAppCheckToken(false),
-    ]);
-    if (controller.signal.aborted) {
-      return { attempted: false, used: false, reason: signal?.aborted ? "aborted" : "cloud-language-timeout" };
-    }
-
-    const response = await fetch(runtimeCloudLanguageEndpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-        "X-Firebase-AppCheck": appCheckToken,
-      },
-      body: JSON.stringify(input),
-      cache: "no-store",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      signal: controller.signal,
-    });
-
-    const data = (await response.json().catch(() => ({}))) as WorkerReply;
-    if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
-
-    const model = typeof data.model === "string" ? data.model : undefined;
-    const usage = parseUsage(data.usage);
-    const budget = parseBudget(data.budget);
-    const conversation = parseConversation(data.conversation);
-    const signals = parseSignals(data.signals);
-
-    if (!response.ok) {
-      const reason = responseReason(data, response.status);
-      unavailableUntil = Date.now() + (response.status === 404 ? 10 * 60_000 : 30_000);
-      return { attempted: true, used: false, reason, model, usage, budget, conversation, signals };
-    }
-
-    if (data.skipped === true) {
-      return {
-        attempted: true,
-        used: false,
-        reason: responseReason(data, response.status),
-        model,
-        usage,
-        budget,
-        conversation,
-        signals,
-      };
-    }
-
-    const messages = parseMessages(data.messages);
-    const legacyText = typeof data.text === "string" ? data.text.trim() : "";
-    const text = messages.length ? messages.join("\n") : legacyText;
-    if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
-      return {
-        attempted: true,
-        used: false,
-        reason: text ? "rejected-cloud-text" : "empty-cloud-text",
-        model,
-        usage,
-        budget,
-        conversation,
-        signals,
-      };
-    }
-
-    return {
-      attempted: true,
-      used: true,
-      text,
-      messages: messages.length ? messages : [text],
-      model,
-      usage,
-      budget,
-      conversation,
-      signals,
-    };
+    [idToken, appCheckToken] = await acquireCloudTokens(user, false, signal);
   } catch (error) {
     if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
-    const reason = timedOut ? "cloud-language-timeout" : reasonFromError(error);
-    unavailableUntil = Date.now() + 30_000;
-    return { attempted: true, used: false, reason };
-  } finally {
-    window.clearTimeout(timeout);
-    detachAbort();
+    unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
+    return {
+      attempted: true,
+      used: false,
+      reason: `token-prep: ${reasonFromError(error)}`.slice(0, 180),
+    };
   }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { response, data } = await callLanguageWorker(
+        input,
+        idToken,
+        appCheckToken,
+        signal,
+      );
+      if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
+
+      const model = typeof data.model === "string" ? data.model : undefined;
+      const usage = parseUsage(data.usage);
+      const budget = parseBudget(data.budget);
+      const conversation = parseConversation(data.conversation);
+      const signals = parseSignals(data.signals);
+      const shouldInitiate = typeof data.shouldInitiate === "boolean" ? data.shouldInitiate : undefined;
+      const emotionReaction = parseEmotionReaction(data.emotionReaction);
+      const relationshipReaction = parseRelationshipReaction(data.relationshipReaction);
+      const reason = responseReason(data, response.status);
+
+      // Firebase ID/App Check tokens can expire between acquisition and Worker
+      // verification. Refresh both once before falling back to local dialogue.
+      if (response.status === 401 && attempt === 0) {
+        try {
+          [idToken, appCheckToken] = await acquireCloudTokens(user, true, signal);
+          continue;
+        } catch (error) {
+          if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
+          unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
+          return {
+            attempted: true,
+            used: false,
+            reason: `token-refresh: ${reasonFromError(error)}`.slice(0, 180),
+            model,
+            usage,
+            budget,
+            conversation,
+            signals,
+            shouldInitiate,
+            emotionReaction,
+            relationshipReaction,
+          };
+        }
+      }
+
+      if (!response.ok) {
+        const duration = circuitDuration(response.status);
+        if (duration) unavailableUntil = Date.now() + duration;
+        return { attempted: true, used: false, reason, model, usage, budget, conversation, signals, shouldInitiate, emotionReaction, relationshipReaction };
+      }
+
+      if (data.skipped === true) {
+        return {
+          attempted: true,
+          used: false,
+          reason,
+          model,
+          usage,
+          budget,
+          conversation,
+          signals,
+          shouldInitiate,
+          emotionReaction,
+          relationshipReaction,
+        };
+      }
+
+      const messages = parseMessages(data.messages);
+      const legacyText = typeof data.text === "string" ? data.text.trim() : "";
+      const text = messages.length ? messages.join("\n") : legacyText;
+      if (input.mode === "initiative" && shouldInitiate === false) {
+        unavailableUntil = 0;
+        return {
+          attempted: true,
+          used: true,
+          messages: [],
+          shouldInitiate: false,
+          model, usage, budget, conversation, signals,
+          emotionReaction, relationshipReaction,
+        };
+      }
+      if (!text || text.length > 1800 || looksLikeAssistantMeta(text)) {
+        return {
+          attempted: true,
+          used: false,
+          reason: text ? "rejected-cloud-text" : "empty-cloud-text",
+          model,
+          usage,
+          budget,
+          conversation,
+          signals,
+          shouldInitiate,
+          emotionReaction,
+          relationshipReaction,
+        };
+      }
+
+      unavailableUntil = 0;
+      return {
+        attempted: true,
+        used: true,
+        text,
+        messages: messages.length ? messages : [text],
+        model,
+        usage,
+        budget,
+        conversation,
+        signals,
+        shouldInitiate,
+        emotionReaction,
+        relationshipReaction,
+      };
+    } catch (error) {
+      if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
+      unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
+      return { attempted: true, used: false, reason: reasonFromError(error) };
+    }
+  }
+
+  return { attempted: true, used: false, reason: "cloud-language-unavailable" };
 }
