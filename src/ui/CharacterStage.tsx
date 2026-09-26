@@ -70,7 +70,11 @@ export function CharacterStage({
       <div className="stage-grid" />
 
       <div className="live-avatar">
-        <AssetScene assetId={runtime?.appearance?.assetId} visualState={visualState} />
+        <AssetScene
+          assetId={runtime?.appearance?.assetId}
+          visualState={visualState}
+          warmIntimacy={runtime?.intimacy?.adultModeEnabled === true}
+        />
       </div>
 
       {runtime?.romance?.phase === "private" && (

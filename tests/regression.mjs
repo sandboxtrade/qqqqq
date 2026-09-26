@@ -3478,6 +3478,46 @@ await test("horny and hornys are reachable as distinct internal versus outward s
   assert.equal(resolveVisualEmotionState(runtime, { ...context, intimacySignalKind: "none" }).emotion, "horny");
   assert.equal(resolveVisualEmotionState(runtime, { ...context, intimacySignalKind: "consent" }).emotion, "hornys");
 });
+await test("Yuzuki's own outward intimacy tone can drive flirty and horny portraits", () => {
+  const base = romanticInput("");
+  const runtime = {
+    revision: 0,
+    emotion: { ...base.emotion, affection: 0.9, romanticInterest: 0.9, energy: 0.8, irritation: 0, sadness: 0, anxiety: 0.05 },
+    relationship: { ...base.relationship, trust: 0.95, closeness: 0.95, attachment: 0.9, security: 0.9, stage: "deep" },
+    world: base.world,
+    romance: { ...initialRomance(now), phase: "romantic" },
+    intimacy: {
+      ...createInitialIntimacyState(now),
+      adultModeEnabled: true,
+      phase: "intimate",
+      interactionStatus: "open",
+      comfort: 0.85,
+      interest: 0.86,
+      arousal: 0.72,
+      initiativeDrive: 0.5,
+    },
+  };
+  assert.equal(resolveVisualEmotionState(runtime, { intimacyTone: "flirty", eventIntensity: 0.55 }).emotion, "flirty");
+  assert.equal(resolveVisualEmotionState(runtime, { intimacyTone: "aroused", eventIntensity: 0.7 }).emotion, "horny");
+});
+await test("high_arousal reply tone reaches outward hornys only inside high intimacy", () => {
+  const base = romanticInput("");
+  const runtime = {
+    revision: 0,
+    emotion: { ...base.emotion, affection: 1, romanticInterest: 1, energy: 0.9, irritation: 0, sadness: 0, anxiety: 0 },
+    relationship: { ...base.relationship, trust: 1, closeness: 1, attachment: 1, security: 0.9, stage: "deep" },
+    world: base.world,
+    romance: { ...initialRomance(now), phase: "private" },
+    intimacy: {
+      ...createInitialIntimacyState(now),
+      adultModeEnabled: true,
+      phase: "high_intimacy",
+      interactionStatus: "open",
+      comfort: 1, interest: 1, arousal: 0.9, initiativeDrive: 0.8,
+    },
+  };
+  assert.equal(resolveVisualEmotionState(runtime, { intimacyTone: "high_arousal", eventIntensity: 0.8 }).emotion, "hornys");
+});
 await test("earned jealousy is exposed to the visual emotion resolver", () => {
   const base = romanticInput("");
   const runtime = {
@@ -3583,15 +3623,19 @@ await test("scene fallback resolves placeholder ids to the visible neutral asset
   const neutral = { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } };
   assert.equal(selectAppearance(visualRuntime(), { emotion: "sad", intensity: 4, confidence: .7, changeStrength: .7 }, now, { assets: [placeholder, neutral], fallbackId: neutral.id }).assetId, neutral.id);
 });
-await test("visual emotion hysteresis keeps a nearly unchanged image", () => {
-  const r = visualRuntime();
+await test("visual emotion hysteresis is brief instead of freezing a scene", () => {
   const emotionAssets = [
     baseAsset,
     { ...baseAsset, id: "emotion.shy.5.1", src: "assets/character/shy.5.1.png", expression: "shy", motion: "still", visualEmotion: { emotion: "shy", intensity: 5, variant: 1 } },
     { ...baseAsset, id: "emotion.shy.6.1", src: "assets/character/shy.6.1.png", expression: "shy", motion: "still", visualEmotion: { emotion: "shy", intensity: 6, variant: 1 } },
   ];
-  r.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 15_000, outfitChangedAt: now - 15_000 };
-  assert.equal(selectAppearance(r, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.5.1");
+  const recent = visualRuntime();
+  recent.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
+  assert.equal(selectAppearance(recent, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.5.1");
+
+  const settled = visualRuntime();
+  settled.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 15_000, outfitChangedAt: now - 15_000 };
+  assert.equal(selectAppearance(settled, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.6.1");
 });
 await test("conversation and memory reset removes durable history and starts a fresh revision", async () => {
   const r = new InMemoryCompanionRepository();

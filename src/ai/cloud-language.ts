@@ -137,6 +137,8 @@ export interface CloudLanguageSignals {
   relationshipEvent?: string;
   memoryUsed?: boolean;
   emotionTone?: string;
+  /** How Yuzuki herself is outwardly presenting intimacy in this generated turn. */
+  intimacyTone?: "none" | "flirty" | "aroused" | "high_arousal";
 }
 
 export interface CloudEmotionReaction {
@@ -195,6 +197,7 @@ interface WorkerReply {
     relationshipEvent?: unknown;
     memoryUsed?: unknown;
     emotionTone?: unknown;
+    intimacyTone?: unknown;
   };
   shouldInitiate?: unknown;
   emotionReaction?: Record<string, unknown>;
@@ -286,6 +289,9 @@ function parseSignals(raw: WorkerReply["signals"]): CloudLanguageSignals | undef
     relationshipEvent: asOptionalString(raw.relationshipEvent, 32),
     memoryUsed: typeof raw.memoryUsed === "boolean" ? raw.memoryUsed : undefined,
     emotionTone: asOptionalString(raw.emotionTone, 32),
+    intimacyTone: ["none", "flirty", "aroused", "high_arousal"].includes(String(raw.intimacyTone ?? ""))
+      ? raw.intimacyTone as CloudLanguageSignals["intimacyTone"]
+      : undefined,
   };
 }
 

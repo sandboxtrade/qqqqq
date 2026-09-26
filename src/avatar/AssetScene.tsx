@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { LivePhoto } from "./LivePhoto";
 import {
+  characterAssets,
   findCharacterAsset,
   findRenderFallbackAsset,
+  parseSequenceSceneId,
   type CharacterAsset,
 } from "./avatar-model";
 import { transitionKind } from "./avatar-model";
@@ -27,9 +29,16 @@ function preloadImage(asset: CharacterAsset, signal: AbortSignal): Promise<void>
       error ? reject(error) : resolve();
     };
     const abort = () => finish(new Error("cancelled"));
-    const timer = window.setTimeout(() => finish(new Error("image-timeout")), 8000);
+    const timer = window.setTimeout(() => finish(new Error("image-timeout")), 20000);
     signal.addEventListener("abort", abort, { once: true });
-    img.onload = () => { img.decode().then(() => finish(), () => finish(new Error("image-decode"))); };
+    img.onload = () => {
+      // Safari can reject decode() for a perfectly displayable image (notably
+      // large/cached PNGs). onload already proves the resource is usable, so a
+      // decode optimization failure must not throw away a valid Yuzuki frame.
+      if (typeof img.decode === "function")
+        img.decode().then(() => finish(), () => finish());
+      else finish();
+    };
     img.onerror = () => finish(new Error("image-load"));
     if (signal.aborted) abort(); else img.src = url(asset);
   });
@@ -56,7 +65,7 @@ function preloadVideo(asset: CharacterAsset, signal: AbortSignal): Promise<void>
       video.load();
       finish(new Error("cancelled"));
     };
-    const timer = window.setTimeout(() => finish(new Error("video-timeout")), 12000);
+    const timer = window.setTimeout(() => finish(new Error("video-timeout")), 25000);
     signal.addEventListener("abort", abort, { once: true });
     video.preload = "auto";
     video.muted = true;
@@ -75,6 +84,34 @@ function preload(asset: CharacterAsset, signal: AbortSignal) {
   return asset.mediaType === "video"
     ? preloadVideo(asset, signal)
     : preloadImage(asset, signal);
+}
+
+const warmedAssetIds = new Set<string>();
+function warmAsset(asset: CharacterAsset | undefined) {
+  if (!asset || warmedAssetIds.has(asset.id)) return;
+  warmedAssetIds.add(asset.id);
+  if (asset.mediaType === "video") {
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.src = url(asset);
+    video.load();
+    return;
+  }
+  const img = new Image();
+  img.decoding = "async";
+  img.src = url(asset);
+}
+
+function intimacyWarmAssets() {
+  const visual = characterAssets.filter((asset) =>
+    asset.visualEmotion && ["flirty", "horny", "hornys"].includes(asset.visualEmotion.emotion),
+  );
+  const firstSx = characterAssets.filter((asset) => {
+    const sequence = parseSequenceSceneId(asset.id);
+    return sequence?.kind === "sx" && sequence.step === 1;
+  });
+  return [...visual, ...firstSx].slice(0, 6);
 }
 
 function VideoLayer({ asset }: { asset: CharacterAsset }) {
@@ -185,7 +222,15 @@ function ImageLayer({ asset, visualState, animate }: { asset: CharacterAsset; vi
   </>;
 }
 
-export function AssetScene({ assetId, visualState }: { assetId?: string; visualState: AvatarVisualState }) {
+export function AssetScene({
+  assetId,
+  visualState,
+  warmIntimacy = false,
+}: {
+  assetId?: string;
+  visualState: AvatarVisualState;
+  warmIntimacy?: boolean;
+}) {
   const requested = findCharacterAsset(assetId);
   const [scene, setScene] = useState<{ current: CharacterAsset; previous: CharacterAsset | null; kind: "dip" | "dissolve" }>({
     current: findCharacterAsset(), previous: null, kind: "dissolve",
@@ -239,6 +284,29 @@ export function AssetScene({ assetId, visualState }: { assetId?: string; visualS
     });
     return () => { controller.abort(); clearTimeout(timer); };
   }, [requested.id, retry]);
+
+  useEffect(() => {
+    if (!warmIntimacy) return;
+    const timer = window.setTimeout(() => {
+      intimacyWarmAssets().forEach((asset, index) => {
+        window.setTimeout(() => warmAsset(asset), index * 120);
+      });
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [warmIntimacy]);
+
+  useEffect(() => {
+    const currentSequence = parseSequenceSceneId(scene.current.id);
+    if (currentSequence?.kind !== "sx") return;
+    const next = characterAssets
+      .filter((asset) => parseSequenceSceneId(asset.id)?.kind === "sx")
+      .map((asset) => ({ asset, info: parseSequenceSceneId(asset.id)! }))
+      .filter(({ info }) => info.step > currentSequence.step)
+      .sort((a, b) => a.info.step - b.info.step || a.asset.id.localeCompare(b.asset.id))[0]?.asset;
+    const timer = window.setTimeout(() => warmAsset(next), 250);
+    return () => window.clearTimeout(timer);
+  }, [scene.current.id]);
+
   return <>
     <div
       className={`asset-scene ${scene.previous ? `asset-transition ${scene.kind}` : ""}`}

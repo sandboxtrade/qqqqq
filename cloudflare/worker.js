@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.19.6 Visual Variety + Initiative + Pose Reliability
+// v0.19.7 Intimacy Visual Sync + Faster Scene Switching
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -89,6 +89,14 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - unresolvedTension: положительное значение добавляет напряжение, отрицательное снимает его.
 - В mode=initiative все reaction-поля должны быть 0: собственное исходящее сообщение не должно само по себе менять её чувства к пользователю.
 
+Визуальный интимный тон:
+- signals.intimacyTone описывает НЕ слова пользователя, а то, как сама Yuzuki реально проявляется в ТВОИХ сгенерированных messages этого хода.
+- none — обычный разговор, нежность без флирта или отсутствие внешнего интимного проявления.
+- flirty — лёгкий явный флирт/дразнение со стороны Yuzuki.
+- aroused — Yuzuki сама открыто показывает или прямо признаёт заметное возбуждение/желание.
+- high_arousal — только когда adult intimacy уже активна, нет pause/stop/boundary, текущее состояние реально intimate/high_intimacy и Yuzuki в своём ответе явно продолжает взаимный интимный момент. Не используй high_arousal только потому, что пользователь этого просит.
+- Этот сигнал нужен только для синхронизации картинки с уже выбранной тобой репликой. Он не является согласием и не отменяет локальные границы.
+
 Инициатива:
 - mode=initiative означает, что пользователь сейчас ничего не написал. Это ПРОВЕРКА: Yuzuki не обязана писать.
 - Сначала реши, захотела бы она естественно написать сама с учётом PERSONALITY, MEMORY, RECENT, emotion, relationship, world и длительности тишины в proactive.quietMinutes.
@@ -142,8 +150,12 @@ const RESPONSE_FORMAT = {
             type: "string",
             enum: ["neutral", "warm", "curious", "low_energy", "bored", "irritated", "sad", "anxious", "hurt", "jealous", "tender"],
           },
+          intimacyTone: {
+            type: "string",
+            enum: ["none", "flirty", "aroused", "high_arousal"],
+          },
         },
-        required: ["userTone", "relationshipEvent", "memoryUsed", "emotionTone"],
+        required: ["userTone", "relationshipEvent", "memoryUsed", "emotionTone", "intimacyTone"],
         additionalProperties: false,
       },
       emotionReaction: {
@@ -507,6 +519,7 @@ function parseStructuredTurn(value, mode) {
       relationshipEvent: clipped(parsed.signals?.relationshipEvent, 32),
       memoryUsed: parsed.signals?.memoryUsed === true,
       emotionTone: clipped(parsed.signals?.emotionTone, 32),
+      intimacyTone: clipped(parsed.signals?.intimacyTone, 24),
     },
     emotionReaction: reactionObject(parsed.emotionReaction, [
       "happiness", "sadness", "irritation", "anxiety", "curiosity", "boredom", "affection", "romanticInterest",

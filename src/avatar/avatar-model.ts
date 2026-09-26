@@ -122,6 +122,8 @@ export interface VisualEmotionContext {
   userTone?: string;
   /** Optional GPT-observed relationship event for this turn. */
   relationshipEvent?: string;
+  /** GPT-observed outward intimacy of Yuzuki's own generated reply. */
+  intimacyTone?: "none" | "flirty" | "aroused" | "high_arousal";
   /** Mechanical intimacy signal only; never narrative intent/NLU. */
   intimacySignalKind?: string;
   /** Strength of the current event/request when known. */
@@ -155,6 +157,7 @@ export function resolveVisualEmotionState(
   const emotionTone = context.emotionTone ?? "";
   const userTone = context.userTone ?? "";
   const relationshipEvent = context.relationshipEvent ?? "";
+  const intimacyTone = context.intimacyTone ?? "none";
   const intimacySignal = context.intimacySignalKind ?? "none";
   const candidates: EmotionCandidate[] = [];
   const add = (emotion: VisualEmotionName, score: number, magnitude = score) => {
@@ -244,6 +247,12 @@ export function resolveVisualEmotionState(
   add("embarrassed", (flirtSignal && e.anxiety > 0.3 ? 0.32 : 0.02) + e.anxiety * 0.32, e.anxiety);
   add("blushing", (flirtSignal && romanticDrive > 0.58 ? 0.38 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
 
+  // The generated reply is the most immediate evidence of how Yuzuki is
+  // outwardly presenting herself right now. This does not mutate consent or
+  // intimacy state; it only keeps the visible frame synchronized with her words.
+  if (intimacyTone === "flirty")
+    add("flirty", 0.98, Math.max(0.62, romanticDrive));
+
   if (adultVisuals) {
     const arousal = intimacy?.arousal ?? 0;
     const phaseClose = intimacyPhase === "close";
@@ -253,8 +262,23 @@ export function resolveVisualEmotionState(
     add("seductive", (phaseIntimate || phaseHigh ? 0.34 : phaseClose ? 0.16 : 0) + romanticDrive * 0.28 + (intimacySignal === "flirt" ? 0.1 : 0), Math.max(romanticDrive, arousal));
     add("passionate", (phaseHigh ? 0.5 : phaseIntimate ? 0.26 : 0) + Math.max(0, arousal - 0.48) * 0.85, Math.max(romanticDrive, arousal));
     add("desiring", (phaseHigh ? 0.4 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.58) * 1.05, Math.max(romanticDrive, arousal));
-    add("horny", (phaseHigh ? 0.5 : phaseIntimate ? 0.2 : 0) + Math.max(0, arousal - 0.68) * 1.5, arousal);
-    add("hornys", (phaseHigh && intimacySignal === "consent" ? 0.62 : 0) + Math.max(0, arousal - 0.8) * (intimacySignal === "consent" ? 2.0 : 0.3), arousal);
+    // Once arousal is mechanically high enough, mature portraits must be
+    // reachable instead of being permanently outscored by generic warm/flirty
+    // states. "hornys" remains the outward/high-intimacy state.
+    const outwardHigh = phaseHigh && (intimacySignal === "consent" || intimacyTone === "high_arousal");
+    add("horny",
+      outwardHigh
+        ? 0.86
+        : (phaseHigh ? 0.74 : phaseIntimate ? 0.62 : phaseClose ? 0.24 : 0) +
+          Math.max(0, arousal - 0.58) * 0.9 +
+          (intimacyTone === "aroused" ? 0.36 : intimacyTone === "high_arousal" ? 0.46 : 0),
+      Math.max(arousal, intimacyTone === "aroused" || intimacyTone === "high_arousal" ? 0.72 : 0),
+    );
+    add("hornys",
+      (outwardHigh ? 0.98 : 0) +
+        Math.max(0, arousal - 0.8) * (outwardHigh ? 0.5 : 0.18),
+      outwardHigh ? Math.max(arousal, 0.92) : arousal,
+    );
   }
 
   if (context.hardConstraintKind === "sleeping") add("sleepy", 1, 1);
@@ -1197,12 +1221,12 @@ export function selectAppearance(
     const age = Math.max(0, now - previous.selectedAt);
     // Keep micro-fluctuations from turning the portrait into a slideshow, but
     // rotate noticeably sooner than before so a long chat does not look static.
-    if (sameEmotion && intensityShift <= 1 && request.changeStrength < 0.88 && age < 35_000)
+    if (sameEmotion && intensityShift <= 1 && request.changeStrength < 0.88 && age < 8_000)
       return previous;
     // Only hold a cross-emotion reinterpretation for a few seconds when the
     // requested emotion actually exists. If it does not exist, switch straight
     // to the nearest semantic fallback instead of leaving an unrelated old photo.
-    if (exactEmotionAvailable && !sameEmotion && request.changeStrength < 0.54 && intensityShift < 2 && age < 7_000)
+    if (exactEmotionAvailable && !sameEmotion && request.changeStrength < 0.54 && intensityShift < 2 && age < 2_000)
       return previous;
   }
 

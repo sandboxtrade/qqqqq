@@ -318,6 +318,20 @@ function shouldTriggerSequence(
   return signal.intimacyContext === true && SX_TURN_PATTERN.test(text);
 }
 
+function shouldTriggerReplySequence(
+  intimacy: IntimacyState | undefined,
+  intimacyTone: string | undefined,
+  hardConstraint?: string,
+) {
+  if (!intimacy?.adultModeEnabled) return false;
+  if (["intimacy_stop", "intimacy_pause"].includes(hardConstraint ?? "")) return false;
+  if (["paused", "stopped", "hesitant"].includes(intimacy.interactionStatus)) return false;
+  if (!["intimate", "high_intimacy"].includes(intimacy.phase)) return false;
+  if (intimacy.arousal < 0.62) return false;
+  return intimacyTone === "high_arousal" ||
+    (intimacyTone === "aroused" && intimacy.phase === "high_intimacy" && intimacy.arousal >= 0.78);
+}
+
 const READY_TRANSITION_ACTIVITIES = new Set([
   "ready_to_chat",
   "putting_phone_away",
@@ -1009,7 +1023,7 @@ export async function handleUserMessage(
   relationship = stateReaction.relationship;
   romance = syncRomanceState(romance, emotion, relationship, intimacy.state, intimacy.action, intimacySignal, now);
 
-  if (!sequenceAppearance && !readyAppearance && !appearanceResolution.requested) {
+  if (!sequenceAppearance && !appearanceResolution.requested) {
     const reactedVisualRuntime: RuntimeState = {
       ...visualRuntime,
       emotion,
@@ -1017,20 +1031,44 @@ export async function handleUserMessage(
       romance,
       intimacy: intimacy.state,
     };
-    const reactedVisualEmotion = resolveVisualEmotionState(reactedVisualRuntime, {
-      emotionTone: cloudLanguage.signals?.emotionTone,
-      userTone: cloudLanguage.signals?.userTone,
-      relationshipEvent: cloudLanguage.signals?.relationshipEvent,
-      intimacySignalKind: intimacySignal.kind,
-      eventIntensity: intimacySignal.strength,
-      hardConstraintKind: constraintKind,
-    });
-    appearance = selectAppearance(
-      reactedVisualRuntime,
-      reactedVisualEmotion,
-      now,
-      { recentAssetIds: recentAppearanceIds, seed: `${input.id}:reaction` },
-    );
+    const cloudIntimacyTone = cloudLanguage.signals?.intimacyTone;
+    const replySequence = shouldTriggerReplySequence(
+      intimacy.state,
+      cloudIntimacyTone,
+      constraintKind,
+    )
+      ? selectSequenceAppearance(reactedVisualRuntime, now, {
+          recentAssetIds: recentAppearanceIds,
+          seed: `${input.id}:reply-sequence`,
+        })
+      : null;
+
+    if (replySequence) {
+      appearance = replySequence.appearance;
+    } else {
+      const reactedVisualEmotion = resolveVisualEmotionState(reactedVisualRuntime, {
+        emotionTone: cloudLanguage.signals?.emotionTone,
+        userTone: cloudLanguage.signals?.userTone,
+        relationshipEvent: cloudLanguage.signals?.relationshipEvent,
+        intimacyTone: cloudIntimacyTone,
+        intimacySignalKind: intimacySignal.kind,
+        eventIntensity: intimacySignal.strength,
+        hardConstraintKind: constraintKind,
+      });
+      const cloudVisualShouldOverrideReady =
+        cloudIntimacyTone === "flirty" ||
+        cloudIntimacyTone === "aroused" ||
+        cloudIntimacyTone === "high_arousal" ||
+        ![undefined, "neutral"].includes(cloudLanguage.signals?.emotionTone);
+      if (!readyAppearance || cloudVisualShouldOverrideReady) {
+        appearance = selectAppearance(
+          reactedVisualRuntime,
+          reactedVisualEmotion,
+          now,
+          { recentAssetIds: recentAppearanceIds, seed: `${input.id}:reaction` },
+        );
+      }
+    }
   }
 
   const reply = replyParts.join("\n");
@@ -1340,6 +1378,7 @@ export async function maintainRuntime(
             const proactiveVisualEmotion = resolveVisualEmotionState(publishState, {
               emotionTone: proactiveLanguage.signals?.emotionTone,
               relationshipEvent: proactiveLanguage.signals?.relationshipEvent,
+              intimacyTone: proactiveLanguage.signals?.intimacyTone,
             });
             proactiveAppearance = selectAppearance(
               publishState,
