@@ -135,6 +135,7 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
   }
 
   const app = getFirebaseApp();
+  if (!app) return { attempted: false, used: false, reason: "firebase-app-missing" };
   const auth = getAuth(app);
   if (!auth.currentUser) return { attempted: false, used: false, reason: "not-authenticated" };
 

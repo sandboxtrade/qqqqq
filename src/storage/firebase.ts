@@ -101,6 +101,21 @@ export function getAppCheckState(): AppCheckState {
   return appCheckState;
 }
 
+export async function getFirebaseAppCheckToken(forceRefresh = false): Promise<string> {
+  assertRuntimeConfiguration();
+  initializeFirebaseAppCheck();
+  if (!appCheck)
+    throw new Error("App Check не настроен: проверь reCAPTCHA site key.");
+  const result = await getToken(appCheck, forceRefresh);
+  appCheckState = result.token
+    ? runtimeAppCheckDebugEnabled || runtimeAppCheckDebugToken
+      ? "debug"
+      : "active"
+    : "error";
+  if (!result.token) throw new Error("App Check не вернул токен.");
+  return result.token;
+}
+
 export function getFirebaseDb(): Firestore | null {
   if (!isFirebaseConfigured) return null;
   assertRuntimeConfiguration();

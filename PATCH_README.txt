@@ -1,19 +1,10 @@
-Yuzuki v0.19.6 build fix
+v0.20.2 build fix
 
-Fixes GitHub Actions TypeScript error:
-src/avatar/avatar-model.ts(1224,7) TS2345
+Fixes the GitHub Actions errors shown after v0.20.2 upload:
+- exports getFirebaseAppCheckToken() from src/storage/firebase.ts
+- handles nullable getFirebaseApp() before getAuth() in src/ai/cloud-photo.ts
+- uses result.trace?.cloudLanguage instead of result.trace.cloudLanguage in src/app/store.ts
 
-Cause:
-resolveAvailableVisualEmotion() returns VisualEmotionName | null.
-The previous guard only checked emotionPool.length, which TypeScript 7 did not
-use to narrow targetEmotion away from null before explicitVariantPool().
-
-Fix:
-guard targetEmotion explicitly:
-if (!targetEmotion || !emotionPool.length) ...
-
-No runtime behavior, Firebase, Worker, memory, photos, or schema contracts changed.
-Replace only:
-src/avatar/avatar-model.ts
-
-Cloudflare Worker redeploy is NOT required for this build-only fix.
+This patch is applied ON TOP OF v0.20.2.
+No Firestore paths/schema/revision logic changed.
+No Cloudflare Worker change is included in this build-fix patch.

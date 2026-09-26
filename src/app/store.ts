@@ -733,7 +733,7 @@ async function sendTurn(message: ChatMessage) {
         result.replyId,
         result.replyTimestamp + replyCount * 700 + 250,
         result.state,
-        result.trace.cloudLanguage?.signals,
+        result.trace?.cloudLanguage?.signals,
       );
     }
   } catch (error) {
