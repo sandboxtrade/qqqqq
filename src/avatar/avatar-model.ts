@@ -1184,7 +1184,7 @@ export function selectAppearance(
   const emotionPool = targetEmotion
     ? assets.filter((asset) => asset.visualEmotion?.emotion === targetEmotion)
     : [];
-  if (!emotionPool.length) return current && previous ? previous : {
+  if (!targetEmotion || !emotionPool.length) return current && previous ? previous : {
     version: 1, assetId: fallback.id, selectedAt: now, outfitChangedAt: now,
   };
   const availableLevels = [...new Set(emotionPool.map((asset) => asset.visualEmotion!.intensity))]
