@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.9 Per-character daily life + Aiko + photo availability fix
+// v0.20.10 WaveSpeed WAN 2.6 Image Edit fallback
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -8,9 +8,9 @@ const OPENAI_URL = "https://api.openai.com/v1/responses";
 const IMAGE_MODEL = "gpt-image-2";
 const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
-const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/qwen-image/edit-2511";
+const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/alibaba/wan-2.6/image-edit";
 const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
-const WAVESPEED_MODEL = "wavespeed-ai/qwen-image/edit-2511";
+const WAVESPEED_MODEL = "alibaba/wan-2.6/image-edit";
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
 const GITHUB_SCENES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/src/assets/character/scenes/";
 const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/src/assets/character/scenes/";
@@ -1353,7 +1353,7 @@ async function callWaveSpeedImage(env, prompt, referenceUrls = []) {
     const submit = await fetch(WAVESPEED_IMAGE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.WAVESPEED_API_KEY}` },
-      body: JSON.stringify({ prompt, images, output_format: "webp", enable_base64_output: false, enable_sync_mode: false }),
+      body: JSON.stringify({ prompt, images, enable_prompt_expansion: false }),
       signal: controller.signal,
     });
     const submitBody = await submit.json().catch(() => ({}));
