@@ -14,6 +14,7 @@ assert.match(registry, /characterProfiles/);
 assert.match(registry, /mika_v1/);
 assert.match(registry, /rin_v1/);
 assert.match(registry, /aiko_v1/);
+assert.match(registry, /hina_v1/);
 assert.match(registry, /lea_v1/);
 assert.match(registry, /sofia_v1/);
 assert.match(registry, /eva_v1/);

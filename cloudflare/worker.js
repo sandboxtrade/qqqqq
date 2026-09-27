@@ -26,6 +26,7 @@ const CHARACTER_PROFILE_SLUGS = Object.freeze({
   eva_v1: "eva",
   nora_v1: "nora",
   aiko_v1: "aiko",
+  hina_v1: "hina",
 });
 
 const FIREBASE_PROJECT_ID = "qqqq-91fc0";

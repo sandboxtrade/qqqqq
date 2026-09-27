@@ -1,0 +1,6 @@
+Canonical Hina avatar reference
+
+Photorealistic smartphone portrait of Hina, a fictional adult Japanese woman, age 20. Clearly adult appearance. Soft oval face, light natural skin texture, large dark-brown almond-shaped eyes, neat small nose, natural lips, long straight near-black hair with a light airy fringe and soft face-framing strands. Slim natural adult build. Minimal natural makeup. Gentle, shy, warm expression with a small restrained smile, slightly bashful but not childlike. Modern Japanese everyday casual clothing in soft neutral or pastel tones. Clean realistic indoor daylight, ordinary personal smartphone photography, no beauty-filter look, no anime styling, no text or watermark. Chest-up or waist-up composition, looking toward the camera. Keep facial features distinctive enough to remain stable across later image edits.
+
+Save the final approved image exactly as:
+public/assets/profiles/hina/avatar.jpg

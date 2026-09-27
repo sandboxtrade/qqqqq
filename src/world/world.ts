@@ -266,6 +266,28 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "спряталась в маленьком кафе, где почти никто не разговаривает",
     ],
   },
+  hina_v1: {
+    reading: [
+      "сижу с книгой и уже минут десять перечитываю одну и ту же страницу, потому что отвлеклась",
+      "читаю понемногу и делаю заметки на полях стикерами",
+    ],
+    cafe_break: [
+      "сижу в маленьком кафе с латте и пытаюсь не торопиться обратно",
+      "зашла за кофе после дел и в итоге устроилась у окна",
+    ],
+    cooking: [
+      "что-то пеку на кухне и очень надеюсь, что на этот раз ничего не пересушу",
+      "возилась с десертом и теперь жду, получится ли он вообще",
+    ],
+    music: [
+      "слушаю музыку в наушниках и разбираю фотографии в телефоне",
+      "включила тихий плейлист и просто немного отдыхаю",
+    ],
+    relaxing: [
+      "сижу дома с чаем и наконец никуда не спешу",
+      "устроилась на диване с телефоном и лениво отдыхаю",
+    ],
+  },
   lea_v1: {
     walk: [
       "иду куда глаза глядят и уже дважды свернула не туда",
@@ -380,6 +402,16 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 14, end: 17, activities: ["cafe_break", "reading"], targetEnergy: .62 },
     { start: 17, end: 20, activities: ["walk", "cooking"], targetEnergy: .54 },
     { start: 20, end: 24, activities: ["reading", "music", "relaxing"], targetEnergy: .36 },
+  ],
+  hina_v1: [
+    { start: 0, end: 1, activities: ["reading", "music", "relaxing"], targetEnergy: .32 },
+    { start: 1, end: 8, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 8, end: 9, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .42 },
+    { start: 9, end: 11, activities: ["breakfast", "music"], targetEnergy: .65 },
+    { start: 11, end: 15, activities: ["reading", "errands", "cafe_break"], targetEnergy: .7 },
+    { start: 15, end: 18, activities: ["cafe_break", "walk", "reading"], targetEnergy: .62 },
+    { start: 18, end: 21, activities: ["cooking", "music", "relaxing"], targetEnergy: .5 },
+    { start: 21, end: 24, activities: ["reading", "music", "relaxing"], targetEnergy: .36 },
   ],
   lea_v1: [
     { start: 0, end: 2, activities: ["music", "relaxing"], targetEnergy: .48 },
