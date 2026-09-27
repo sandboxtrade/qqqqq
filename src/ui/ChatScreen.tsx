@@ -55,6 +55,7 @@ export function ChatScreen({
   onDraftChange: (text: string) => void;
 }) {
   const [showNewMessages, setShowNewMessages] = useState(false);
+  const [openedPhoto, setOpenedPhoto] = useState<{ src: string; alt: string } | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,6 +85,20 @@ export function ChatScreen({
     textarea.style.height = `${Math.max(22, height)}px`;
     textarea.style.overflowY = textarea.scrollHeight > 96 ? "auto" : "hidden";
   }, [draft]);
+
+  useEffect(() => {
+    if (!openedPhoto) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpenedPhoto(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openedPhoto]);
 
   useEffect(() => {
     if (!mountedRef.current) {
@@ -160,12 +175,22 @@ export function ChatScreen({
                       <small>на следующем этапе сюда подключится повтор генерации</small>
                     </div>
                   ) : message.imageUrl ? (
-                    <img
-                      src={message.imageUrl}
-                      alt={message.imageAlt || `Фото от ${characterName}`}
-                      loading="lazy"
-                      decoding="async"
-                    />
+                    <button
+                      className="chat-photo-open"
+                      type="button"
+                      onClick={() => setOpenedPhoto({
+                        src: message.imageUrl!,
+                        alt: message.imageAlt || `Фото от ${characterName}`,
+                      })}
+                      aria-label="Открыть фотографию"
+                    >
+                      <img
+                        src={message.imageUrl}
+                        alt={message.imageAlt || `Фото от ${characterName}`}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    </button>
                   ) : (
                     <div className="chat-photo-placeholder">
                       <strong>фото</strong>
@@ -257,6 +282,28 @@ export function ChatScreen({
               {prompt}
             </button>
           ))}
+        </div>
+      )}
+
+      {openedPhoto && (
+        <div
+          className="photo-viewer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Просмотр фотографии"
+          onClick={() => setOpenedPhoto(null)}
+        >
+          <button
+            className="photo-viewer-close"
+            type="button"
+            aria-label="Закрыть фотографию"
+            onClick={() => setOpenedPhoto(null)}
+          >
+            ×
+          </button>
+          <div className="photo-viewer-stage" onClick={(event) => event.stopPropagation()}>
+            <img src={openedPhoto.src} alt={openedPhoto.alt} />
+          </div>
         </div>
       )}
 

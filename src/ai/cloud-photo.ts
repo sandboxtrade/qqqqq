@@ -2,7 +2,7 @@ import { getAuth } from "firebase/auth";
 import { runtimeCloudLanguageEndpoint } from "../config/runtime-config";
 import { bounded } from "../core/async";
 import { getFirebaseApp, getFirebaseAppCheckToken, isFirebaseConfigured } from "../storage/firebase";
-import type { CloudLanguageSignals, CloudPhotoDecision, CloudPhotoIntent } from "./cloud-language";
+import type { CloudLanguageSignals, CloudPhotoDecision } from "./cloud-language";
 import type { CharacterVisualProfile } from "../character/character-registry";
 
 export interface CloudPhotoInput {
@@ -42,17 +42,27 @@ export interface CloudPhotoResult {
   model?: string;
   prompt?: string;
   usage?: CloudPhotoUsage;
+  provider?: "openai" | "wavespeed";
+  providerTaskId?: string;
+  primaryFailure?: string;
+  primaryDetail?: string;
   reason?: string;
 }
 
 interface WorkerPhotoReply {
   ok?: unknown;
   skipped?: unknown;
+  pending?: unknown;
   reason?: unknown;
   error?: unknown;
+  detail?: unknown;
   dataUrl?: unknown;
   mimeType?: unknown;
   model?: unknown;
+  provider?: unknown;
+  providerTaskId?: unknown;
+  primaryFailure?: unknown;
+  primaryDetail?: unknown;
   prompt?: unknown;
   usage?: {
     inputTokens?: unknown;
@@ -62,7 +72,13 @@ interface WorkerPhotoReply {
   };
 }
 
-const WORKER_TIMEOUT_MS = 110_000;
+// OpenAI image edits can legitimately be slow. The initial request only waits
+// for OpenAI or for WaveSpeed to hand back a task id; WaveSpeed completion is
+// polled separately so a finished fallback is not lost with one long request.
+const PHOTO_START_TIMEOUT_MS = 235_000;
+const WAVESPEED_POLL_TIMEOUT_MS = 150_000;
+const WAVESPEED_POLL_INTERVAL_MS = 3_000;
+const POLL_REQUEST_TIMEOUT_MS = 18_000;
 const TOKEN_TIMEOUT_MS = 4_000;
 
 function firstString(...values: unknown[]) {
@@ -77,6 +93,10 @@ function workerPhotoEndpoint() {
   return base.endsWith("/yuzukiSpeak")
     ? `${base.slice(0, -"/yuzukiSpeak".length)}/yuzukiPhoto`
     : `${base.replace(/\/+$/u, "")}/yuzukiPhoto`;
+}
+
+function workerPhotoResultEndpoint() {
+  return workerPhotoEndpoint().replace(/\/yuzukiPhoto$/u, "/yuzukiPhotoResult");
 }
 
 function asNumber(value: unknown) {
@@ -94,7 +114,7 @@ function parseUsage(raw: WorkerPhotoReply["usage"]) {
 }
 
 function reasonFrom(data: WorkerPhotoReply, status: number) {
-  const fromBody = firstString(data.reason, data.error);
+  const fromBody = firstString(data.reason, data.error, data.detail);
   return fromBody || `photo-worker-http-${status}`;
 }
 
@@ -128,6 +148,109 @@ function normalizedDecision(decision: CloudPhotoDecision): CloudPhotoDecision {
     : { shouldSendPhoto: false, reason: "none" };
 }
 
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("aborted"));
+      return;
+    }
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, ms);
+    const abort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new Error("aborted"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function pollWaveSpeedPhoto(
+  taskId: string,
+  idToken: string,
+  appCheckToken: string,
+  initial: WorkerPhotoReply,
+  signal?: AbortSignal,
+): Promise<CloudPhotoResult> {
+  const deadline = Date.now() + WAVESPEED_POLL_TIMEOUT_MS;
+  let lastReason = "wavespeed-pending";
+  while (Date.now() < deadline) {
+    await sleep(WAVESPEED_POLL_INTERVAL_MS, signal);
+    const controller = new AbortController();
+    const detach = bindAbort(signal, controller);
+    const timeout = window.setTimeout(
+      () => controller.abort(new Error("photo-result-poll-timeout")),
+      POLL_REQUEST_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(workerPhotoResultEndpoint(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+          "X-Firebase-AppCheck": appCheckToken,
+        },
+        body: JSON.stringify({ taskId }),
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      const data = (await response.json().catch(() => ({}))) as WorkerPhotoReply;
+      if (!response.ok) {
+        lastReason = reasonFrom(data, response.status);
+        if (response.status >= 500 || response.status === 429) continue;
+        return { attempted: true, used: false, provider: "wavespeed", providerTaskId: taskId, reason: lastReason };
+      }
+      if (data.pending === true) {
+        lastReason = firstString(data.reason) || "wavespeed-pending";
+        continue;
+      }
+      const dataUrl = firstString(data.dataUrl);
+      if (data.ok === true && dataUrl) {
+        return {
+          attempted: true,
+          used: true,
+          dataUrl,
+          mimeType: firstString(data.mimeType) || "image/webp",
+          model: firstString(data.model, initial.model),
+          provider: "wavespeed",
+          providerTaskId: firstString(data.providerTaskId, taskId),
+          primaryFailure: firstString(data.primaryFailure, initial.primaryFailure) || undefined,
+          primaryDetail: firstString(data.primaryDetail, initial.primaryDetail) || undefined,
+          prompt: firstString(initial.prompt),
+          usage: parseUsage(data.usage) ?? parseUsage(initial.usage),
+        };
+      }
+      return {
+        attempted: true,
+        used: false,
+        provider: "wavespeed",
+        providerTaskId: taskId,
+        reason: reasonFrom(data, response.status),
+      };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      lastReason = error instanceof Error ? error.message : "photo-result-poll-failed";
+      // A single lost poll must not throw away an already running WaveSpeed job.
+      continue;
+    } finally {
+      window.clearTimeout(timeout);
+      detach();
+    }
+  }
+  return {
+    attempted: true,
+    used: false,
+    provider: "wavespeed",
+    providerTaskId: taskId,
+    reason: lastReason === "wavespeed-pending" ? "wavespeed-poll-timeout" : lastReason,
+  };
+}
+
 export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortSignal): Promise<CloudPhotoResult> {
   if (!isFirebaseConfigured) return { attempted: false, used: false, reason: "firebase-not-configured" };
   if (!input.decision.shouldSendPhoto || !input.decision.intent) {
@@ -149,7 +272,7 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
 
   const controller = new AbortController();
   const detach = bindAbort(signal, controller);
-  const timeout = window.setTimeout(() => controller.abort(new Error("photo-worker-timeout")), WORKER_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(new Error("photo-worker-timeout")), PHOTO_START_TIMEOUT_MS);
   try {
     const response = await fetch(workerPhotoEndpoint(), {
       method: "POST",
@@ -174,6 +297,14 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
     if (data.skipped === true || data.ok !== true) {
       return { attempted: true, used: false, reason: reasonFrom(data, response.status) };
     }
+
+    const providerTaskId = firstString(data.providerTaskId);
+    if (data.pending === true && data.provider === "wavespeed" && providerTaskId) {
+      window.clearTimeout(timeout);
+      detach();
+      return pollWaveSpeedPhoto(providerTaskId, idToken, appCheckToken, data, signal);
+    }
+
     const dataUrl = firstString(data.dataUrl);
     const mimeType = firstString(data.mimeType) || "image/webp";
     if (!dataUrl) return { attempted: true, used: false, reason: "photo-empty" };
@@ -183,6 +314,10 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
       dataUrl,
       mimeType,
       model: firstString(data.model),
+      provider: data.provider === "wavespeed" ? "wavespeed" : data.provider === "openai" ? "openai" : undefined,
+      providerTaskId: providerTaskId || undefined,
+      primaryFailure: firstString(data.primaryFailure) || undefined,
+      primaryDetail: firstString(data.primaryDetail) || undefined,
       prompt: firstString(data.prompt),
       usage: parseUsage(data.usage),
     };

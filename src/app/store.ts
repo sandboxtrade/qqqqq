@@ -229,7 +229,47 @@ function queueGeneratedPhotoDelivery(
           };
         });
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        if (version !== epoch) return;
+
+        // If generation already finished and was cached locally, retry only the
+        // persistence/delivery step. This must never pay for a second image.
+        const cached = await loadLocalPhoto(`photo_${parentReplyId}`).catch(() => null);
+        if (cached?.dataUrl && version === epoch) {
+          await new Promise((resolve) => window.setTimeout(resolve, 900));
+          if (version !== epoch) return;
+          const recoveryController = new AbortController();
+          try {
+            const recovered = await persistGeneratedPhotoMessage(
+              uid,
+              recoveryController.signal,
+              characterId,
+              decision,
+              parentReplyId,
+              cached.createdAt || timestamp + 900,
+              runtime ?? undefined,
+              signals,
+            );
+            if (recovered && version === epoch) {
+              useAppStore.setState((state) => {
+                if (state.activeCharacterId !== characterId) return state;
+                const withoutPending = state.messages.filter((message) => message.id !== pendingId);
+                return {
+                  messages: mergeChatMessages(withoutPending, [
+                    { ...recovered, delivery: "saved" as const },
+                  ]),
+                  maintenanceError: null,
+                };
+              });
+              return;
+            }
+          } catch {
+            // Fall through to the visible failed state below.
+          } finally {
+            recoveryController.abort();
+          }
+        }
+
         if (version !== epoch) return;
         useAppStore.setState((state) => {
           if (state.activeCharacterId !== characterId) return state;

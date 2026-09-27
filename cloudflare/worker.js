@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.12 per-character photo no-refusal mode + v0.20.11 reliability hardening
+// v0.20.13 no-refusal reconciliation + OpenAI image reliability
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -45,6 +45,7 @@ const TARGET_PACKET_CHARS = 56_000;
 const MAX_OUTPUT_TOKENS = 480;
 const MAX_ESTIMATED_TURN_COST_USD = 0.008;
 const OPENAI_TIMEOUT_MS = 9_500;
+const OPENAI_IMAGE_TIMEOUT_MS = 105_000;
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
 const PRICE_INPUT = 0.10;
@@ -427,19 +428,50 @@ function isDirectPhotoRequest(value) {
   return photoWord.test(text) && sendVerb.test(text);
 }
 
+function isSuggestivePhotoRequest(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return false;
+  return /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его)\s+бель[её]|без\s+(?:нижн(?:его|ей)\s+белья|белья|одежд|лифчик|бюстгальтер|трусик)|бель[её]|лифчик|бюстгальтер|трусик|стринг|топлесс|обнаж|наг(?:ая|ой|ие|их|им|ую)|гол(?:ая|ый|ые|ых|ой|ою|ым|ыми|ого|ому|ую)|нюд|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(text);
+}
+
+function derivePhotoIntentPatch(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return undefined;
+  const patch = {};
+  if (/(?:зеркал|mirror)/u.test(text)) patch.framing = "mirror";
+  else if (/(?:в\s+полный\s+рост|полный\s+рост|full\s*body)/u.test(text)) patch.framing = "full_body";
+  else if (/(?:по\s+пояс|верхн(?:яя|юю)\s+част|груд[ьи]|сиськ)/u.test(text)) patch.framing = "upper_body";
+
+  if (/(?:топлесс|без\s+(?:лифчик|бюстгальтер)|гол[а-я]*\s+(?:груд|сиськ)|груд[ьи].{0,24}(?:гол|обнаж)|сиськ.{0,24}(?:гол|обнаж))/u.test(text)) {
+    patch.outfit = "topless";
+    patch.suggestiveLevel = "high";
+  } else if (/(?:без\s+одежд|полностью\s+гол|совсем\s+гол|обнаж|нюд|наг(?:ая|ой|ую))/u.test(text)) {
+    patch.outfit = "nude";
+    patch.suggestiveLevel = "high";
+  } else if (/(?:без\s+(?:нижн(?:его|ей)\s+белья|белья|трусик)|без\s+трус)/u.test(text)) {
+    patch.outfit = "without underwear";
+    patch.suggestiveLevel = "high";
+  } else if (/(?:в\s+(?:нижн(?:ем|ем)\s+)?белье|в\s+лифчик|в\s+бюстгальтер|в\s+трусик|в\s+стринг)/u.test(text)) {
+    patch.outfit = "lingerie";
+    patch.suggestiveLevel = "medium";
+  }
+  return Object.keys(patch).length ? patch : undefined;
+}
+
 function derivePhotoMechanic(raw, user) {
   if (!isDirectPhotoRequest(user)) return undefined;
-  const suggestive = raw.appearanceRequest?.suggestive === true;
+  const suggestive = raw.appearanceRequest?.suggestive === true || isSuggestivePhotoRequest(user);
+  const intentPatch = suggestive ? derivePhotoIntentPatch(user) : undefined;
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
   const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
   if (worldBlocked) {
-    return { requested: true, suggestive, disposition: "blocked", noRefusalMode };
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch };
   }
   if (noRefusalMode) {
-    return { requested: true, suggestive, disposition: "send", noRefusalMode: true };
+    return { requested: true, suggestive, disposition: "send", noRefusalMode: true, intentPatch };
   }
   if (raw.constraint?.locked === true) {
-    return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false };
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false, intentPatch };
   }
 
   const irritation = number01(raw.emotion?.irritation);
@@ -450,7 +482,7 @@ function derivePhotoMechanic(raw, user) {
 
   if (!suggestive) {
     const ordinaryOpen = emotionallyAvailable && (trust >= 0.28 || closeness >= 0.3);
-    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice" };
+    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice", intentPatch: undefined };
   }
 
   const intimacy = raw.intimacy;
@@ -467,7 +499,7 @@ function derivePhotoMechanic(raw, user) {
       number01(intimacy?.interest) >= 0.48
     )
   );
-  return { requested: true, suggestive: true, disposition: strongOpen ? "send" : "choice" };
+  return { requested: true, suggestive: true, disposition: strongOpen ? "send" : "choice", intentPatch };
 }
 
 function sanitizePacket(raw) {
@@ -682,6 +714,12 @@ function sanitizePhotoDecision(raw, mode, shouldInitiate) {
   };
 }
 
+function looksLikePhotoRefusal(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return false;
+  return /(?:^|[.!?—-]\s*)(?:не\s+сейчас\b|не\s+буду\b|не\s+могу\b|не\s+скину\b|не\s+пришлю\b|не\s+отправлю\b|не\s+покажу\b)|(?:гол[а-я]*\s*[—-]\s*нет\b)|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
+}
+
 function reconcilePhotoMechanic(decision, mechanic, mode) {
   if (mode !== "reply" || !mechanic?.requested) return decision;
   if (mechanic.disposition === "blocked") {
@@ -692,12 +730,43 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
       caption: "",
     };
   }
-  if (mechanic.disposition !== "send" || decision?.shouldSendPhoto === true) return decision;
+  if (mechanic.disposition !== "send") return decision;
+
+  const current = decision && typeof decision === "object" ? decision : {};
+  const currentIntent = current.intent && typeof current.intent === "object" ? current.intent : {};
+  const forceSuggestive = mechanic.suggestive === true && mechanic.noRefusalMode === true;
+  const caption = looksLikePhotoRefusal(current.caption) ? "" : clipped(current.caption, 220);
   return {
-    ...decision,
+    ...current,
     shouldSendPhoto: true,
     reason: "user_requested",
+    caption,
+    intent: {
+      framing: mechanic.intentPatch?.framing || (["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(currentIntent.framing)
+        ? currentIntent.framing
+        : "selfie"),
+      mood: clipped(currentIntent.mood, 80) || (forceSuggestive ? "confident" : "natural"),
+      pose: clipped(currentIntent.pose, 160) || "natural relaxed pose",
+      location: clipped(currentIntent.location, 100) || "current location",
+      outfit: forceSuggestive && mechanic.intentPatch?.outfit
+        ? mechanic.intentPatch.outfit
+        : (clipped(currentIntent.outfit, 140) || "current outfit"),
+      suggestiveLevel: forceSuggestive && mechanic.intentPatch?.suggestiveLevel
+        ? mechanic.intentPatch.suggestiveLevel
+        : forceSuggestive && currentIntent.suggestiveLevel === "none"
+          ? "high"
+          : (["none", "low", "medium", "high"].includes(currentIntent.suggestiveLevel) ? currentIntent.suggestiveLevel : (forceSuggestive ? "high" : "none")),
+    },
   };
+}
+
+function reconcileNoRefusalMessages(messages, mechanic, decision) {
+  if (!mechanic?.requested || mechanic?.noRefusalMode !== true || mechanic?.disposition !== "send" || decision?.shouldSendPhoto !== true) {
+    return messages;
+  }
+  const list = Array.isArray(messages) ? messages.filter((item) => typeof item === "string" && item.trim()) : [];
+  if (!list.length || list.some(looksLikePhotoRefusal)) return ["Сейчас."];
+  return list;
 }
 
 function parseStructuredTurn(value, mode) {
@@ -1037,10 +1106,15 @@ async function callOpenAI(env, uid, prepared) {
       prepared.photoMechanic,
       prepared.mode,
     );
+    const reconciledMessages = reconcileNoRefusalMessages(
+      structured.messages,
+      prepared.photoMechanic,
+      reconciledPhotoDecision,
+    );
 
     return {
-      text: structured.reply,
-      messages: structured.messages,
+      text: reconciledMessages.join("\n"),
+      messages: reconciledMessages,
       shouldInitiate: structured.shouldInitiate,
       conversation: structured.conversation,
       signals: structured.signals,
@@ -1395,7 +1469,7 @@ async function loadReferenceFiles(packet) {
 
 async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "auto") {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("openai-image-timeout")), 35000);
+  const timer = setTimeout(() => controller.abort(new Error("openai-image-timeout")), OPENAI_IMAGE_TIMEOUT_MS);
   try {
     const useEditEndpoint = Array.isArray(referenceFiles) && referenceFiles.length > 0;
     let response;
@@ -1455,6 +1529,9 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
         skipped: true,
         reason: errorCode === "moderation_blocked" ? "openai-image-moderation-blocked" : `openai-image-http-${response.status}`,
         detail: asString(moderationDetail || body?.error?.message || body?.error, "", 180),
+        status: response.status,
+        requestId: asString(response.headers.get("x-request-id"), "", 120),
+        retryable: response.status === 429 || response.status >= 500,
       };
     }
     const item = Array.isArray(body?.data) ? body.data[0] : null;
@@ -1475,6 +1552,7 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
       mimeType,
       model: IMAGE_MODEL,
       usage,
+      requestId: asString(response.headers.get("x-request-id"), "", 120),
     };
   } catch (error) {
     return { skipped: true, reason: error?.name === "AbortError" ? "openai-image-timeout" : "openai-image-unavailable" };
@@ -1483,14 +1561,13 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
   }
 }
 
-async function callWaveSpeedImage(env, prompt, referenceUrls = []) {
+async function submitWaveSpeedImage(env, prompt, referenceUrls = []) {
   if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model: WAVESPEED_MODEL };
   const images = Array.isArray(referenceUrls) ? referenceUrls.filter((url) => typeof url === "string" && url).slice(0, 3) : [];
-  // This is an edit/reference model. Generating another character from Yuzuki's
-  // master reference would silently destroy identity, so never substitute it.
+  // This is an edit/reference model. Never substitute another character's face.
   if (!images.length) return { skipped: true, reason: "wavespeed-reference-missing", model: WAVESPEED_MODEL };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("wavespeed-timeout")), 60000);
+  const timer = setTimeout(() => controller.abort(new Error("wavespeed-submit-timeout")), 25000);
   try {
     const submit = await fetch(WAVESPEED_IMAGE_URL, {
       method: "POST",
@@ -1499,34 +1576,124 @@ async function callWaveSpeedImage(env, prompt, referenceUrls = []) {
       signal: controller.signal,
     });
     const submitBody = await submit.json().catch(() => ({}));
-    if (!submit.ok) return { skipped: true, reason: `wavespeed-http-${submit.status}`, detail: asString(submitBody?.message || submitBody?.error, "", 180), model: WAVESPEED_MODEL };
-    const task = submitBody?.data && typeof submitBody.data === "object" ? submitBody.data : submitBody;
-    const id = asString(task?.id, "", 200);
-    if (!id) return { skipped: true, reason: "wavespeed-missing-id", model: WAVESPEED_MODEL };
-    for (let attempt = 0; attempt < 24; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, attempt < 5 ? 1500 : 2500));
-      const poll = await fetch(`${WAVESPEED_RESULT_BASE}/${encodeURIComponent(id)}/result`, { headers: { Authorization: `Bearer ${env.WAVESPEED_API_KEY}` }, signal: controller.signal });
-      const pollBody = await poll.json().catch(() => ({}));
-      if (!poll.ok) continue;
-      const data = pollBody?.data && typeof pollBody.data === "object" ? pollBody.data : pollBody;
-      if (data?.status === "completed") {
-        const output = Array.isArray(data.outputs) ? data.outputs[0] : null;
-        const url = typeof output === "string" ? output : asString(output?.url, "", 2000);
-        if (!url) return { skipped: true, reason: "wavespeed-empty", model: WAVESPEED_MODEL };
-        const imageResponse = await fetch(url, { signal: controller.signal });
-        if (!imageResponse.ok) return { skipped: true, reason: "wavespeed-output-fetch-failed", model: WAVESPEED_MODEL };
-        const mimeType = imageResponse.headers.get("Content-Type") || "image/webp";
-        const bytes = new Uint8Array(await imageResponse.arrayBuffer());
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return { ok: true, dataUrl: `data:${mimeType};base64,${btoa(binary)}`, mimeType, model: WAVESPEED_MODEL, usage: { imageCount: 1 } };
-      }
-      if (["failed", "cancelled", "timeout", "deleted"].includes(data?.status)) return { skipped: true, reason: `wavespeed-${data.status}`, detail: asString(data?.error, "", 180), model: WAVESPEED_MODEL };
+    if (!submit.ok) {
+      return {
+        skipped: true,
+        reason: `wavespeed-http-${submit.status}`,
+        detail: asString(submitBody?.message || submitBody?.error, "", 180),
+        model: WAVESPEED_MODEL,
+      };
     }
-    return { skipped: true, reason: "wavespeed-poll-timeout", model: WAVESPEED_MODEL };
+    const task = submitBody?.data && typeof submitBody.data === "object" ? submitBody.data : submitBody;
+    const taskId = asString(task?.id, "", 200);
+    if (!taskId) return { skipped: true, reason: "wavespeed-missing-id", model: WAVESPEED_MODEL };
+    return { ok: true, pending: true, taskId, model: WAVESPEED_MODEL };
   } catch (error) {
-    return { skipped: true, reason: error?.name === "AbortError" ? "wavespeed-timeout" : "wavespeed-unavailable", model: WAVESPEED_MODEL };
-  } finally { clearTimeout(timer); }
+    return {
+      skipped: true,
+      reason: error?.name === "AbortError" ? "wavespeed-submit-timeout" : "wavespeed-unavailable",
+      model: WAVESPEED_MODEL,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function downloadWaveSpeedOutput(url) {
+  let lastReason = "wavespeed-output-fetch-failed";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("wavespeed-output-timeout")), 30000);
+    try {
+      const imageResponse = await fetch(url, { signal: controller.signal });
+      if (!imageResponse.ok) {
+        lastReason = `wavespeed-output-http-${imageResponse.status}`;
+        continue;
+      }
+      const mimeType = imageResponse.headers.get("Content-Type") || "image/webp";
+      const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return { ok: true, dataUrl: `data:${mimeType};base64,${btoa(binary)}`, mimeType };
+    } catch (error) {
+      lastReason = error?.name === "AbortError" ? "wavespeed-output-timeout" : "wavespeed-output-fetch-failed";
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+  return { skipped: true, reason: lastReason };
+}
+
+async function readWaveSpeedImage(env, taskId) {
+  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model: WAVESPEED_MODEL, taskId };
+  const id = asString(taskId, "", 200);
+  if (!id || !/^[A-Za-z0-9._:-]+$/u.test(id)) {
+    return { skipped: true, reason: "wavespeed-invalid-task-id", model: WAVESPEED_MODEL };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("wavespeed-result-timeout")), 20000);
+  try {
+    const poll = await fetch(`${WAVESPEED_RESULT_BASE}/${encodeURIComponent(id)}/result`, {
+      headers: { Authorization: `Bearer ${env.WAVESPEED_API_KEY}` },
+      signal: controller.signal,
+    });
+    const pollBody = await poll.json().catch(() => ({}));
+    if (!poll.ok) {
+      return {
+        skipped: true,
+        reason: `wavespeed-result-http-${poll.status}`,
+        detail: asString(pollBody?.message || pollBody?.error, "", 180),
+        model: WAVESPEED_MODEL,
+        taskId: id,
+        retryable: poll.status === 429 || poll.status >= 500,
+      };
+    }
+    const data = pollBody?.data && typeof pollBody.data === "object" ? pollBody.data : pollBody;
+    const status = asString(data?.status, "", 40).toLowerCase();
+    if (!status || ["created", "queued", "pending", "processing", "running"].includes(status)) {
+      return { ok: true, pending: true, taskId: id, model: WAVESPEED_MODEL };
+    }
+    if (status === "completed") {
+      const output = Array.isArray(data.outputs) ? data.outputs[0] : null;
+      const url = typeof output === "string" ? output : asString(output?.url, "", 2000);
+      if (!url) return { skipped: true, reason: "wavespeed-empty", model: WAVESPEED_MODEL, taskId: id };
+      // Generation is already paid/completed at this point. Download it with a
+      // separate retry budget so a late output fetch cannot discard the job.
+      const downloaded = await downloadWaveSpeedOutput(url);
+      if (downloaded.ok !== true) {
+        return { ...downloaded, model: WAVESPEED_MODEL, taskId: id };
+      }
+      return {
+        ok: true,
+        dataUrl: downloaded.dataUrl,
+        mimeType: downloaded.mimeType,
+        model: WAVESPEED_MODEL,
+        taskId: id,
+        usage: { imageCount: 1 },
+      };
+    }
+    if (["failed", "cancelled", "timeout", "deleted"].includes(status)) {
+      return {
+        skipped: true,
+        reason: `wavespeed-${status}`,
+        detail: asString(data?.error, "", 180),
+        model: WAVESPEED_MODEL,
+        taskId: id,
+      };
+    }
+    return { ok: true, pending: true, taskId: id, model: WAVESPEED_MODEL };
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: error?.name === "AbortError" ? "wavespeed-result-timeout" : "wavespeed-unavailable",
+      model: WAVESPEED_MODEL,
+      taskId: id,
+      retryable: true,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function handlePhoto(request, env, origin) {
@@ -1569,27 +1736,111 @@ async function handlePhoto(request, env, origin) {
   if (ordinaryPhoto && openaiResult.reason === "openai-image-moderation-blocked") {
     const retryPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.files.length);
     openaiResult = await callOpenAIImage(env, retryPrompt, references.files, "low");
+  } else if (openaiResult.ok !== true && openaiResult.retryable === true) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    openaiResult = await callOpenAIImage(env, prompt, references.files, openaiModeration);
   }
-  const result = openaiResult.ok === true ? openaiResult : await callWaveSpeedImage(env, prompt, references.urls);
+  if (openaiResult.ok === true) {
+    return jsonResponse({
+      ok: true,
+      dataUrl: openaiResult.dataUrl,
+      mimeType: openaiResult.mimeType,
+      model: openaiResult.model || IMAGE_MODEL,
+      provider: "openai",
+      prompt,
+      usage: openaiResult.usage,
+    }, 200, origin);
+  }
+
+  // WaveSpeed is asynchronous. Return its task id immediately and let the
+  // client poll a dedicated authenticated endpoint. This prevents a finished
+  // image from disappearing because one long Worker request was interrupted.
+  const waveStart = await submitWaveSpeedImage(env, prompt, references.urls);
+  if (waveStart.ok !== true || !waveStart.taskId) {
+    return jsonResponse({
+      skipped: true,
+      reason: waveStart.reason,
+      detail: waveStart.detail,
+      model: waveStart.model || WAVESPEED_MODEL,
+      primaryFailure: openaiResult.reason,
+      primaryDetail: openaiResult.detail,
+      primaryRequestId: openaiResult.requestId,
+    }, 200, origin);
+  }
+  return jsonResponse({
+    ok: true,
+    pending: true,
+    provider: "wavespeed",
+    providerTaskId: waveStart.taskId,
+    model: WAVESPEED_MODEL,
+    primaryFailure: openaiResult.reason,
+    primaryDetail: openaiResult.detail,
+    primaryRequestId: openaiResult.requestId,
+    prompt,
+  }, 200, origin);
+}
+
+async function handlePhotoResult(request, env, origin) {
+  const idToken = bearerToken(request);
+  if (!idToken) return jsonResponse({ error: "unauthenticated" }, 401, origin);
+  const appCheckToken = request.headers.get("X-Firebase-AppCheck") || "";
+  if (!appCheckToken) return jsonResponse({ error: "app-check-required" }, 401, origin);
+  const [appId, auth] = await Promise.all([
+    verifyAppCheckToken(appCheckToken).catch(() => null),
+    verifyFirebaseAuth(idToken),
+  ]);
+  if (!appId) return jsonResponse({ error: "invalid-app-check" }, 401, origin);
+  if (!auth?.uid) return jsonResponse({ error: "invalid-auth" }, 401, origin);
+  if (!allowRate(`${auth.uid}:image-result`)) {
+    return jsonResponse({ pending: true, reason: "worker-rate-limit", provider: "wavespeed" }, 200, origin);
+  }
+  const rawText = await request.text();
+  if (rawText.length > 2000) return jsonResponse({ error: "request-too-large" }, 413, origin);
+  let raw;
+  try {
+    raw = JSON.parse(rawText);
+  } catch {
+    return jsonResponse({ error: "invalid-json" }, 400, origin);
+  }
+  const taskId = asString(raw?.taskId, "", 200);
+  if (!taskId) return jsonResponse({ error: "missing-task-id" }, 400, origin);
+  const result = await readWaveSpeedImage(env, taskId);
+  if (result.pending === true) {
+    return jsonResponse({
+      ok: true,
+      pending: true,
+      provider: "wavespeed",
+      providerTaskId: taskId,
+      model: WAVESPEED_MODEL,
+    }, 200, origin);
+  }
   if (result.ok !== true) {
+    if (result.retryable === true) {
+      return jsonResponse({
+        ok: true,
+        pending: true,
+        reason: result.reason,
+        provider: "wavespeed",
+        providerTaskId: taskId,
+        model: WAVESPEED_MODEL,
+      }, 200, origin);
+    }
     return jsonResponse({
       skipped: true,
       reason: result.reason,
       detail: result.detail,
-      model: result.model || IMAGE_MODEL,
-      primaryFailure: openaiResult.reason,
-      primaryDetail: openaiResult.detail,
+      provider: "wavespeed",
+      providerTaskId: taskId,
+      model: WAVESPEED_MODEL,
     }, 200, origin);
   }
-  const usedWaveSpeed = result.model === WAVESPEED_MODEL;
   return jsonResponse({
     ok: true,
     dataUrl: result.dataUrl,
     mimeType: result.mimeType,
-    model: result.model || IMAGE_MODEL,
-    provider: usedWaveSpeed ? "wavespeed" : "openai",
-    ...(usedWaveSpeed ? { primaryFailure: openaiResult.reason, primaryDetail: openaiResult.detail } : {}),
-    prompt,
+    provider: "wavespeed",
+    providerTaskId: taskId,
+    model: WAVESPEED_MODEL,
     usage: result.usage,
   }, 200, origin);
 }
@@ -1637,6 +1888,13 @@ export default {
         return jsonResponse({ error: "method-not-allowed" }, 405, origin);
       }
       return handlePhoto(request, env, origin);
+    }
+
+    if (url.pathname === "/yuzukiPhotoResult") {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "method-not-allowed" }, 405, origin);
+      }
+      return handlePhotoResult(request, env, origin);
     }
 
     return jsonResponse({ error: "not-found" }, 404, origin);

@@ -10,6 +10,11 @@ export interface LocalPhotoRecord {
   dataUrl: string;
   createdAt: number;
   promptSummary?: string;
+  model?: string;
+  provider?: "openai" | "wavespeed";
+  primaryFailure?: string;
+  primaryDetail?: string;
+  providerTaskId?: string;
 }
 
 function hasIndexedDb() {

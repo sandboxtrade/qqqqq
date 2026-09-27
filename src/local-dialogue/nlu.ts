@@ -230,7 +230,7 @@ export function detectLocalAppearanceRequest(value: string): LocalAppearanceRequ
   if (!(directImperative || (requestVerb && visualTarget))) return empty;
 
   const suggestive =
-    /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн)/u.test(
+    /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его)\s+бель[её]|без\s+(?:нижн(?:его|ей)\s+белья|белья|одежд|лифчик|бюстгальтер|трусик)|бель[её]|лифчик|бюстгальтер|трусик|стринг|топлесс|обнаж|наг(?:ая|ой|ие|их|им|ую)|гол(?:ая|ый|ые|ых|ой|ою|ым|ыми|ого|ому|ую)|нюд|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(
       normalized,
     );
   let vibe: LocalAppearanceRequestVibe = "different";

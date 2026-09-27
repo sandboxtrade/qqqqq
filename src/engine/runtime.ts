@@ -350,6 +350,61 @@ export async function persistGeneratedPhotoMessage(
     return local?.dataUrl ? { ...existingLine, imageUrl: local.dataUrl } : existingLine;
   }
 
+  const persistReadyEvent = async (photo: {
+    dataUrl: string;
+    createdAt: number;
+    model?: string;
+    provider?: "openai" | "wavespeed";
+    primaryFailure?: string;
+    primaryDetail?: string;
+    providerTaskId?: string;
+  }) => {
+    const event = createEvent({
+      id: eventId,
+      type: decision.reason === "self_initiated" ? "character_action" : "message",
+      source: "character",
+      timestamp: photo.createdAt,
+      payload: {
+        kind: "image",
+        text: decision.caption ?? "",
+        imageAlt: photoAltText(profile.core.name, decision),
+        imageStatus: "ready",
+        localPhotoId: eventId,
+        photoReason: decision.reason,
+        photoIntent: decision.intent,
+        contextText: photoContextText(decision),
+        mockPhoto: false,
+        inReplyTo: parentReplyId,
+        ...(photo.model ? { imageModel: photo.model } : {}),
+        ...(photo.provider ? { imageProvider: photo.provider } : {}),
+        ...(photo.primaryFailure ? { imagePrimaryFailure: photo.primaryFailure } : {}),
+        ...(photo.primaryDetail ? { imagePrimaryDetail: photo.primaryDetail } : {}),
+        ...(photo.providerTaskId ? { imageProviderTaskId: photo.providerTaskId } : {}),
+      },
+      importance: decision.reason === "self_initiated" ? 0.3 : 0.22,
+    });
+    await repository.appendEvent(event);
+    checkSignal(signal);
+    const line = conversationFrom([event])[0] ?? null;
+    return line ? { ...line, imageUrl: photo.dataUrl } : null;
+  };
+
+  // A provider may have finished successfully while the Firestore/event write
+  // failed or the UI lost the final response. Reuse the deterministic local
+  // cache entry before paying for another image generation.
+  const recovered = await loadLocalPhoto(eventId).catch(() => null);
+  if (recovered?.dataUrl) {
+    return persistReadyEvent({
+      dataUrl: recovered.dataUrl,
+      createdAt: recovered.createdAt || timestamp,
+      model: recovered.model,
+      provider: recovered.provider,
+      primaryFailure: recovered.primaryFailure,
+      primaryDetail: recovered.primaryDetail,
+      providerTaskId: recovered.providerTaskId,
+    });
+  }
+
   const generated = await generateCloudPhoto({
     character: { id: profile.id, name: profile.core.name, age: profile.core.age },
     visualProfile: profile.visualProfile,
@@ -380,33 +435,23 @@ export async function persistGeneratedPhotoMessage(
     dataUrl: generated.dataUrl,
     createdAt: timestamp,
     promptSummary: generated.prompt,
+    model: generated.model,
+    provider: generated.provider,
+    primaryFailure: generated.primaryFailure,
+    primaryDetail: generated.primaryDetail,
+    providerTaskId: generated.providerTaskId,
   });
   checkSignal(signal);
 
-  const event = createEvent({
-    id: eventId,
-    type: decision.reason === "self_initiated" ? "character_action" : "message",
-    source: "character",
-    timestamp,
-    payload: {
-      kind: "image",
-      text: decision.caption ?? "",
-      imageAlt: photoAltText(profile.core.name, decision),
-      imageStatus: "ready",
-      localPhotoId: eventId,
-      photoReason: decision.reason,
-      photoIntent: decision.intent,
-      contextText: photoContextText(decision),
-      mockPhoto: false,
-      inReplyTo: parentReplyId,
-      imageModel: generated.model,
-    },
-    importance: decision.reason === "self_initiated" ? 0.3 : 0.22,
+  return persistReadyEvent({
+    dataUrl: generated.dataUrl,
+    createdAt: timestamp,
+    model: generated.model,
+    provider: generated.provider,
+    primaryFailure: generated.primaryFailure,
+    primaryDetail: generated.primaryDetail,
+    providerTaskId: generated.providerTaskId,
   });
-  await repository.appendEvent(event);
-  checkSignal(signal);
-  const line = conversationFrom([event])[0] ?? null;
-  return line ? { ...line, imageUrl: generated.dataUrl } : null;
 }
 
 const EMOTION_REACTION_LIMITS = {

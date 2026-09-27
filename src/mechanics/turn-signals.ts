@@ -43,7 +43,7 @@ export function detectAppearanceRequest(value: string): AppearanceRequestInput {
 
   if (!(directImperative || (requestVerb && visualTarget))) return empty;
 
-  const suggestive = /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его)\s+бель[её]|бель[её]|лифчик|бюстгальтер|трусик|стринг|обнаж|гол(?:ая|ой|ым)|нюд)/u.test(normalized);
+  const suggestive = /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его|его)?\s+бель[её]|без\s+(?:нижн(?:его|ей)\s+белья|белья|одежд|лифчик|бюстгальтер|трусик)|бель[её]|лифчик|бюстгальтер|трусик|стринг|топлесс|обнаж|наг(?:ая|ой|ие|их|им|ую)|гол(?:ая|ый|ые|ых|ой|ою|ым|ыми|ого|ому|ую)|нюд|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(normalized);
   let vibe: AppearanceRequestInput["vibe"] = "different";
   if (suggestive) vibe = "seductive";
   else if (/(?:зл|сердит|ярост|раздраж|строг)/u.test(normalized)) vibe = "angry";
