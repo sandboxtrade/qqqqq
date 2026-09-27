@@ -5,6 +5,7 @@ Each character has a stable asset folder:
 - `yuzuki/`
 - `mika/`
 - `rin/`
+- `aiko/`
 - `lea/`
 - `sofia/`
 - `eva/`

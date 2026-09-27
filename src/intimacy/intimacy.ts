@@ -531,8 +531,12 @@ export function buildIntimacyMind(input: {
 }
 
 function privateEnough(world: import("../world/world").WorldState) {
+  // "occupied" means she is busy with something, not that she is in public or
+  // physically unavailable. Privacy is determined by location + wakefulness;
+  // sleep remains a hard blocker elsewhere. This prevents a home activity such
+  // as drawing/reading/cooking from artificially shutting intimacy down.
   return world.isAwake &&
-    ["free", "resting"].includes(world.availability) &&
+    world.availability !== "sleeping" &&
     ["bedroom", "living_room", "kitchen"].includes(world.currentLocation);
 }
 

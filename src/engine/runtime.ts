@@ -122,6 +122,21 @@ export interface RuntimeTrace {
 }
 const repo = (characterId: string, uid: string | null, signal: AbortSignal) =>
   getCompanionRepository(characterId, uid, signal);
+
+function createInitialIntimacyForCharacter(characterId: string, now: number) {
+  const base = createInitialIntimacyState(now);
+  const seed = getCharacterProfile(characterId).initialIntimacy;
+  if (!seed) return base;
+  return {
+    ...base,
+    comfort: Math.max(0, Math.min(1, seed.comfort)),
+    interest: Math.max(0, Math.min(1, seed.interest)),
+    arousal: Math.max(0, Math.min(1, seed.arousal)),
+    initiativeDrive: Math.max(0, Math.min(1, seed.initiativeDrive)),
+    interactionStatus: seed.interactionStatus ?? base.interactionStatus,
+    updatedAt: now,
+  };
+}
 const SLEEP_WAKE_FOLLOWUP_MS = 10 * 60_000;
 function worldEvents(simulation: WorldSimulationResult) {
   return simulation.generatedEvents.map((e) =>
@@ -155,7 +170,11 @@ export function runtimeNow(state?: RuntimeState) {
   return worldClock.now(floor);
 }
 
-function advance(state: RuntimeState, now = runtimeNow(state)) {
+function advance(
+  state: RuntimeState,
+  now = runtimeNow(state),
+  characterId = defaultCharacter.id,
+) {
   const effectiveNow = Math.max(
     now,
     state.world.lastSimulatedAt,
@@ -164,7 +183,7 @@ function advance(state: RuntimeState, now = runtimeNow(state)) {
   );
   const decayed = decayEmotions(state.emotion, effectiveNow);
   const relationship = applyRelationshipDelta(state.relationship, {}, effectiveNow);
-  const simulation = simulateWorld(state.world, decayed, effectiveNow);
+  const simulation = simulateWorld(state.world, decayed, effectiveNow, characterId);
   return {
     state: {
       ...state,
@@ -181,8 +200,9 @@ function advance(state: RuntimeState, now = runtimeNow(state)) {
 export function reconcileRuntimeState(
   state: RuntimeState,
   now = runtimeNow(state),
+  characterId = defaultCharacter.id,
 ): RuntimeState {
-  const advanced = advance(state, now);
+  const advanced = advance(state, now, characterId);
   const pending = new Map(
     [
       ...(state.pendingWorldEvents ?? []),
@@ -580,17 +600,17 @@ export async function bootstrapRuntime(
   const state: RuntimeState = {
     revision: stored?.revision ?? 0,
     romance: stored?.romance,
-    intimacy: storedIntimacy ?? createInitialIntimacyState(wallNow),
+    intimacy: storedIntimacy ?? createInitialIntimacyForCharacter(characterId, wallNow),
     appearance: stored?.appearance,
     emotion: stored?.emotion ?? { ...initialEmotionalState, updatedAt: wallNow },
     relationship: stored?.relationship ?? {
       ...initialRelationshipState,
       updatedAt: wallNow,
     },
-    world: world ?? createInitialWorldState(wallNow),
+    world: world ?? createInitialWorldState(wallNow, undefined, characterId),
   };
   const effectiveNow = now ?? runtimeNow(state);
-  const advanced = advance(state, effectiveNow);
+  const advanced = advance(state, effectiveNow, characterId);
   const recentConversation = conversationFrom(
     [...new Map(
       [...conversationPage.events, ...pendingTurns].map((event) => [event.id, event]),
@@ -622,8 +642,8 @@ export async function clearConversationAndMemory(
   const emotion: EmotionalState = { ...initialEmotionalState, updatedAt: now };
   const relationship: RelationshipState = { ...initialRelationshipState, updatedAt: now };
   const romance = initialRomance(now);
-  const intimacy = createInitialIntimacyState(now);
-  const world = createInitialWorldState(now, current.world.timeZone);
+  const intimacy = createInitialIntimacyForCharacter(characterId, now);
+  const world = createInitialWorldState(now, current.world.timeZone, characterId);
   const persisted = await repository.resetConversationAndMemory(
     { emotion, relationship, romance },
     world,
@@ -693,7 +713,7 @@ export async function refreshRuntimeFromPersistence(
     emotion: stateChanged ? snapshot!.emotion : current.emotion,
     relationship: stateChanged ? snapshot!.relationship : current.relationship,
     world: stateChanged ? world! : current.world,
-  });
+  }, undefined, characterId);
   return normalizeAmbientAppearance(refreshed, [], runtimeNow(refreshed));
 }
 
@@ -708,7 +728,7 @@ export async function setIntimacyAdultMode(
   const now = runtimeNow(current);
   const stored = await repository.loadIntimacyState();
   checkSignal(signal);
-  const base = currentIntimacyState(stored ?? current.intimacy ?? createInitialIntimacyState(now), now);
+  const base = currentIntimacyState(stored ?? current.intimacy ?? createInitialIntimacyForCharacter(characterId, now), now);
   // Compatibility API only: v0.20.7 no longer permits disabling adult capability.
   // Keeping the function avoids breaking older callers while making false a no-op.
   void enabled;
@@ -926,7 +946,7 @@ export async function handleUserMessage(
     : { ...current, intimacy: persistedIntimacy ?? current.intimacy };
 
   const now = runtimeNow(base);
-  const advanced = advance(base, now);
+  const advanced = advance(base, now, characterId);
   const before = advanced.state;
   const intimacyPreferences: IntimacyPreferencesDocument =
     persistedIntimacyPreferences ?? createInitialIntimacyPreferences(now);
@@ -1094,7 +1114,7 @@ export async function handleUserMessage(
         availability: turnWorld.availability,
         isAwake: turnWorld.isAwake,
         connectionDrive: turnWorld.connectionDrive,
-        activityDetail: describeWorldActivityDetail(turnWorld.currentActivity, now),
+        activityDetail: describeWorldActivityDetail(turnWorld.currentActivity, now, characterId),
       },
       relationship: {
         stage: relationship.stage,
@@ -1403,7 +1423,7 @@ export async function maintainRuntime(
   }
   checkSignal(signal);
   const maintenanceNow = runtimeNow(state);
-  const advanced = advance(state, maintenanceNow);
+  const advanced = advance(state, maintenanceNow, characterId);
   // v0.19.2: there is no local initiative topic queue anymore. The engine only
   // decides whether it is mechanically valid to CHECK for initiative; GPT then
   // decides whether Yuzuki actually wants to write and what she wants to say.
@@ -1463,7 +1483,7 @@ export async function maintainRuntime(
           availability: advanced.state.world.availability,
           isAwake: advanced.state.world.isAwake,
           connectionDrive: advanced.state.world.connectionDrive,
-          activityDetail: describeWorldActivityDetail(advanced.state.world.currentActivity, maintenanceNow),
+          activityDetail: describeWorldActivityDetail(advanced.state.world.currentActivity, maintenanceNow, characterId),
         },
         relationship: {
           stage: advanced.state.relationship.stage,
@@ -1503,7 +1523,7 @@ export async function maintainRuntime(
         initiativeWindowOpen()
       ) {
         const publishNow = runtimeNow(advanced.state);
-        const publishState = advance(advanced.state, publishNow).state;
+        const publishState = advance(advanced.state, publishNow, characterId).state;
         if (
           publishState.world.isAwake &&
           publishState.world.availability !== "sleeping"

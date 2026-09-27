@@ -1202,7 +1202,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
     if (!state.ready || !state.runtime || state.busy) return;
     const previous = state.runtime;
-    const next = reconcileRuntimeState(previous);
+    const next = reconcileRuntimeState(previous, undefined, state.activeCharacterId);
     if (next.world.lastSimulatedAt > previous.world.lastSimulatedAt)
       set({ runtime: next });
     if (runMaintenance) {

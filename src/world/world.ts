@@ -229,123 +229,237 @@ const ACTIVITY_DETAILS: Record<WorldActivity, readonly string[]> = {
  * intentionally derived from the already persisted WorldState instead of being
  * stored as a new field, so old saves and Firestore documents stay compatible.
  */
+const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldActivity, readonly string[]>>>> = {
+  yuzuki_v1: {
+    personal_project: [
+      "дорисовываю иллюстрацию и уже третий раз меняю одну и ту же деталь",
+      "разбираю референсы для рисунка и пытаюсь наконец выбрать один вариант",
+      "сижу с планшетом и доделываю эскиз, который вчера бросила на полпути",
+    ],
+    reading: [
+      "читаю длинный текст про кино и периодически отвлекаюсь на заметки",
+      "листала артбук и в итоге зависла на нескольких страницах дольше, чем собиралась",
+    ],
+  },
+  mika_v1: {
+    music: [
+      "переслушиваю треки для вечернего плейлиста и слишком громко подпеваю",
+      "включила музыку и параллельно перебираю одежду перед выходом",
+    ],
+    errands: [
+      "ношуcь по мелким делам и уже пожалела, что решила закрыть всё за один день",
+      "по пути забежала в пару мест и теперь наконец могу немного выдохнуть",
+    ],
+    cafe_break: [
+      "засела в кофейне между делами и просто смотрю на людей вокруг",
+      "пью холодный кофе и делаю вид, что никуда не опаздываю",
+    ],
+  },
+  rin_v1: {
+    reading: [
+      "читаю рукопись и отмечаю места, где автор слишком сильно пытается объяснить очевидное",
+      "дочитываю книгу в тишине и пока не решила, нравится она мне или раздражает",
+      "разбираю текст по работе, но уже больше читаю из любопытства, чем из обязанности",
+    ],
+    cafe_break: [
+      "сижу в тихом кафе у окна с чаем и книгой",
+      "спряталась в маленьком кафе, где почти никто не разговаривает",
+    ],
+  },
+  lea_v1: {
+    walk: [
+      "иду куда глаза глядят и уже дважды свернула не туда",
+      "гуляю по району и по дороге нашла место, в которое теперь хочу зайти",
+    ],
+    errands: [
+      "пытаюсь закрыть пару учебных и бытовых дел, но постоянно отвлекаюсь",
+      "бегаю по делам и опять делаю всё в странном порядке",
+    ],
+    music: [
+      "слушаю музыку и выбираю, на какой концерт хочу в следующий раз",
+      "переслушиваю один трек по кругу, потому что он почему-то сегодня идеально попал",
+    ],
+  },
+  sofia_v1: {
+    personal_project: [
+      "правлю презентацию по работе и пытаюсь сократить её хотя бы на треть",
+      "собираю материалы для запуска и раздражаюсь на мелочи, которые никто кроме меня не заметит",
+      "заканчиваю рабочую задачу, которую хотела закрыть ещё час назад",
+    ],
+    cafe_break: [
+      "вышла за кофе между задачами и специально не открываю ноутбук пару минут",
+      "сижу в кафе после встречи и наконец никуда не тороплюсь",
+    ],
+  },
+  eva_v1: {
+    walk: [
+      "гуляю с камерой без конкретной цели и иногда что-то снимаю",
+      "вышла пройтись с фотоаппаратом и задержалась дольше, чем планировала",
+    ],
+    reading: [
+      "листаю фотокнигу и отмечаю кадры, к которым потом хочу вернуться",
+      "читаю интервью с фотографом и спорю с ним у себя в голове",
+    ],
+  },
+  nora_v1: {
+    reading: [
+      "читаю про один старый архитектурный проект и уже полезла смотреть планы здания",
+      "листала книгу по архитектуре и застряла на главе, которую вообще не собиралась читать",
+    ],
+    errands: [
+      "закрываю несколько скучных дел, чтобы они не отравляли мне выходной",
+      "разбираюсь с бытовыми вопросами и мечтаю поскорее закончить",
+    ],
+  },
+  aiko_v1: {
+    music: [
+      "лежу с музыкой и перебираю фотографии с последнего вечера",
+      "слушаю плейлист перед выходом и решаю, хочу ли вообще сегодня куда-то идти",
+      "включила музыку погромче и выбираю, что надеть вечером",
+    ],
+    relaxing: [
+      "валяюсь дома, листаю телефон и вообще никуда не спешу",
+      "лежу на кровати и лениво решаю, чем хочу заняться дальше",
+      "устроила себе час абсолютного безделья и пока он мне нравится",
+    ],
+    cafe_break: [
+      "сижу в кафе с айс-кофе и наблюдаю за людьми",
+      "зашла в кафе перед встречей и теперь специально тяну время",
+    ],
+    walk: [
+      "гуляю по вечернему городу без маршрута",
+      "вышла пройтись и теперь думаю, не свернуть ли куда-нибудь ещё",
+    ],
+  },
+};
+
 export function describeWorldActivityDetail(
   activity: WorldActivity,
   timestamp = Date.now(),
+  characterId = "yuzuki_v1",
 ): string {
-  return pick(ACTIVITY_DETAILS[activity], timestamp, `activity-detail:${activity}`);
+  const specific = CHARACTER_ACTIVITY_DETAILS[characterId]?.[activity];
+  const options = specific?.length ? specific : ACTIVITY_DETAILS[activity];
+  return pick(options, timestamp, `activity-detail:${characterId}:${activity}`);
+}
+
+interface RoutineWindow {
+  start: number;
+  end: number;
+  activities: readonly WorldActivity[];
+  location?: WorldLocation;
+  availability?: Availability;
+  targetEnergy: number;
+}
+
+const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
+  yuzuki_v1: [
+    { start: 0, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .85 },
+    { start: 7, end: 8, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .42 },
+    { start: 8, end: 10, activities: ["breakfast"], location: "kitchen", availability: "free", targetEnergy: .66 },
+    { start: 10, end: 13, activities: ["personal_project", "reading"], availability: "occupied", targetEnergy: .72 },
+    { start: 13, end: 15, activities: ["reading", "music", "relaxing"], targetEnergy: .66 },
+    { start: 15, end: 18, activities: ["personal_project", "reading", "music"], targetEnergy: .58 },
+    { start: 18, end: 21, activities: ["cooking", "music", "relaxing"], targetEnergy: .5 },
+    { start: 21, end: 24, activities: ["reading", "music", "relaxing"], targetEnergy: .34 },
+  ],
+  mika_v1: [
+    { start: 0, end: 2, activities: ["music", "relaxing"], targetEnergy: .42 },
+    { start: 2, end: 9, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .86 },
+    { start: 9, end: 10, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .48 },
+    { start: 10, end: 12, activities: ["breakfast", "music"], targetEnergy: .7 },
+    { start: 12, end: 16, activities: ["errands", "cafe_break", "music"], targetEnergy: .76 },
+    { start: 16, end: 20, activities: ["walk", "errands", "cafe_break"], targetEnergy: .72 },
+    { start: 20, end: 24, activities: ["music", "walk", "relaxing"], targetEnergy: .62 },
+  ],
+  rin_v1: [
+    { start: 0, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .84 },
+    { start: 7, end: 8, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .4 },
+    { start: 8, end: 10, activities: ["breakfast", "reading"], targetEnergy: .62 },
+    { start: 10, end: 14, activities: ["reading"], targetEnergy: .68 },
+    { start: 14, end: 17, activities: ["cafe_break", "reading"], targetEnergy: .62 },
+    { start: 17, end: 20, activities: ["walk", "cooking"], targetEnergy: .54 },
+    { start: 20, end: 24, activities: ["reading", "music", "relaxing"], targetEnergy: .36 },
+  ],
+  lea_v1: [
+    { start: 0, end: 2, activities: ["music", "relaxing"], targetEnergy: .48 },
+    { start: 2, end: 10, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 10, end: 11, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .5 },
+    { start: 11, end: 13, activities: ["breakfast", "music"], targetEnergy: .72 },
+    { start: 13, end: 17, activities: ["errands", "walk", "cafe_break"], targetEnergy: .74 },
+    { start: 17, end: 21, activities: ["walk", "music", "cafe_break"], targetEnergy: .68 },
+    { start: 21, end: 24, activities: ["music", "relaxing", "walk"], targetEnergy: .5 },
+  ],
+  sofia_v1: [
+    { start: 0, end: 6, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .84 },
+    { start: 6, end: 7, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .45 },
+    { start: 7, end: 9, activities: ["breakfast"], location: "kitchen", availability: "free", targetEnergy: .72 },
+    { start: 9, end: 13, activities: ["personal_project", "errands"], targetEnergy: .8 },
+    { start: 13, end: 15, activities: ["cafe_break", "errands"], targetEnergy: .68 },
+    { start: 15, end: 19, activities: ["personal_project", "errands"], targetEnergy: .64 },
+    { start: 19, end: 22, activities: ["cooking", "relaxing"], targetEnergy: .48 },
+    { start: 22, end: 24, activities: ["reading", "relaxing"], targetEnergy: .34 },
+  ],
+  eva_v1: [
+    { start: 0, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .85 },
+    { start: 7, end: 8, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .43 },
+    { start: 8, end: 10, activities: ["breakfast", "relaxing"], targetEnergy: .64 },
+    { start: 10, end: 14, activities: ["walk", "reading", "errands"], targetEnergy: .68 },
+    { start: 14, end: 17, activities: ["cafe_break", "walk"], targetEnergy: .62 },
+    { start: 17, end: 20, activities: ["cooking", "reading"], targetEnergy: .5 },
+    { start: 20, end: 24, activities: ["relaxing", "reading", "music"], targetEnergy: .36 },
+  ],
+  nora_v1: [
+    { start: 0, end: 6, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .84 },
+    { start: 6, end: 7, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .44 },
+    { start: 7, end: 9, activities: ["breakfast", "reading"], targetEnergy: .68 },
+    { start: 9, end: 13, activities: ["reading", "errands"], targetEnergy: .7 },
+    { start: 13, end: 16, activities: ["cafe_break", "errands"], targetEnergy: .64 },
+    { start: 16, end: 20, activities: ["walk", "reading", "cooking"], targetEnergy: .52 },
+    { start: 20, end: 23, activities: ["reading", "relaxing"], targetEnergy: .36 },
+    { start: 23, end: 24, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .82 },
+  ],
+  aiko_v1: [
+    { start: 0, end: 3, activities: ["music", "walk", "relaxing"], targetEnergy: .56 },
+    { start: 3, end: 10, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 10, end: 11, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .5 },
+    { start: 11, end: 13, activities: ["breakfast", "relaxing"], targetEnergy: .68 },
+    { start: 13, end: 16, activities: ["cafe_break", "music", "errands"], targetEnergy: .72 },
+    { start: 16, end: 20, activities: ["errands", "walk", "music"], targetEnergy: .74 },
+    { start: 20, end: 24, activities: ["music", "walk", "relaxing", "cafe_break"], targetEnergy: .66 },
+  ],
+};
+
+function routineDefaults(activity: WorldActivity): Pick<RoutineSlot, "location" | "availability" | "isAwake"> {
+  if (activity === "sleeping") return { location: "bedroom", availability: "sleeping", isAwake: false };
+  if (activity === "waking_up") return { location: "bedroom", availability: "resting", isAwake: true };
+  if (activity === "breakfast" || activity === "cooking") return { location: "kitchen", availability: "free", isAwake: true };
+  if (activity === "walk" || activity === "errands") return { location: "outside", availability: "free", isAwake: true };
+  if (activity === "cafe_break") return { location: "cafe", availability: "free", isAwake: true };
+  if (activity === "personal_project") return { location: "bedroom", availability: "occupied", isAwake: true };
+  if (activity === "relaxing") return { location: "living_room", availability: "resting", isAwake: true };
+  return { location: "living_room", availability: "free", isAwake: true };
 }
 
 export function resolveRoutine(
   timestamp: number,
   timeZone: string,
+  characterId = "yuzuki_v1",
 ): RoutineSlot {
   const hour = getHourInTimeZone(timestamp, timeZone);
-
-  if (hour < 6) {
-    return {
-      activity: "sleeping",
-      location: "bedroom",
-      availability: "sleeping",
-      isAwake: false,
-      targetEnergy: 0.85,
-    };
+  const windows = CHARACTER_ROUTINES[characterId] ?? CHARACTER_ROUTINES.yuzuki_v1;
+  const window = windows.find((candidate) => hour >= candidate.start && hour < candidate.end);
+  if (!window) {
+    return { activity: "idle", location: "unknown", availability: "free", isAwake: true, targetEnergy: .5 };
   }
-  if (hour < 8) {
-    return {
-      activity: "waking_up",
-      location: "bedroom",
-      availability: "resting",
-      isAwake: true,
-      targetEnergy: 0.42,
-    };
-  }
-  if (hour < 10) {
-    return {
-      activity: "breakfast",
-      location: "kitchen",
-      availability: "free",
-      isAwake: true,
-      targetEnergy: 0.66,
-    };
-  }
-  if (hour < 13) {
-    const activity = pick(
-      ["personal_project", "reading"] as const,
-      timestamp,
-      "late-morning",
-    );
-    return {
-      activity,
-      location: activity === "reading" ? "living_room" : "bedroom",
-      availability: "occupied",
-      isAwake: true,
-      targetEnergy: 0.72,
-    };
-  }
-  if (hour < 15) {
-    const activity = pick(
-      ["reading", "music", "relaxing"] as const,
-      timestamp,
-      "midday-home",
-    );
-    return {
-      activity,
-      location: "living_room",
-      availability: activity === "relaxing" ? "resting" : "free",
-      isAwake: true,
-      targetEnergy: 0.66,
-    };
-  }
-  if (hour < 18) {
-    const activity = pick(
-      ["personal_project", "reading", "music"] as const,
-      timestamp,
-      "afternoon-home",
-    );
-    return {
-      activity,
-      location: activity === "personal_project" ? "bedroom" : "living_room",
-      availability: activity === "personal_project" ? "occupied" : "free",
-      isAwake: true,
-      targetEnergy: 0.58,
-    };
-  }
-  if (hour < 21) {
-    const activity = pick(
-      ["cooking", "music", "relaxing"] as const,
-      timestamp,
-      "evening-home",
-    );
-    return {
-      activity,
-      location: activity === "cooking" ? "kitchen" : "living_room",
-      availability: activity === "relaxing" ? "resting" : "free",
-      isAwake: true,
-      targetEnergy: 0.5,
-    };
-  }
-  if (hour < 24) {
-    const activity = pick(
-      ["reading", "music", "relaxing"] as const,
-      timestamp,
-      "late-evening",
-    );
-    return {
-      activity,
-      location: "living_room",
-      availability: "resting",
-      isAwake: true,
-      targetEnergy: 0.34,
-    };
-  }
-
+  const activity = pick(window.activities, timestamp, `routine:${characterId}:${window.start}-${window.end}`);
+  const defaults = routineDefaults(activity);
   return {
-    activity: "idle",
-    location: "unknown",
-    availability: "free",
-    isAwake: true,
-    targetEnergy: 0.5,
+    activity,
+    location: window.location ?? defaults.location,
+    availability: window.availability ?? defaults.availability,
+    isAwake: window.availability === "sleeping" ? false : defaults.isAwake,
+    targetEnergy: window.targetEnergy,
   };
 }
 
@@ -494,19 +608,20 @@ function chooseTemplate(activity: WorldActivity, timestamp: number) {
 export function maybeCreateWorldEvent(
   timestamp: number,
   timeZone: string,
+  characterId = "yuzuki_v1",
 ): WorldEventSnapshot | null {
-  const routine = resolveRoutine(timestamp, timeZone);
+  const routine = resolveRoutine(timestamp, timeZone, characterId);
   if (!routine.isAwake || ["waking_up", "breakfast"].includes(routine.activity))
     return null;
 
   const chance = routine.availability === "occupied" ? 0.42 : 0.3;
-  if (deterministic01(timestamp, "event-chance") > chance) return null;
+  if (deterministic01(timestamp, `event-chance:${characterId}`) > chance) return null;
 
   const template = chooseTemplate(routine.activity, timestamp);
   if (!template) return null;
 
   return {
-    id: `world_${Math.floor(timestamp / 3_600_000)}_${template.kind}`,
+    id: `world_${characterId}_${Math.floor(timestamp / 3_600_000)}_${template.kind}`,
     at: Math.floor(timestamp / 3_600_000) * 3_600_000,
     kind: template.kind,
     summary: template.summary,
@@ -524,8 +639,9 @@ const clamp = (value: number) => Math.max(0, Math.min(1, value));
 export function createInitialWorldState(
   now = Date.now(),
   timeZone = resolveSystemTimeZone(),
+  characterId = "yuzuki_v1",
 ): WorldState {
-  const routine = resolveRoutine(now, timeZone);
+  const routine = resolveRoutine(now, timeZone, characterId);
   return {
     timeZone,
     currentLocation: routine.location,
@@ -559,6 +675,7 @@ export function simulateWorld(
   state: WorldState,
   emotion: EmotionalState,
   now = Date.now(),
+  characterId = "yuzuki_v1",
 ): WorldSimulationResult {
   if (now <= state.lastSimulatedAt) {
     return { world: state, emotionDelta: {}, generatedEvents: [] };
@@ -575,7 +692,7 @@ export function simulateWorld(
   const step = elapsed / samples;
   for (let index = 1; index <= samples; index += 1) {
     const at = simulationStart + step * index;
-    const event = maybeCreateWorldEvent(at, state.timeZone);
+    const event = maybeCreateWorldEvent(at, state.timeZone, characterId);
     if (
       !event ||
       state.recentEvents.some((existing) => existing.id === event.id) ||
@@ -586,7 +703,7 @@ export function simulateWorld(
     mergeDelta(emotionDelta, event.emotionalEffect);
   }
 
-  const scheduledRoutine = resolveRoutine(now, state.timeZone);
+  const scheduledRoutine = resolveRoutine(now, state.timeZone, characterId);
   // During the sleep window, a conversation that already woke Yuzuki should
   // stay awake for a short grace period instead of being reset to sleeping on
   // every simulation tick. Once the user goes quiet, the normal sleep routine

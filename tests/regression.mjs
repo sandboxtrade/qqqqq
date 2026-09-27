@@ -131,6 +131,7 @@ const { createInitialWorldState, simulateWorld, markUserInteraction } = await im
 const {
   resolveRoutine,
   resolveTimeOfDay,
+  describeWorldActivityDetail,
   StableWorldClock,
   calendarDateKey,
 } = await import("../src/world/world.ts");
@@ -174,6 +175,7 @@ const {
 } = await import("../src/context/yuzuki-context.ts");
 const { formatConversationExport } = await import("../src/chat/conversation-export.ts");
 const { defaultCharacter } = await import("../src/character/character.ts");
+const { getCharacterProfile, characterProfiles } = await import("../src/character/character-registry.ts");
 const {
   createInitialIntimacyState,
   createInitialIntimacyPreferences,
@@ -1915,6 +1917,26 @@ await test("world routine uses its persisted timezone instead of device-local ho
   assert.equal(resolveTimeOfDay(stamp, "Asia/Tokyo"), "morning");
   assert.equal(calendarDateKey(stamp, "America/Los_Angeles"), "2025-12-31");
 });
+await test("v0.20.9 characters have independent daily-life routines", () => {
+  const stamp = Date.UTC(2026, 0, 1, 11, 30, 0);
+  const ids = ["yuzuki_v1", "mika_v1", "rin_v1", "lea_v1", "sofia_v1", "eva_v1", "nora_v1", "aiko_v1"];
+  const activities = ids.map((id) => resolveRoutine(stamp, "UTC", id).activity);
+  assert.ok(new Set(activities).size >= 4, activities.join(","));
+  assert.notEqual(resolveRoutine(stamp, "UTC", "rin_v1").activity, "personal_project");
+  assert.notEqual(resolveRoutine(stamp, "UTC", "aiko_v1").activity, "personal_project");
+  assert.notEqual(
+    describeWorldActivityDetail("reading", stamp, "rin_v1"),
+    describeWorldActivityDetail("reading", stamp, "yuzuki_v1"),
+  );
+});
+await test("v0.20.9 Aiko is an adult distinct profile with an open initial intimacy baseline", () => {
+  const profile = getCharacterProfile("aiko_v1");
+  assert.equal(profile.core.age, 25);
+  assert.equal(profile.core.adult, true);
+  assert.equal(profile.initialIntimacy?.interactionStatus, "open");
+  assert.ok((profile.initialIntimacy?.interest ?? 0) >= 0.6);
+  assert.ok(characterProfiles.some((item) => item.id === "aiko_v1"));
+});
 await test("v0.19.4 home-bound routine never schedules Yuzuki outside", () => {
   const homeLocations = new Set(["bedroom", "living_room", "kitchen"]);
   const outsideActivities = new Set(["walk", "errands", "cafe_break"]);
@@ -2970,6 +2992,20 @@ await test("strong explicit mutual consent can advance two phases but never beyo
   }
   assert.deepEqual(phases, ["close", "high_intimacy", "high_intimacy", "high_intimacy"]);
   assert.equal(state.activeScene?.stageId, "stage.high_intimacy");
+});
+await test("v0.20.9 being occupied at home does not mechanically remove intimacy privacy", () => {
+  const previous = {
+    ...intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }).previous,
+    phase: "close",
+    interactionStatus: "open",
+    comfort: 0.72,
+    interest: 0.74,
+    arousal: 0.58,
+  };
+  const input = intimacyTurnInput({ kind: "consent", strength: 1, explicit: true, intimacyContext: true }, previous);
+  input.world = { ...input.world, currentLocation: "bedroom", availability: "occupied", currentActivity: "personal_project" };
+  const result = planIntimacyTurn(input);
+  assert.ok(["intimate", "high_intimacy"].includes(result.state.phase));
 });
 await test("intimacy privacy caps escalation at close", () => {
   const previous = {

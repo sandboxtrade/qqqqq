@@ -181,3 +181,11 @@ Autonomous decision logic remains in the Initiative/Character Brain layers; the 
 Character-specific Personality, Memory, export/reset controls and diagnostics are reached from the settings gear on that character's profile. The bottom app navigation is intentionally limited to Chats and People.
 
 All registered characters are adults. Adult capability is part of the character runtime by default and cannot be disabled from UI. The persisted `adultModeEnabled` field remains only for schema compatibility and is normalized to enabled. This does not bypass consent or boundaries: stop, pause, hesitation and explicit boundary constraints remain mechanically enforced.
+
+## v0.20.9 per-character daily life
+
+World simulation remains mechanical and separately persisted per `characterId`, but routine resolution is now character-specific instead of using one shared Yuzuki schedule for every profile. Each registered character has a distinct sleep/wake rhythm, preferred activities and activity-detail vocabulary. This prevents multiple characters from independently collapsing into the same generic `personal_project` answer at the same time.
+
+`availability=occupied` means the character is busy, not physically incapable of replying or taking a quick photo. At-home occupied states therefore no longer invalidate privacy for intimacy mechanics, and the language layer is explicitly told not to turn ordinary busyness into an automatic photo refusal. Sleep remains a hard blocker; location/action contradictions remain real constraints.
+
+Aiko (`aiko_v1`, age 25) is added as an adult profile with a deliberately bold, highly flirtatious baseline personality and an initially open intimacy state. Her sexual openness is a character trait, not blanket consent: stop/pause/hesitation and explicit boundaries remain mechanically authoritative.
