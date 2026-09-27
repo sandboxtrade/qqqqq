@@ -149,8 +149,16 @@ export function resolveAppearanceRequest(
   const intimacy = runtime.intimacy;
   const stage = runtime.relationship.stage;
   const matureBond = ["close", "deep"].includes(stage) && closeness >= 0.52;
-  const paused = ["paused", "stopped", "hesitant"].includes(
+  const paused = ["paused", "stopped"].includes(
     intimacy?.interactionStatus ?? "inactive",
+  );
+  const hesitant = intimacy?.interactionStatus === "hesitant";
+  const stronglyOpenIntimacy = Boolean(
+    intimacy?.adultModeEnabled === true &&
+      intimacy.interactionStatus === "open" &&
+      intimacy.comfort >= 0.52 &&
+      intimacy.interest >= 0.52 &&
+      (intimacy.arousal >= 0.55 || intimacy.initiativeDrive >= 0.58),
   );
 
   if (request.suggestive) {
@@ -194,6 +202,24 @@ export function resolveAppearanceRequest(
         visualEmotion: visual,
       };
     }
+    // Once the mechanical intimacy state is clearly open, do not let a seeded
+    // random roll invent a refusal that contradicts the established state.
+    // An active stop/pause and negative emotional state were handled above.
+    // Hesitation is intentionally softer: it can still lead to a partial or
+    // accepted request when the relationship/state support it.
+    if (stronglyOpenIntimacy) {
+      const visual = withVisual(base, "seductive", request.strength);
+      return {
+        requested: true,
+        requestedVibe: request.vibe,
+        suggestive: true,
+        outcome: "accepted",
+        reason: "intimacy-state-open",
+        selectedEmotion: visual.emotion,
+        forceVariantChange: true,
+        visualEmotion: visual,
+      };
+    }
     if (!matureBond) {
       const canSoften =
         closeness >= 0.4 &&
@@ -224,7 +250,8 @@ export function resolveAppearanceRequest(
         (intimacy?.arousal ?? 0) * 0.14 +
         runtime.emotion.romanticInterest * 0.14 +
         runtime.emotion.happiness * 0.06 -
-        negative * 0.48,
+        negative * 0.48 -
+        (hesitant ? 0.08 : 0),
     );
     if (roll <= willingness) {
       const visual = withVisual(base, "seductive", request.strength);

@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.10 WaveSpeed WAN 2.6 Image Edit fallback
+// v0.20.11 iOS nav + deterministic photo intent + image reliability hardening
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -17,6 +17,16 @@ const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@m
 const GITHUB_PROFILES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/public/assets/profiles/";
 const GITHUB_PROFILES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/public/assets/profiles/";
 const REFERENCE_IMAGE_TTL_MS = 10 * 60 * 1000;
+const CHARACTER_PROFILE_SLUGS = Object.freeze({
+  yuzuki_v1: "yuzuki",
+  mika_v1: "mika",
+  rin_v1: "rin",
+  lea_v1: "lea",
+  sofia_v1: "sofia",
+  eva_v1: "eva",
+  nora_v1: "nora",
+  aiko_v1: "aiko",
+});
 
 const FIREBASE_PROJECT_ID = "qqqq-91fc0";
 const FIREBASE_PROJECT_NUMBER = "1068767940128";
@@ -91,7 +101,7 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - emotion влияет на ритм и тон: раздражение может делать ответ суше, привязанность — теплее, усталость — короче, тревога — осторожнее. Не называй числовые значения.
 - relationship — медленный фон отношений, а не команда обязательно быть ласковой.
 - world — фактическое текущее состояние. Если текущий персонаж спит, не выдумывай бодрствующее действие. Если availability=occupied, это означает лишь «сейчас чем-то занята», а не «физически не может ответить/сфотографироваться»: человек обычно может на несколько секунд отвлечься, ответить или сделать фото, если сама хочет. Не используй занятость как автоматический отказ.
-- intimacy доступна только в соответствии с текущим состоянием, отношениями и взаимностью. Stop/pause/boundary всегда важнее желания продолжать.
+- intimacy доступна только в соответствии с текущим состоянием, отношениями и взаимностью. Явный CURRENT-TURN stop/pause/boundary важнее желания продолжать прямо сейчас. Не превращай старую паузу или прошлую границу в бессрочный отказ, если локальный constraint уже снят и новый взаимный контекст снова открыт.
 - Adult intimacy для всех CURRENT CHARACTER 18+ является постоянной частью архитектуры, а не пользовательским переключателем. Но конкретное желание и границы по-прежнему определяются CURRENT STATE и текущим разговором.
 - Если нет stop/pause/boundary и разговор уже реально интимный, не нужно искусственно смягчать каждую взрослую тему эвфемизмами. Текущий персонаж может прямо называть секс, возбуждение, желание, части тела и конкретные интимные действия обычными словами, если именно так она естественно сказала бы в этой ситуации. Не заменяй автоматически прямую фразу на расплывчатые «близость», «момент», «продолжить это» только потому, что тема сексуальная.
 - Если intimacy.mind.outwardArousal=true или intimacy.mind.wantsMore=true и interactionStatus=open, не делай персонажа внезапно сухим, формальным или отстранённым только из-за сексуальности темы. Тон может стать заметно более возбуждённым, смелым и прямым, если это соответствует PERSONALITY.
@@ -122,8 +132,10 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 Фотографии в переписке:
 - photoDecision описывает отдельное решение текущего персонажа отправить пользователю фотографию как обычное сообщение в мессенджере. Это не постоянная сцена и не фон интерфейса.
 - Просьба пользователя «скинь фото», «покажи себя», «селфи», «что на тебе сейчас?» и похожая просьба обычно оценивается из PERSONALITY, отношений и CURRENT STATE.
+- photoMechanic — локальная механическая подсказка только для ПРЯМОГО запроса фотографии. Если disposition=send, локальное состояние уже установило, что нет активного CURRENT-TURN constraint/сна и текущее желание/отношения достаточно открыты: не переигрывай это решение повторным отказом. Старая уже истёкшая пауза сама по себе не является причиной отказа. Ответь естественно и обязательно верни photoDecision.shouldSendPhoto=true, reason=user_requested. Если disposition=blocked, фотографию не отправляй. disposition=choice оставляет решение тебе.
 - ВАЖНО: если это прямой запрос фото, constraint отсутствует, intimacy.interactionStatus=open и (intimacy.mind.outwardArousal=true ИЛИ intimacy.mind.wantsMore=true ИЛИ одновременно arousal>=0.55, comfort>=0.48, interest>=0.48), не придумывай отказ только потому, что кадр флиртующий/сексуальный. В этом состоянии персонаж уже достаточно открыт к такому обмену: shouldSendPhoto=true, reason=user_requested, если world не делает сам кадр фактически невозможным.
 - Для такого запроса точно сохраняй смысл пользователя в intent: ракурс/поза/одежда не должны автоматически становиться нейтральнее. Нижнее бельё, вид со спины и похожие детали отражай в pose/outfit/suggestiveLevel, а не вырезай.
+- Даже если disposition=choice и персонаж всё же решает не отправлять фото, intent всё равно должен кратко и точно описывать запрошенный кадр, а не сбрасываться в generic neutral. Это позволяет диагностировать расхождение решения и визуального запроса без передачи сырого диалога генератору.
 - Если пользователь прямо попросил фотографию и персонаж решил её отправить: shouldSendPhoto=true, reason=user_requested.
 - Если персонаж сам естественно захотел отправить фотографию без прямой просьбы: shouldSendPhoto=true, reason=self_initiated. Такое допустимо и в mode=initiative, но не превращай это в постоянную привычку.
 - Если фото не отправляется: shouldSendPhoto=false, reason=none, caption="" и всё равно заполни intent нейтральными короткими значениями из schema.
@@ -398,12 +410,65 @@ function serverCloudRoute(raw) {
   return { use: true, reason: "eligible" };
 }
 
+function normalizePhotoRequestText(value) {
+  return String(value || "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function isDirectPhotoRequest(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return false;
+  const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
+  const sendVerb = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|сфоткай|сфотографируй|сфоткаться|можешь\s+(?:скинуть|прислать|отправить|показать)|send|show|take)/u;
+  return photoWord.test(text) && sendVerb.test(text);
+}
+
+function derivePhotoMechanic(raw, user) {
+  if (!isDirectPhotoRequest(user)) return undefined;
+  const suggestive = raw.appearanceRequest?.suggestive === true;
+  const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
+  if (raw.constraint?.locked === true || worldBlocked) {
+    return { requested: true, suggestive, disposition: "blocked" };
+  }
+
+  const irritation = number01(raw.emotion?.irritation);
+  const anxiety = number01(raw.emotion?.anxiety);
+  const trust = number01(raw.relationship?.trust);
+  const closeness = number01(raw.relationship?.closeness);
+  const emotionallyAvailable = irritation < 0.58 && anxiety < 0.72;
+
+  if (!suggestive) {
+    const ordinaryOpen = emotionallyAvailable && (trust >= 0.28 || closeness >= 0.3);
+    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice" };
+  }
+
+  const intimacy = raw.intimacy;
+  const mind = intimacy?.mind;
+  const acceptedByLocalAppearance = raw.appearanceRequest?.outcome === "accepted";
+  const openStatus = intimacy?.enabled === true && intimacy?.interactionStatus === "open";
+  const recoveredStatus = intimacy?.enabled === true && intimacy?.interactionStatus === "hesitant" && acceptedByLocalAppearance;
+  const strongOpen = (openStatus || recoveredStatus) && emotionallyAvailable && mind?.conflicted !== true && (
+    mind?.outwardArousal === true ||
+    mind?.wantsMore === true ||
+    (
+      number01(intimacy?.arousal) >= 0.55 &&
+      number01(intimacy?.comfort) >= 0.48 &&
+      number01(intimacy?.interest) >= 0.48
+    )
+  );
+  return { requested: true, suggestive: true, disposition: strongOpen ? "send" : "choice" };
+}
+
 function sanitizePacket(raw) {
   if (!raw || typeof raw !== "object") return { error: "invalid-input" };
 
   const mode = raw.mode === "initiative" ? "initiative" : "reply";
   const user = mode === "reply" ? clipped(raw.userText, 12000) : "";
   if (mode === "reply" && !user) return { error: "invalid-input" };
+  const photoMechanic = mode === "reply" ? derivePhotoMechanic(raw, user) : undefined;
 
   const proactive = mode === "initiative"
     ? {
@@ -433,6 +498,7 @@ function sanitizePacket(raw) {
       age: Math.max(18, Math.min(99, Math.round(Number(raw.character?.age) || 24))),
     },
     ...(user ? { user } : {}),
+    ...(photoMechanic ? { photoMechanic } : {}),
     ...(proactive ? { proactive } : {}),
     personality: clippedMultiline(raw.personality, 9000),
     memory: clippedMultiline(raw.memory, 18000),
@@ -538,6 +604,7 @@ function sanitizePacket(raw) {
   return {
     mode,
     serialized,
+    photoMechanic,
     budget: {
       requestChars: serialized.length,
       originalRequestChars,
@@ -601,6 +668,24 @@ function sanitizePhotoDecision(raw, mode, shouldInitiate) {
       outfit: clipped(raw?.intent?.outfit, 140) || "current outfit",
       suggestiveLevel,
     },
+  };
+}
+
+function reconcilePhotoMechanic(decision, mechanic, mode) {
+  if (mode !== "reply" || !mechanic?.requested) return decision;
+  if (mechanic.disposition === "blocked") {
+    return {
+      ...decision,
+      shouldSendPhoto: false,
+      reason: "none",
+      caption: "",
+    };
+  }
+  if (mechanic.disposition !== "send" || decision?.shouldSendPhoto === true) return decision;
+  return {
+    ...decision,
+    shouldSendPhoto: true,
+    reason: "user_requested",
   };
 }
 
@@ -936,6 +1021,12 @@ async function callOpenAI(env, uid, prepared) {
       };
     }
 
+    const reconciledPhotoDecision = reconcilePhotoMechanic(
+      structured.photoDecision,
+      prepared.photoMechanic,
+      prepared.mode,
+    );
+
     return {
       text: structured.reply,
       messages: structured.messages,
@@ -945,7 +1036,7 @@ async function callOpenAI(env, uid, prepared) {
       emotionReaction: structured.emotionReaction,
       relationshipReaction: structured.relationshipReaction,
       intimacyReaction: structured.intimacyReaction,
-      photoDecision: structured.photoDecision,
+      photoDecision: reconciledPhotoDecision,
       model: MODEL,
       usage,
       budget: prepared.budget,
@@ -1078,12 +1169,12 @@ function sanitizePhotoPacket(raw) {
   const signals = raw && typeof raw === "object" && raw.signals && typeof raw.signals === "object"
     ? raw.signals
     : {};
-  const referenceAssetIds = Array.isArray(visualProfile.referenceAssetIds)
-    ? visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 6)
-    : [];
+  const characterId = asString(character.id, "character", 64);
+  const canonicalSlug = CHARACTER_PROFILE_SLUGS[characterId];
+  const referenceAssetIds = canonicalSlug ? [`profile.${canonicalSlug}.avatar`] : [];
   return {
     character: {
-      id: asString(character.id, "character", 64),
+      id: characterId,
       name: asString(character.name, "Character", 60),
       age: clipNumber(character.age, 18, 99, 23),
     },
@@ -1157,6 +1248,11 @@ function buildPhotoPrompt(packet, referenceCount = 0) {
   const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
   const framing = framingMap[decision.intent.framing] || "selfie shot";
   const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
+  const suggestiveInstruction = suggestiveLevel === "none"
+    ? ""
+    : suggestiveLevel === "low"
+      ? "Keep the photo lightly flirtatious but non-explicit; follow only the stated pose/outfit details."
+      : `Photo-intent suggestiveness: ${suggestiveLevel}. Follow only the explicit pose/outfit details supplied in this structured photo intent; do not add anything beyond them.`;
   return [
     `Generate one photorealistic personal smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
     `Preserve the recurring character identity: ${visualProfile.identitySummary}`,
@@ -1164,10 +1260,26 @@ function buildPhotoPrompt(packet, referenceCount = 0) {
     `Photo style: ${visualProfile.defaultPhotoStyle}.`,
     `Framing: ${framing}. Mood: ${mood}. Pose: ${pose}.`,
     `Location: ${location}. Outfit: ${outfit}.`,
-    `Photo-intent suggestiveness: ${suggestiveLevel}. Do not infer additional sexual context from the surrounding conversation; use only this explicit photo intent.`,
+    suggestiveInstruction,
     emotionTone ? `Visible emotion: ${emotionTone}.` : "",
     "Natural anatomy, realistic skin and lighting, believable personal photography, no text, watermark or interface.",
   ].filter(Boolean).join("\n");
+}
+
+function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
+  const { character, visualProfile, decision, world } = packet;
+  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
+  const framingMap = { selfie: "selfie", mirror: "mirror photo", portrait: "portrait", upper_body: "upper-body photo", full_body: "full-body photo" };
+  const framing = framingMap[decision.intent.framing] || "selfie";
+  return [
+    `Create a realistic everyday smartphone ${framing} of the same fictional adult woman ${character.name}, age ${character.age}.`,
+    `Keep her identity consistent: ${visualProfile.identitySummary}`,
+    referenceCount > 0 ? "Use the attached reference only to preserve the same face, hair and age." : "Keep the established identity stable.",
+    `She is at ${normalizePhotoText(decision.intent.location, world.location || "home", 100)}.`,
+    `Clothing: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 140)}.`,
+    `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 140)}.`,
+    "Ordinary non-sexual personal photo, natural lighting and anatomy, no text or watermark.",
+  ].join("\n");
 }
 
 function guessReferenceFilenames(assetId) {
@@ -1246,29 +1358,31 @@ function extFromContentType(contentType) {
 async function loadReferenceFiles(packet) {
   const files = [];
   const resolvedUrls = [];
-  const candidates = [];
-  if (packet?.character?.id === "yuzuki_v1") candidates.push(MASTER_REFERENCE_URL);
   const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds)
     ? packet.visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 3)
     : [];
-  for (const assetId of refs) candidates.push(...candidateReferenceUrls(assetId));
-  const seen = new Set();
-  for (const url of candidates) {
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    try {
-      const fetched = await fetchCachedReference(url);
-      if (!fetched) continue;
-      const ext = extFromContentType(fetched.contentType);
-      files.push(new File([fetched.bytes], `reference-${files.length + 1}.${ext}`, { type: fetched.contentType }));
-      resolvedUrls.push(url);
-    } catch {}
-    if (files.length >= 3) break;
+  for (const assetId of refs) {
+    const candidates = candidateReferenceUrls(assetId);
+    if (packet?.character?.id === "yuzuki_v1" && assetId === "profile.yuzuki.avatar") {
+      candidates.push(MASTER_REFERENCE_URL);
+    }
+    for (const url of candidates) {
+      if (!url) continue;
+      try {
+        const fetched = await fetchCachedReference(url);
+        if (!fetched) continue;
+        const ext = extFromContentType(fetched.contentType);
+        files.push(new File([fetched.bytes], `reference-${files.length + 1}.${ext}`, { type: fetched.contentType }));
+        resolvedUrls.push(url);
+        break; // RAW/CDN/master are alternatives for the same identity reference, not separate images.
+      } catch {}
+    }
+    if (files.length >= 1) break; // One canonical face reference is enough and avoids duplicate identity inputs.
   }
   return { files, urls: resolvedUrls };
 }
 
-async function callOpenAIImage(env, prompt, referenceFiles = []) {
+async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "auto") {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("openai-image-timeout")), 35000);
   try {
@@ -1282,6 +1396,7 @@ async function callOpenAIImage(env, prompt, referenceFiles = []) {
       form.append("quality", "low");
       form.append("output_format", "webp");
       form.append("output_compression", "65");
+      form.append("moderation", moderation === "low" ? "low" : "auto");
       for (const file of referenceFiles) {
         form.append("image[]", file, file.name);
       }
@@ -1307,13 +1422,29 @@ async function callOpenAIImage(env, prompt, referenceFiles = []) {
           quality: "low",
           output_format: "webp",
           output_compression: 65,
+          moderation: moderation === "low" ? "low" : "auto",
         }),
         signal: controller.signal,
       });
     }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return { skipped: true, reason: `openai-image-http-${response.status}`, detail: asString(body?.error?.message || body?.error, "", 180) };
+      const errorCode = asString(body?.error?.code, "", 80);
+      const moderationDetails = body?.error?.moderation_details && typeof body.error.moderation_details === "object"
+        ? body.error.moderation_details
+        : null;
+      const moderationStage = asString(moderationDetails?.moderation_stage, "", 40);
+      const categories = Array.isArray(moderationDetails?.categories)
+        ? moderationDetails.categories.filter((item) => typeof item === "string").slice(0, 6)
+        : [];
+      const moderationDetail = [moderationStage && `stage=${moderationStage}`, categories.length && `categories=${categories.join(",")}`]
+        .filter(Boolean)
+        .join("; ");
+      return {
+        skipped: true,
+        reason: errorCode === "moderation_blocked" ? "openai-image-moderation-blocked" : `openai-image-http-${response.status}`,
+        detail: asString(moderationDetail || body?.error?.message || body?.error, "", 180),
+      };
     }
     const item = Array.isArray(body?.data) ? body.data[0] : null;
     const b64 = asString(item?.b64_json || item?.b64, "", 10_000_000);
@@ -1421,12 +1552,35 @@ async function handlePhoto(request, env, origin) {
   }
   const references = await loadReferenceFiles(packet);
   const prompt = buildPhotoPrompt(packet, references.files.length);
-  const openaiResult = await callOpenAIImage(env, prompt, references.files);
+  const ordinaryPhoto = packet.decision.intent.suggestiveLevel === "none";
+  const openaiModeration = ["none", "low"].includes(packet.decision.intent.suggestiveLevel) ? "low" : "auto";
+  let openaiResult = await callOpenAIImage(env, prompt, references.files, openaiModeration);
+  if (ordinaryPhoto && openaiResult.reason === "openai-image-moderation-blocked") {
+    const retryPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.files.length);
+    openaiResult = await callOpenAIImage(env, retryPrompt, references.files, "low");
+  }
   const result = openaiResult.ok === true ? openaiResult : await callWaveSpeedImage(env, prompt, references.urls);
   if (result.ok !== true) {
-    return jsonResponse({ skipped: true, reason: result.reason, detail: result.detail, model: result.model || IMAGE_MODEL, primaryFailure: openaiResult.reason }, 200, origin);
+    return jsonResponse({
+      skipped: true,
+      reason: result.reason,
+      detail: result.detail,
+      model: result.model || IMAGE_MODEL,
+      primaryFailure: openaiResult.reason,
+      primaryDetail: openaiResult.detail,
+    }, 200, origin);
   }
-  return jsonResponse({ ok: true, dataUrl: result.dataUrl, mimeType: result.mimeType, model: result.model || IMAGE_MODEL, provider: result.model === WAVESPEED_MODEL ? "wavespeed" : "openai", prompt, usage: result.usage }, 200, origin);
+  const usedWaveSpeed = result.model === WAVESPEED_MODEL;
+  return jsonResponse({
+    ok: true,
+    dataUrl: result.dataUrl,
+    mimeType: result.mimeType,
+    model: result.model || IMAGE_MODEL,
+    provider: usedWaveSpeed ? "wavespeed" : "openai",
+    ...(usedWaveSpeed ? { primaryFailure: openaiResult.reason, primaryDetail: openaiResult.detail } : {}),
+    prompt,
+    usage: result.usage,
+  }, 200, origin);
 }
 
 export default {

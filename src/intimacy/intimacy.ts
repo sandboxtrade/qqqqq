@@ -124,7 +124,7 @@ export const defaultIntimacyCoreProfile: IntimacyCoreProfile = {
     {
       id: "boundary.no_pressure",
       level: "hard",
-      rule: "A refusal, pause or stop is never converted into consent by persistence or language generation.",
+      rule: "A current refusal, pause or stop is never converted into consent by persistence or language generation. After its cooldown expires, a later separate positive interaction may reopen naturally instead of keeping a permanent lock.",
       enforcement: "local",
     },
     {
@@ -323,6 +323,32 @@ export function currentIntimacyState(
   const driveDecay = Math.exp(-elapsedMinutes / 45);
   base.arousal = clampIntimacy(base.arousal * arousalDecay);
   base.initiativeDrive = clampIntimacy(base.initiativeDrive * driveDecay);
+  // A pause/stop is a current-turn boundary, not a permanent dead state.
+  // Once its mechanical cooldown expires we keep a trace of caution, but stop
+  // treating the old boundary as an active lock. A later positive intimate
+  // signal may then reopen naturally; persistence alone still grants nothing.
+  if (
+    ["paused", "stopped"].includes(base.interactionStatus) &&
+    typeof base.cooldownUntil === "number" &&
+    now >= base.cooldownUntil
+  ) {
+    base.phase = "normal";
+    base.interactionStatus = "hesitant";
+    base.activeScene = null;
+    base.cooldownUntil = undefined;
+    base.initiativeDrive = 0;
+  }
+  // Caution from an old boundary also fades. This only returns the module to
+  // neutral; it does not grant intimacy or restore an active scene.
+  if (
+    base.interactionStatus === "hesitant" &&
+    base.lastBoundaryAt &&
+    now - base.lastBoundaryAt > 90 * 60_000
+  ) {
+    base.phase = "normal";
+    base.interactionStatus = "inactive";
+    base.activeScene = null;
+  }
   if (
     base.lastInteractionAt &&
     now - base.lastInteractionAt > 90 * 60_000 &&
@@ -665,7 +691,10 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
   }
 
   if (signal.kind === "resume") {
-    const wasPaused = state.phase === "paused" || ["paused", "stopped"].includes(state.interactionStatus);
+    const wasPaused =
+      state.phase === "paused" ||
+      ["paused", "stopped"].includes(state.interactionStatus) ||
+      (state.interactionStatus === "hesitant" && Boolean(state.lastBoundaryAt));
     if (!wasPaused) return finish();
     const canResume =
       input.now >= (state.cooldownUntil ?? 0) &&
