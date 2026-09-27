@@ -58,12 +58,14 @@ export default function App() {
     loadOlder,
     editablePersonality,
     editableMemory,
+    photoNoRefusalMode,
     editableContextUpdatedAt,
     editableContextBusy,
     exportBusy,
     loadEditableContext,
     saveEditablePersonality,
     saveEditableMemory,
+    setPhotoNoRefusalMode,
     exportConversation,
   } = useAppStore();
 
@@ -239,11 +241,13 @@ export default function App() {
             resetDisabled={!ready || resettingData}
             personality={editablePersonality}
             memory={editableMemory}
+            photoNoRefusalMode={photoNoRefusalMode}
             contextUpdatedAt={editableContextUpdatedAt}
             contextBusy={editableContextBusy}
             onReloadContext={loadEditableContext}
             onSavePersonality={saveEditablePersonality}
             onSaveMemory={saveEditableMemory}
+            onSetPhotoNoRefusalMode={setPhotoNoRefusalMode}
             exportBusy={exportBusy}
             onExportConversation={exportConversation}
           />

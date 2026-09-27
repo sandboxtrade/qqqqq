@@ -6,11 +6,13 @@ export interface YuzukiEditableContext {
   version: typeof YUZUKI_CONTEXT_VERSION;
   personality: string;
   memory: string;
+  /** Per-character user override: direct photo requests are not refused by character-state logic. */
+  photoNoRefusalMode: boolean;
   updatedAt: number;
 }
 
 export type YuzukiEditableContextPatch = Partial<
-  Pick<YuzukiEditableContext, "personality" | "memory" | "updatedAt">
+  Pick<YuzukiEditableContext, "personality" | "memory" | "photoNoRefusalMode" | "updatedAt">
 >;
 
 export const DEFAULT_YUZUKI_PERSONALITY = `=== PERSONALITY ===
@@ -64,6 +66,7 @@ export function createDefaultEditableContext(
     version: YUZUKI_CONTEXT_VERSION,
     personality: normalizeMultiline(defaultPersonality, MAX_PERSONALITY_CHARS) || DEFAULT_YUZUKI_PERSONALITY,
     memory: normalizeMultiline(defaultMemory, MAX_MEMORY_CHARS),
+    photoNoRefusalMode: false,
     updatedAt: now,
   };
 }
@@ -79,6 +82,7 @@ export function normalizeEditableContext(
     version: YUZUKI_CONTEXT_VERSION,
     personality: normalizeMultiline(raw?.personality, MAX_PERSONALITY_CHARS) || fallback.personality,
     memory: normalizeMultiline(raw?.memory, MAX_MEMORY_CHARS),
+    photoNoRefusalMode: raw?.photoNoRefusalMode === true,
     updatedAt:
       typeof raw?.updatedAt === "number" && Number.isFinite(raw.updatedAt) && raw.updatedAt >= 0
         ? raw.updatedAt
@@ -92,6 +96,7 @@ export function encodeEditableContext(context: YuzukiEditableContext) {
     version: normalized.version,
     personality: normalized.personality,
     memory: normalized.memory,
+    photoNoRefusalMode: normalized.photoNoRefusalMode,
     updatedAt: normalized.updatedAt,
   };
 }
@@ -104,6 +109,7 @@ export function decodeEditableContext(raw: unknown): YuzukiEditableContext | nul
     version: YUZUKI_CONTEXT_VERSION,
     personality: typeof value.personality === "string" ? value.personality : "",
     memory: typeof value.memory === "string" ? value.memory : "",
+    photoNoRefusalMode: value.photoNoRefusalMode === true,
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
   });
 }

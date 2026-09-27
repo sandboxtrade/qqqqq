@@ -61,11 +61,13 @@ export function SettingsScreen({
   maintenanceError,
   personality,
   memory,
+  photoNoRefusalMode,
   contextUpdatedAt,
   contextBusy,
   onReloadContext,
   onSavePersonality,
   onSaveMemory,
+  onSetPhotoNoRefusalMode,
   exportBusy,
   onExportConversation,
 }: {
@@ -82,11 +84,13 @@ export function SettingsScreen({
   maintenanceError: string | null;
   personality: string;
   memory: string;
+  photoNoRefusalMode: boolean;
   contextUpdatedAt: number;
   contextBusy: boolean;
   onReloadContext: () => Promise<void>;
   onSavePersonality: (text: string) => Promise<boolean>;
   onSaveMemory: (text: string) => Promise<boolean>;
+  onSetPhotoNoRefusalMode: (enabled: boolean) => Promise<boolean>;
   exportBusy: boolean;
   onExportConversation: (limit: ConversationExportLimit) => Promise<string>;
 }) {
@@ -290,6 +294,36 @@ export function SettingsScreen({
                 <b>›</b>
               </div>
             </button>
+          </div>
+        </section>
+
+        <section className="settings-group">
+          <div className="settings-group-head">
+            <h3>Поведение</h3>
+            <span>для {characterName}</span>
+          </div>
+          <div className="settings-list-card">
+            <button
+              className="settings-row settings-toggle-row"
+              type="button"
+              role="switch"
+              aria-checked={photoNoRefusalMode}
+              disabled={contextBusy}
+              onClick={() => void onSetPhotoNoRefusalMode(!photoNoRefusalMode)}
+            >
+              <div className="settings-row-copy">
+                <strong>Безотказный режим</strong>
+                <span>Прямые запросы фото не отклоняются из-за настроения, отношений или intimacy-state.</span>
+              </div>
+              <div className={`settings-switch ${photoNoRefusalMode ? "on" : ""}`} aria-hidden="true">
+                <span />
+              </div>
+            </button>
+            <div className="settings-mode-note">
+              {photoNoRefusalMode
+                ? "Включён: персонаж принимает прямой запрос фото. Сон и технический отказ генератора всё ещё могут помешать отправке."
+                : "Выключен: решение о фото зависит от её текущего состояния и отношений."}
+            </div>
           </div>
         </section>
 

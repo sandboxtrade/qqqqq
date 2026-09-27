@@ -1257,6 +1257,49 @@ body { overscroll-behavior: none; }
   line-height: 1;
 }
 
+.settings-toggle-row {
+  cursor: pointer;
+}
+.settings-toggle-row:disabled {
+  opacity: .55;
+  cursor: default;
+}
+.settings-switch {
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.11);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+  transition: background .18s ease, box-shadow .18s ease;
+}
+.settings-switch > span {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #d8d1dc;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  transform: translateX(0);
+  transition: transform .18s ease, background .18s ease;
+}
+.settings-switch.on {
+  background: rgba(188,133,220,.55);
+  box-shadow: inset 0 0 0 1px rgba(220,184,240,.28);
+}
+.settings-switch.on > span {
+  transform: translateX(18px);
+  background: #fff;
+}
+.settings-mode-note {
+  padding: 10px 14px 12px;
+  border-top: 1px solid rgba(255,255,255,.045);
+  color: #776f7e;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .settings-export-card {
   display: grid;
   gap: 12px;

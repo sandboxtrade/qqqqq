@@ -116,7 +116,7 @@ export interface RuntimeTrace {
     reactionSource?: "gpt" | "unchanged-fallback";
     intimacyReactionSource?: "gpt" | "mechanical";
   };
-  manualContext?: { personalityChars: number; memoryChars: number; recentMessages: number };
+  manualContext?: { personalityChars: number; memoryChars: number; photoNoRefusalMode?: boolean; recentMessages: number };
   timings?: { preflightMs: number; contextMs: number; generationMs: number; saveMs: number; totalMs: number; firstTextMs: number | null };
   maintenance?: Awaited<ReturnType<typeof maintainRuntime>>;
 }
@@ -1053,6 +1053,7 @@ export async function handleUserMessage(
     baseVisualEmotion,
     appearanceRequest,
     input.id,
+    { photoNoRefusalMode: editableContext.photoNoRefusalMode },
   );
   const recentAppearanceIds = recentCharacterAppearanceIds(stableHistory);
   // An explicit visual request is higher priority than the automatic one-turn
@@ -1100,6 +1101,7 @@ export async function handleUserMessage(
             suggestive: appearanceResolution.suggestive,
           }
         : undefined,
+      photoPolicy: { noRefusalMode: editableContext.photoNoRefusalMode },
       constraint: constraintKind
         ? {
             locked: true,
@@ -1353,6 +1355,7 @@ export async function handleUserMessage(
     manualContext: {
       personalityChars: editableContext.personality.length,
       memoryChars: editableContext.memory.length,
+      photoNoRefusalMode: editableContext.photoNoRefusalMode,
       recentMessages: recentHistory.length,
     },
   };

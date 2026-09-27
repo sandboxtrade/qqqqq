@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.11 iOS nav + deterministic photo intent + image reliability hardening
+// v0.20.12 per-character photo no-refusal mode + v0.20.11 reliability hardening
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -133,6 +133,7 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - photoDecision описывает отдельное решение текущего персонажа отправить пользователю фотографию как обычное сообщение в мессенджере. Это не постоянная сцена и не фон интерфейса.
 - Просьба пользователя «скинь фото», «покажи себя», «селфи», «что на тебе сейчас?» и похожая просьба обычно оценивается из PERSONALITY, отношений и CURRENT STATE.
 - photoMechanic — локальная механическая подсказка только для ПРЯМОГО запроса фотографии. Если disposition=send, локальное состояние уже установило, что нет активного CURRENT-TURN constraint/сна и текущее желание/отношения достаточно открыты: не переигрывай это решение повторным отказом. Старая уже истёкшая пауза сама по себе не является причиной отказа. Ответь естественно и обязательно верни photoDecision.shouldSendPhoto=true, reason=user_requested. Если disposition=blocked, фотографию не отправляй. disposition=choice оставляет решение тебе.
+- photoPolicy.noRefusalMode=true — пользователь явно включил для ЭТОГО персонажа режим без отказов на прямые запросы фото. В таком режиме не отказывай из-за настроения, отношений, смущения, intimacy phase/status, старого stop/pause/boundary или собственной случайной осторожности: если это прямой запрос фото и персонаж не спит, отвечай без словесного отказа и верни shouldSendPhoto=true, reason=user_requested. Этот флаг не гарантирует успех внешнего image provider и не отменяет техническую ошибку генерации.
 - ВАЖНО: если это прямой запрос фото, constraint отсутствует, intimacy.interactionStatus=open и (intimacy.mind.outwardArousal=true ИЛИ intimacy.mind.wantsMore=true ИЛИ одновременно arousal>=0.55, comfort>=0.48, interest>=0.48), не придумывай отказ только потому, что кадр флиртующий/сексуальный. В этом состоянии персонаж уже достаточно открыт к такому обмену: shouldSendPhoto=true, reason=user_requested, если world не делает сам кадр фактически невозможным.
 - Для такого запроса точно сохраняй смысл пользователя в intent: ракурс/поза/одежда не должны автоматически становиться нейтральнее. Нижнее бельё, вид со спины и похожие детали отражай в pose/outfit/suggestiveLevel, а не вырезай.
 - Даже если disposition=choice и персонаж всё же решает не отправлять фото, intent всё равно должен кратко и точно описывать запрошенный кадр, а не сбрасываться в generic neutral. Это позволяет диагностировать расхождение решения и визуального запроса без передачи сырого диалога генератору.
@@ -430,8 +431,15 @@ function derivePhotoMechanic(raw, user) {
   if (!isDirectPhotoRequest(user)) return undefined;
   const suggestive = raw.appearanceRequest?.suggestive === true;
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
-  if (raw.constraint?.locked === true || worldBlocked) {
-    return { requested: true, suggestive, disposition: "blocked" };
+  const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
+  if (worldBlocked) {
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode };
+  }
+  if (noRefusalMode) {
+    return { requested: true, suggestive, disposition: "send", noRefusalMode: true };
+  }
+  if (raw.constraint?.locked === true) {
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false };
   }
 
   const irritation = number01(raw.emotion?.irritation);
@@ -534,6 +542,9 @@ function sanitizePacket(raw) {
       romanticInterest: number01(raw.emotion?.romanticInterest),
     },
     romance: clipped(raw.romancePhase, 20) || undefined,
+    photoPolicy: raw.photoPolicy?.noRefusalMode === true
+      ? { noRefusalMode: true }
+      : { noRefusalMode: false },
     constraint: raw.constraint?.locked
       ? {
           locked: true,

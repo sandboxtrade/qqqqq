@@ -75,6 +75,7 @@ interface AppStore {
   updatingIntimacyMode: boolean;
   editablePersonality: string;
   editableMemory: string;
+  photoNoRefusalMode: boolean;
   editableContextUpdatedAt: number;
   editableContextBusy: boolean;
   exportBusy: boolean;
@@ -87,6 +88,7 @@ interface AppStore {
   loadEditableContext: () => Promise<void>;
   saveEditablePersonality: (text: string) => Promise<boolean>;
   saveEditableMemory: (text: string) => Promise<boolean>;
+  setPhotoNoRefusalMode: (enabled: boolean) => Promise<boolean>;
   exportConversation: (limit: ConversationExportLimit) => Promise<string>;
   send: (text: string) => Promise<void>;
   retry: (messageId: string) => Promise<void>;
@@ -543,6 +545,7 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       loadingOlder: false,
       editablePersonality: editableContext.personality,
       editableMemory: editableContext.memory,
+      photoNoRefusalMode: editableContext.photoNoRefusalMode,
       editableContextUpdatedAt: editableContext.updatedAt,
       editableContextBusy: false,
       exportBusy: false,
@@ -591,6 +594,7 @@ function watchAuth() {
       updatingIntimacyMode: false,
       editablePersonality: defaultContextFor(state.activeCharacterId).personality,
       editableMemory: defaultContextFor(state.activeCharacterId).memory,
+      photoNoRefusalMode: defaultContextFor(state.activeCharacterId).photoNoRefusalMode,
       editableContextUpdatedAt: 0,
       editableContextBusy: false,
       exportBusy: false,
@@ -788,6 +792,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   updatingIntimacyMode: false,
   editablePersonality: defaultContextFor(initialCharacterId()).personality,
   editableMemory: "",
+  photoNoRefusalMode: defaultContextFor(initialCharacterId()).photoNoRefusalMode,
   editableContextUpdatedAt: 0,
   editableContextBusy: false,
   exportBusy: false,
@@ -851,6 +856,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       loadingOlder: false,
       editablePersonality: fallback.personality,
       editableMemory: fallback.memory,
+      photoNoRefusalMode: fallback.photoNoRefusalMode,
       editableContextUpdatedAt: 0,
       editableContextBusy: false,
       error: null,
@@ -908,6 +914,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       updatingIntimacyMode: false,
       editablePersonality: defaultContextFor(get().activeCharacterId).personality,
       editableMemory: "",
+      photoNoRefusalMode: defaultContextFor(get().activeCharacterId).photoNoRefusalMode,
       editableContextUpdatedAt: 0,
       editableContextBusy: false,
       exportBusy: false,
@@ -1018,6 +1025,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         editablePersonality: context.personality,
         editableMemory: context.memory,
+        photoNoRefusalMode: context.photoNoRefusalMode,
         editableContextUpdatedAt: context.updatedAt,
         editableContextBusy: false,
       });
@@ -1043,6 +1051,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         editablePersonality: saved.personality,
         editableMemory: saved.memory,
+        photoNoRefusalMode: saved.photoNoRefusalMode,
         editableContextUpdatedAt: saved.updatedAt,
         editableContextBusy: false,
       });
@@ -1070,6 +1079,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         editablePersonality: saved.personality,
         editableMemory: saved.memory,
+        photoNoRefusalMode: saved.photoNoRefusalMode,
+        editableContextUpdatedAt: saved.updatedAt,
+        editableContextBusy: false,
+      });
+      return true;
+    } catch (error) {
+      if (version === epoch && !controller.signal.aborted)
+        set({ editableContextBusy: false, error: errorText(error) });
+      return false;
+    } finally {
+      controller.abort();
+    }
+  },
+  setPhotoNoRefusalMode: async (enabled) => {
+    const state = get();
+    if (state.editableContextBusy) return false;
+    const version = epoch;
+    const controller = new AbortController();
+    set({ editableContextBusy: true, error: null });
+    try {
+      const saved = await updateCharacterEditableContext(state.activeCharacterId, state.user?.uid ?? null, controller.signal, {
+        photoNoRefusalMode: enabled,
+        updatedAt: Date.now(),
+      });
+      if (version !== epoch || controller.signal.aborted) return false;
+      set({
+        editablePersonality: saved.personality,
+        editableMemory: saved.memory,
+        photoNoRefusalMode: saved.photoNoRefusalMode,
         editableContextUpdatedAt: saved.updatedAt,
         editableContextBusy: false,
       });

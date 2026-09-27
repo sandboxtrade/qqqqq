@@ -129,6 +129,7 @@ export function resolveAppearanceRequest(
   base: VisualEmotionState,
   request: AppearanceRequestInput,
   seed: string,
+  options: { photoNoRefusalMode?: boolean } = {},
 ): AppearanceRequestResolution {
   if (!request.requested) {
     return {
@@ -160,6 +161,29 @@ export function resolveAppearanceRequest(
       intimacy.interest >= 0.52 &&
       (intimacy.arousal >= 0.55 || intimacy.initiativeDrive >= 0.58),
   );
+
+  // Optional per-character override. It changes only the character-side
+  // acceptance decision for direct appearance/photo requests; provider/API
+  // failures remain outside this resolver. Keep sleeping as a physical state,
+  // but do not let mood/relationship/intimacy gates invent a refusal.
+  if (options.photoNoRefusalMode && runtime.world.isAwake && runtime.world.availability !== "sleeping") {
+    const overrideEmotion = request.suggestive
+      ? "seductive"
+      : targetEmotion[request.vibe] ?? base.emotion;
+    const visual = request.vibe === "different"
+      ? { ...base, changeStrength: 1 as const }
+      : withVisual(base, overrideEmotion, request.strength);
+    return {
+      requested: true,
+      requestedVibe: request.vibe,
+      suggestive: request.suggestive,
+      outcome: "accepted",
+      reason: "photo-no-refusal-mode",
+      selectedEmotion: visual.emotion,
+      forceVariantChange: true,
+      visualEmotion: visual,
+    };
+  }
 
   if (request.suggestive) {
     if (intimacy?.adultModeEnabled !== true) {

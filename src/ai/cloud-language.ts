@@ -43,6 +43,10 @@ export interface CloudLanguageInput {
     selectedEmotion: string;
     suggestive: boolean;
   };
+  /** Character-scoped user preference. This only overrides character-side photo refusal logic. */
+  photoPolicy?: {
+    noRefusalMode: boolean;
+  };
   constraint?: {
     locked: boolean;
     kind: string;
