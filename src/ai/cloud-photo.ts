@@ -62,7 +62,7 @@ interface WorkerPhotoReply {
   };
 }
 
-const WORKER_TIMEOUT_MS = 45_000;
+const WORKER_TIMEOUT_MS = 110_000;
 const TOKEN_TIMEOUT_MS = 4_000;
 
 function firstString(...values: unknown[]) {

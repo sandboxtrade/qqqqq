@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { AppCheckState } from "../storage/firebase";
 import type { AuthProfile } from "../storage/auth";
 import type { RuntimeTrace } from "../engine/runtime";
-import type { IntimacyPhase } from "../intimacy/intimacy";
 import type { ConversationExportLimit } from "../chat/conversation-export";
 import { MAX_MEMORY_CHARS, MAX_PERSONALITY_CHARS } from "../context/yuzuki-context";
 import { DebugPanel } from "./components";
@@ -18,15 +17,6 @@ const appCheckLabels: Record<AppCheckState, string> = {
   error: "ошибка",
 };
 
-const intimacyPhaseLabels: Record<IntimacyPhase, string> = {
-  normal: "спокойно",
-  romantic: "романтика",
-  close: "близость",
-  intimate: "интимно",
-  high_intimacy: "сильное влечение",
-  aftercare: "нежность",
-  paused: "пауза",
-};
 
 const exportOptions: Array<{ value: ConversationExportLimit; label: string }> = [
   { value: 20, label: "20" },
@@ -69,10 +59,6 @@ export function SettingsScreen({
   clearingData,
   resetDisabled,
   maintenanceError,
-  intimacyEnabled,
-  intimacyPhase,
-  intimacyUpdating,
-  onSetIntimacyEnabled,
   personality,
   memory,
   contextUpdatedAt,
@@ -94,10 +80,6 @@ export function SettingsScreen({
   clearingData: boolean;
   resetDisabled: boolean;
   maintenanceError: string | null;
-  intimacyEnabled: boolean;
-  intimacyPhase: IntimacyPhase;
-  intimacyUpdating: boolean;
-  onSetIntimacyEnabled: (enabled: boolean) => Promise<void>;
   personality: string;
   memory: string;
   contextUpdatedAt: number;
@@ -110,7 +92,6 @@ export function SettingsScreen({
 }) {
   const [view, setView] = useState<SettingsView>("home");
   const [confirmReset, setConfirmReset] = useState(false);
-  const [confirmAdultMode, setConfirmAdultMode] = useState(false);
   const [personalityDraft, setPersonalityDraft] = useState(personality);
   const [memoryDraft, setMemoryDraft] = useState(memory);
   const [exportText, setExportText] = useState("");
@@ -331,42 +312,6 @@ export function SettingsScreen({
                 </button>
               ))}
             </div>
-          </div>
-        </section>
-
-        <section className="settings-group">
-          <div className="settings-group-head">
-            <h3>Близость</h3>
-          </div>
-          <div className="settings-list-card settings-mode-card">
-            <div className="settings-mode-row">
-              <div>
-                <strong>Интимный режим 18+</strong>
-                <span>Стоп, пауза и границы всегда имеют приоритет.</span>
-              </div>
-              <span className={intimacyEnabled ? "settings-state-pill active" : "settings-state-pill"}>
-                {intimacyEnabled ? intimacyPhaseLabels[intimacyPhase] : "выкл"}
-              </span>
-            </div>
-            {intimacyEnabled ? (
-              <button className="settings-action-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => void onSetIntimacyEnabled(false)}>
-                {intimacyUpdating ? "Сохраняем…" : "Выключить"}
-              </button>
-            ) : !confirmAdultMode ? (
-              <button className="settings-action-button" type="button" disabled={intimacyUpdating || clearingData} onClick={() => setConfirmAdultMode(true)}>
-                Включить
-              </button>
-            ) : (
-              <div className="settings-confirmation" role="alert">
-                <span>Только для пользователей 18+.</span>
-                <div>
-                  <button type="button" disabled={intimacyUpdating} onClick={() => setConfirmAdultMode(false)}>Отмена</button>
-                  <button type="button" disabled={intimacyUpdating} onClick={() => void onSetIntimacyEnabled(true).finally(() => setConfirmAdultMode(false))}>
-                    {intimacyUpdating ? "…" : "Мне 18+"}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </section>
 

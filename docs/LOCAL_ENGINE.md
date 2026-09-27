@@ -339,9 +339,9 @@ Existing initiative lifecycle and dedupe rules remain authoritative. Dialogue-te
 
 ## Source: INTIMACY_ARCHITECTURE.md
 
-# Intimacy architecture — foundation v0.7.0
+# Intimacy architecture — current behavior
 
-This module is an adult-only extension of the same persistent character. It is not a second chatbot and it is not active in the current conversation runtime yet.
+This module is an adult-only extension of the same persistent character. It is not a second chatbot. Since v0.20.7, adult capability is always available for adult characters and is no longer exposed as a user-facing on/off mode.
 
 ## Non-negotiable invariants
 
@@ -351,7 +351,7 @@ This module is an adult-only extension of the same persistent character. It is n
 - Past consent never becomes automatic consent for a later interaction.
 - A pause/refusal/stop cannot be converted into consent by language generation.
 - Neutral technical scene IDs are used in engine/persistence. Graphic scene descriptions do not belong in core logic.
-- The adult module stays disabled until `adultModeEnabled` is explicitly enabled by product/UI logic in a later stage.
+- `adultModeEnabled` remains in persistence for schema compatibility, but current runtime normalizes it to `true` for adult characters. Consent, stop, pause, hesitation and explicit boundaries remain hard local constraints.
 
 ## Current stage A implementation
 
@@ -384,7 +384,7 @@ The state currently reserves the following neutral runtime dimensions:
 - cooldown/boundary timestamps
 - `storagePolicy`: `full | memories_only | disabled`
 
-The fields exist now so later engines do not need to retrofit persistence. They do not currently affect chat behavior.
+The fields are active runtime state. `adultModeEnabled` is retained as a compatibility field and is always true for adult characters; it is not a user preference or settings toggle.
 
 ### Neutral scene IDs
 

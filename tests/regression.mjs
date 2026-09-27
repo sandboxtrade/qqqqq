@@ -83,18 +83,18 @@ registerHooks({
     if (url === "mock:firestore")
       source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction,writeBatch}=globalThis.__sdk;`;
     else if (url === "mock:zustand")
-      source = `export const create=(creator)=>{let state; const set=(update)=>{const patch=typeof update==='function'?update(state):update; state={...state,...patch}; return state;}; const get=()=>state; state=creator(set,get); const hook=()=>state; hook.getState=get; hook.setState=set; return hook;};`;
+      source = `export const create=(creator)=>{let state; const listeners=new Set(); const set=(update)=>{const previous=state; const patch=typeof update==='function'?update(state):update; state={...state,...patch}; for(const listener of listeners) listener(state,previous); return state;}; const get=()=>state; state=creator(set,get); const hook=()=>state; hook.getState=get; hook.setState=set; hook.subscribe=(listener)=>{listeners.add(listener); return()=>listeners.delete(listener);}; return hook;};`;
     else if (url.endsWith("/storage/repository-factory.ts"))
       source =
         "export const getCompanionRepository=(...a)=>globalThis.__getRepo(...a);";
     else if (url.endsWith("/storage/auth.ts"))
       source = `export const getAuthenticatedUid=()=>globalThis.__uid; export const signInWithGoogle=async()=>null; export const signOutFirebase=async()=>{}; export const waitForInitialAuth=async()=>null; export const observeAuth=()=>()=>{}; export const finishRedirect=async()=>{};`;
     else if (url.endsWith("/storage/firebase.ts"))
-      source = `export const getFirebaseDb=()=>({}); export const getAppCheckState=()=>"disabled"; export const initializeFirebaseAppCheck=()=>"disabled"; export const verifyAppCheck=async()=>{}; export const isFirebaseConfigured=false; export const isLocalRepositoryAllowed=true; export const runtimeConfigurationError=null;`;
+      source = `export const getFirebaseDb=()=>({}); export const getFirebaseApp=()=>null; export const getFirebaseAppCheckToken=async()=>""; export const getAppCheckState=()=>"disabled"; export const initializeFirebaseAppCheck=()=>"disabled"; export const verifyAppCheck=async()=>{}; export const isFirebaseConfigured=false; export const isLocalRepositoryAllowed=true; export const runtimeConfigurationError=null;`;
     else if (url.endsWith("/storage/live-sync.ts"))
       source = "export const subscribeCharacterLiveSync=()=>()=>{};";
     else if (url.endsWith("/config/runtime-config.ts"))
-      source = "export const assertRuntimeConfiguration=()=>{};";
+      source = 'export const assertRuntimeConfiguration=()=>{}; export const runtimeCloudLanguageEndpoint="";';
     else if (url.endsWith("/ai/gemini-client.ts"))
       source =
         'export const generateCharacterReply=(...a)=>globalThis.__generate(...a); export const generateInitiativeMessage=async()=>"Как твои дела?";';
@@ -163,7 +163,7 @@ const {
   encodeIntimacyPreferences,
   decodeIntimacyPreferences,
 } = await import("../src/storage/persistence-schema.ts");
-const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, shouldHoldSequenceAppearance, selectBalancedRecentHistory, applyBoundedCloudReaction, applyBoundedCloudIntimacyReaction } = await import(
+const { bootstrapRuntime, handleUserMessage, reconcileRuntimeState, maintainRuntime, setIntimacyAdultMode, shouldShowReadyToChat, selectBalancedRecentHistory, applyBoundedCloudReaction, applyBoundedCloudIntimacyReaction } = await import(
   "../src/engine/runtime.ts"
 );
 const { bounded } = await import("../src/core/async.ts");
@@ -2557,16 +2557,16 @@ await test("intimacy foundation hard-gates the adult module locally", () => {
   assert.equal(defaultIntimacyCoreProfile.characterId, defaultCharacter.id);
   assert.ok(defaultIntimacyCoreProfile.coreBoundaries.every((rule) => rule.enforcement === "local"));
   assert.deepEqual(evaluateIntimacyHardGate(defaultCharacter, initial), {
-    allowed: false,
-    reason: "adult_mode_disabled",
-  });
-  const enabled = { ...initial, adultModeEnabled: true };
-  assert.deepEqual(evaluateIntimacyHardGate(defaultCharacter, enabled), {
     allowed: true,
     reason: "available",
   });
+  const disabledLegacy = { ...initial, adultModeEnabled: false };
+  assert.deepEqual(evaluateIntimacyHardGate(defaultCharacter, disabledLegacy), {
+    allowed: false,
+    reason: "adult_mode_disabled",
+  });
   assert.deepEqual(
-    evaluateIntimacyHardGate({ ...defaultCharacter, adult: false }, enabled),
+    evaluateIntimacyHardGate({ ...defaultCharacter, adult: false }, initial),
     { allowed: false, reason: "character_not_adult" },
   );
 });
@@ -2630,7 +2630,7 @@ await test("intimacy preferences are versioned evidence records", () => {
 });
 await test("intimacy preference learning is adult-gated, evidence-based and gradual", () => {
   const empty = createInitialIntimacyPreferences(now);
-  const disabledState = createInitialIntimacyState(now);
+  const disabledState = { ...createInitialIntimacyState(now), adultModeEnabled: false };
   const disabled = evolveIntimacyPreferences(empty, {
     before: disabledState,
     after: disabledState,
@@ -2884,7 +2884,7 @@ await test("suggestive flirting raises arousal mainly after real relational clos
   assert.ok(distantResult.state.interest > distantPrevious.interest, "flirt can still build attraction before arousal is strong");
 });
 
-await test("adult mode remains a hard gate for flirt-driven arousal", () => {
+await test("legacy disabled adult state is normalized back on for adult characters", () => {
   const previous = {
     ...createInitialIntimacyState(now),
     adultModeEnabled: false,
@@ -2898,9 +2898,9 @@ await test("adult mode remains a hard gate for flirt-driven arousal", () => {
       previous,
     ),
   );
-  assert.equal(result.action, "gated");
-  assert.equal(result.state.arousal, 0);
-  assert.equal(result.state.phase, "normal");
+  assert.equal(result.state.adultModeEnabled, true);
+  assert.notEqual(result.action, "gated");
+  assert.ok(result.state.arousal > 0);
 });
 
 await test("intimacy engine requires a current-turn cue and never escalates from old consent alone", () => {
@@ -2941,9 +2941,26 @@ await test("affectionate approach is capped at close while explicit consent can 
   const approached = planIntimacyTurn(intimacyTurnInput({ kind: "approach", strength: 1, explicit: true, intimacyContext: true }, close));
   assert.equal(approached.state.phase, "close");
   const consented = planIntimacyTurn(intimacyTurnInput({ kind: "consent", strength: 1, explicit: true, intimacyContext: true }, close));
-  assert.equal(consented.state.phase, "intimate");
+  assert.equal(consented.state.phase, "high_intimacy");
 });
-await test("intimacy progresses at most one phase per explicit turn", () => {
+await test("strong mutual adult-context flirt can cross close into intimate without repeated consent ceremony", () => {
+  const close = {
+    ...intimacyTurnInput({ kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true }).previous,
+    phase: "close",
+    interactionStatus: "open",
+    comfort: 0.72,
+    interest: 0.74,
+    arousal: 0.58,
+  };
+  const result = planIntimacyTurn(intimacyTurnInput(
+    { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true },
+    close,
+  ));
+  assert.equal(result.state.phase, "intimate");
+  assert.equal(result.state.interactionStatus, "open");
+  assert.ok(result.state.arousal > close.arousal);
+});
+await test("strong explicit mutual consent can advance two phases but never beyond the ceiling", () => {
   let state = intimacyTurnInput({ kind: "consent", strength: 1, explicit: true }).previous;
   const phases = [];
   for (let step = 0; step < 4; step += 1) {
@@ -2951,7 +2968,7 @@ await test("intimacy progresses at most one phase per explicit turn", () => {
     state = result.state;
     phases.push(state.phase);
   }
-  assert.deepEqual(phases, ["romantic", "close", "intimate", "high_intimacy"]);
+  assert.deepEqual(phases, ["close", "high_intimacy", "high_intimacy", "high_intimacy"]);
   assert.equal(state.activeScene?.stageId, "stage.high_intimacy");
 });
 await test("intimacy privacy caps escalation at close", () => {
@@ -3014,14 +3031,14 @@ await test("intimacy resume respects cooldown and aftercare de-escalates arousal
 });
 await test("stale intimacy decays back to normal without granting new intimacy", () => {
   const old = {
-    ...createInitialIntimacyState(now - 60 * 60_000),
+    ...createInitialIntimacyState(now - 100 * 60_000),
     adultModeEnabled: true,
     phase: "intimate",
     interactionStatus: "open",
     arousal: 0.9,
     initiativeDrive: 0.7,
-    lastInteractionAt: now - 60 * 60_000,
-    updatedAt: now - 60 * 60_000,
+    lastInteractionAt: now - 100 * 60_000,
+    updatedAt: now - 100 * 60_000,
   };
   const current = currentIntimacyState(old, now);
   assert.equal(current.phase, "normal");
@@ -3029,19 +3046,15 @@ await test("stale intimacy decays back to normal without granting new intimacy",
   assert.ok(current.arousal < old.arousal);
   assert.ok(current.initiativeDrive < old.initiativeDrive);
 });
-await test("adult intimacy mode is explicit, persisted separately and reversible", async () => {
+await test("adult capability is always enabled and cannot be disabled", async () => {
   repository = new InMemoryCompanionRepository();
   const controller = new AbortController();
   const boot = await bootstrapRuntime("A", controller.signal, now);
   const runtime = boot.state;
-  assert.equal(runtime.intimacy?.adultModeEnabled, false);
-  const enabled = await setIntimacyAdultMode("A", controller.signal, runtime, true);
-  assert.equal(enabled.intimacy?.adultModeEnabled, true);
+  assert.equal(runtime.intimacy?.adultModeEnabled, true);
+  const normalized = await setIntimacyAdultMode("A", controller.signal, runtime, false);
+  assert.equal(normalized.intimacy?.adultModeEnabled, true);
   assert.equal((await repository.loadIntimacyState())?.adultModeEnabled, true);
-  const disabled = await setIntimacyAdultMode("A", controller.signal, enabled, false);
-  assert.equal(disabled.intimacy?.adultModeEnabled, false);
-  assert.equal(disabled.intimacy?.phase, "normal");
-  assert.equal(disabled.intimacy?.arousal, 0);
 });
 
 await test("CI and deploy workflows run the verification gates", () => {
@@ -3121,7 +3134,13 @@ await test("romantic turn persists atomically and retry does not repeat state ch
   repository = new InMemoryCompanionRepository();
   const c = new AbortController();
   const boot = await bootstrapRuntime("A", c.signal, now);
-  const state = { ...boot.state, romance: { ...initialRomance(now), phase: "private" } };
+  const privateRomance = { ...initialRomance(now), phase: "private" };
+  const awakeWorld = { ...boot.state.world, isAwake: true, availability: "free", currentLocation: "bedroom", currentActivity: "chatting", updatedAt: now, lastSimulatedAt: now };
+  const state = { ...boot.state, romance: privateRomance, world: awakeWorld };
+  // handleUserMessage intentionally prefers the newest persisted snapshot/world
+  // over a stale caller copy, so seed the same state into this test repository.
+  repository.snapshot = { ...(await repository.loadSnapshot()), romance: privateRomance };
+  repository.world = awakeWorld;
   const input = { id: "romance-stop", text: "Стоп", timestamp: now };
   const result = await handleUserMessage(input, state, { uid: "A", signal: c.signal, history: [] });
   assert.equal(result.state.romance.phase, "paused");
@@ -3164,6 +3183,20 @@ await test("generic action verbs do not masquerade as photo requests", () => {
 });
 
 await test("conversation corrections do not masquerade as intimacy stop while real stop still stops", () => {
+  const lingeriePhoto = detectIntimacySignal("скинь фотку сзади в нижнем белье");
+  assert.equal(lingeriePhoto.kind, "flirt");
+  assert.equal(lingeriePhoto.intimacyContext, true);
+  assert.ok(lingeriePhoto.strength >= 0.82);
+  const lingerieAppearance = detectAppearanceRequest("скинь фотку сзади в нижнем белье");
+  assert.equal(lingerieAppearance.requested, true);
+  assert.equal(lingerieAppearance.suggestive, true);
+  const arousedTurn = detectIntimacySignal("ты меня прям возбуждаешь");
+  assert.equal(arousedTurn.kind, "flirt");
+  assert.equal(arousedTurn.intimacyContext, true);
+  const explicitAdult = detectIntimacySignal("хочу этот интим сильнее");
+  assert.equal(explicitAdult.kind, "flirt");
+  assert.equal(explicitAdult.intimacyContext, true);
+
   const correction = detectIntimacySignal("стоп, я про другое");
   assert.equal(correction.kind, "none");
   const signal = detectIntimacySignal("Стоп");
@@ -3314,26 +3347,6 @@ await test("unsupported ambient activity falls back to a current emotion portrai
   const next = selectAmbientOrEmotionAppearance(r, now, { assets: [baseAsset, staleReading], seed: "unsupported-activity" });
   assert.notEqual(next.assetId, staleReading.id);
   assert.equal(next.assetId, baseAsset.id);
-});
-
-await test("intimacy sequence photos are held only while the scene is actually current", () => {
-  const r = visualRuntime();
-  r.intimacy = {
-    ...createInitialIntimacyState(now - 60_000),
-    adultModeEnabled: true,
-    phase: "high_intimacy",
-    interactionStatus: "open",
-    arousal: 0.9,
-    lastInteractionAt: now - 30_000,
-  };
-  r.appearance = { version: 1, assetId: "scene.sx.4.1", selectedAt: now - 60_000, outfitChangedAt: now - 60_000 };
-  assert.equal(shouldHoldSequenceAppearance(r, now), true);
-  assert.equal(shouldHoldSequenceAppearance(r, now + 11 * 60_000), false);
-  r.appearance = { ...r.appearance, assetId: "scene.sxfin.1.1", selectedAt: now - 121_000 };
-  assert.equal(shouldHoldSequenceAppearance(r, now), false);
-  r.appearance = { ...r.appearance, selectedAt: now - 30_000 };
-  r.intimacy = { ...r.intimacy, interactionStatus: "paused" };
-  assert.equal(shouldHoldSequenceAppearance(r, now), false);
 });
 
 await test("periodic runtime reconciliation now normalizes ambient appearance", () => {
@@ -3651,7 +3664,7 @@ await test("scene fallback resolves placeholder ids to the visible neutral asset
   const neutral = { ...baseAsset, id: "emotion.neutral.1.1", src: "assets/character/neutral.1.1.png", expression: "neutral", motion: "still", visualEmotion: { emotion: "neutral", intensity: 1, variant: 1 } };
   assert.equal(selectAppearance(visualRuntime(), { emotion: "sad", intensity: 4, confidence: .7, changeStrength: .7 }, now, { assets: [placeholder, neutral], fallbackId: neutral.id }).assetId, neutral.id);
 });
-await test("visual emotion hysteresis is brief instead of freezing a scene", () => {
+await test("visual emotion can move to a stronger nearby intensity without freezing a stale scene", () => {
   const emotionAssets = [
     baseAsset,
     { ...baseAsset, id: "emotion.shy.5.1", src: "assets/character/shy.5.1.png", expression: "shy", motion: "still", visualEmotion: { emotion: "shy", intensity: 5, variant: 1 } },
@@ -3659,7 +3672,7 @@ await test("visual emotion hysteresis is brief instead of freezing a scene", () 
   ];
   const recent = visualRuntime();
   recent.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 5_000, outfitChangedAt: now - 5_000 };
-  assert.equal(selectAppearance(recent, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.5.1");
+  assert.equal(selectAppearance(recent, { emotion: "shy", intensity: 6, confidence: .7, changeStrength: .5 }, now, { assets: emotionAssets }).assetId, "emotion.shy.6.1");
 
   const settled = visualRuntime();
   settled.appearance = { version: 1, assetId: "emotion.shy.5.1", selectedAt: now - 15_000, outfitChangedAt: now - 15_000 };

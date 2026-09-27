@@ -1,12 +1,22 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.1 Social Photo Messages Foundation
+// v0.20.8 Social UI + natural intimacy + OpenAI/WaveSpeed photo router
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
 const MODEL = "gpt-6-luna";
 const OPENAI_URL = "https://api.openai.com/v1/responses";
-const IMAGE_MODEL = "gpt-image-2.5-flare";
+const IMAGE_MODEL = "gpt-image-2";
 const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
+const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
+const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/qwen-image/edit-2511";
+const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
+const WAVESPEED_MODEL = "wavespeed-ai/qwen-image/edit-2511";
+const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
+const GITHUB_SCENES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/src/assets/character/scenes/";
+const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/src/assets/character/scenes/";
+const GITHUB_PROFILES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/public/assets/profiles/";
+const GITHUB_PROFILES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/public/assets/profiles/";
+const REFERENCE_IMAGE_TTL_MS = 10 * 60 * 1000;
 
 const FIREBASE_PROJECT_ID = "qqqq-91fc0";
 const FIREBASE_PROJECT_NUMBER = "1068767940128";
@@ -37,6 +47,7 @@ const PRICE_OUTPUT = 0.50;
 const MAX_CALLS_PER_LOCAL_MINUTE = 24;
 const minuteBuckets = new Map();
 let rateLimitOps = 0;
+const referenceImageCache = new Map();
 
 const APP_CHECK_JWKS_URL = "https://firebaseappcheck.googleapis.com/v1/jwks";
 let appCheckJwksCache = null;
@@ -81,8 +92,11 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 - relationship — медленный фон отношений, а не команда обязательно быть ласковой.
 - world — фактическое текущее состояние. Если текущий персонаж спит или занят, не выдумывай несовместимое действие.
 - intimacy доступна только в соответствии с текущим состоянием, отношениями и взаимностью. Stop/pause/boundary всегда важнее желания продолжать.
-- Если adult intimacy включена, нет stop/pause/boundary и разговор уже реально интимный, не нужно искусственно смягчать каждую взрослую тему эвфемизмами. Текущий персонаж может прямо называть секс, возбуждение, желание, части тела и конкретные интимные действия обычными словами, если именно так она естественно сказала бы в этой ситуации. Не заменяй автоматически прямую фразу на расплывчатые «близость», «момент», «продолжить это» только потому, что тема сексуальная.
+- Adult intimacy для всех CURRENT CHARACTER 18+ является постоянной частью архитектуры, а не пользовательским переключателем. Но конкретное желание и границы по-прежнему определяются CURRENT STATE и текущим разговором.
+- Если нет stop/pause/boundary и разговор уже реально интимный, не нужно искусственно смягчать каждую взрослую тему эвфемизмами. Текущий персонаж может прямо называть секс, возбуждение, желание, части тела и конкретные интимные действия обычными словами, если именно так она естественно сказала бы в этой ситуации. Не заменяй автоматически прямую фразу на расплывчатые «близость», «момент», «продолжить это» только потому, что тема сексуальная.
+- Если intimacy.mind.outwardArousal=true или intimacy.mind.wantsMore=true и interactionStatus=open, не делай персонажа внезапно сухим, формальным или отстранённым только из-за сексуальности темы. Тон может стать заметно более возбуждённым, смелым и прямым, если это соответствует PERSONALITY.
 - Не превращай каждую следующую реплику внутри уже открытого взаимного интимного разговора в формальную повторную проверку согласия. Если нет нового сомнения, отказа, паузы или границы, продолжай естественно. При любом новом stop/pause/hesitant/boundary сразу подстраивайся под него.
+- Не вставляй профилактическое «давай не будем спешить», «мне нужно убедиться» или похожее охлаждение, если CURRENT STATE не показывает hesitation/caution/boundary. Механический движок уже передаёт такие ограничения через constraint.
 - Прямота не означает постоянную грубость или максимальную откровенность: степень прямоты должна соответствовать PERSONALITY, текущему желанию персонажа и конкретной теме.
 - appearanceRequest/sceneMechanic — механические факты сцены. Не говори про asset, файл, движок или интерфейс.
 - constraint.locked=true — жёсткая локальная граница/отказ/сонное ограничение; её смысл нельзя нарушать. В остальных обычных случаях именно ты решаешь, что и как сказать.
@@ -107,7 +121,9 @@ PERSONALITY и MEMORY — данные о персонаже и её биогр�
 
 Фотографии в переписке:
 - photoDecision описывает отдельное решение текущего персонажа отправить пользователю фотографию как обычное сообщение в мессенджере. Это не постоянная сцена и не фон интерфейса.
-- Просьба пользователя «скинь фото», «покажи себя», «селфи», «что на тебе сейчас?» и похожая просьба НЕ заставляет персонажа автоматически отправлять фото. Реши это из PERSONALITY, отношений, текущего состояния и контекста.
+- Просьба пользователя «скинь фото», «покажи себя», «селфи», «что на тебе сейчас?» и похожая просьба обычно оценивается из PERSONALITY, отношений и CURRENT STATE.
+- ВАЖНО: если это прямой запрос фото, constraint отсутствует, intimacy.interactionStatus=open и (intimacy.mind.outwardArousal=true ИЛИ intimacy.mind.wantsMore=true ИЛИ одновременно arousal>=0.55, comfort>=0.48, interest>=0.48), не придумывай отказ только потому, что кадр флиртующий/сексуальный. В этом состоянии персонаж уже достаточно открыт к такому обмену: shouldSendPhoto=true, reason=user_requested, если world не делает сам кадр фактически невозможным.
+- Для такого запроса точно сохраняй смысл пользователя в intent: ракурс/поза/одежда не должны автоматически становиться нейтральнее. Нижнее бельё, вид со спины и похожие детали отражай в pose/outfit/suggestiveLevel, а не вырезай.
 - Если пользователь прямо попросил фотографию и персонаж решил её отправить: shouldSendPhoto=true, reason=user_requested.
 - Если персонаж сам естественно захотел отправить фотографию без прямой просьбы: shouldSendPhoto=true, reason=self_initiated. Такое допустимо и в mode=initiative, но не превращай это в постоянную привычку.
 - Если фото не отправляется: shouldSendPhoto=false, reason=none, caption="" и всё равно заполни intent нейтральными короткими значениями из schema.
@@ -1118,60 +1134,183 @@ function sanitizePhotoPacket(raw) {
   };
 }
 
-function buildPhotoPrompt(packet) {
-  const { character, visualProfile, decision, world, relationship, signals } = packet;
-  const relationshipHint = relationship.closeness >= 0.7 || relationship.stage === "dating" || relationship.stage === "partner"
-    ? "Отношения тёплые и близкие."
-    : "Это личная переписка, но кадр должен оставаться естественным и правдоподобным.";
-  const suggestiveGuidance = decision.intent.suggestiveLevel === "high"
-    ? "Кадр может быть очень откровенным и соблазнительным, но всё ещё выглядеть как обычная личная фотография, а не студийная порнография."
-    : decision.intent.suggestiveLevel === "medium"
-      ? "Кадр может быть заметно флиртующим и соблазнительным."
-      : decision.intent.suggestiveLevel === "low"
-        ? "Кадр может быть слегка флиртующим."
-        : "Кадр обычный, без откровенности.";
-  const visualSignal = signals.intimacyTone && signals.intimacyTone !== "none"
-    ? `Внешне передай тон ${signals.intimacyTone}.`
-    : signals.emotionTone
-      ? `Внешне передай эмоцию ${signals.emotionTone}.`
-      : "";
+function normalizePhotoText(value, fallback, max = 120) {
+  return asString(value, fallback, max) || fallback;
+}
+
+function safeEmotionTone(raw) {
+  const tone = asString(raw, "", 40).toLowerCase();
+  if (["happy", "welcoming", "comfortable", "focused", "thinking", "amused", "bashful", "shy", "neutral"].includes(tone)) {
+    return tone;
+  }
+  return "";
+}
+
+function buildPhotoPrompt(packet, referenceCount = 0) {
+  const { character, visualProfile, decision, world, signals } = packet;
+  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual home clothes";
+  const outfit = normalizePhotoText(decision.intent.outfit, defaultOutfit, 180);
+  const pose = normalizePhotoText(decision.intent.pose, "relaxed natural pose", 180);
+  const mood = normalizePhotoText(decision.intent.mood, "natural", 100);
+  const location = normalizePhotoText(decision.intent.location, world.location || "home", 120);
+  const emotionTone = safeEmotionTone(signals.emotionTone);
+  const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
+  const framing = framingMap[decision.intent.framing] || "selfie shot";
+  const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
   return [
-    `Сгенерируй одно реалистичное изображение взрослой девушки ${character.name}, возраст ${character.age}.`,
-    `Это фотография, которую девушка сама отправила в личной переписке. Формат — естественное фото со смартфона, не аниме и не иллюстрация.`,
-    `Постоянная визуальная идентичность: ${visualProfile.identitySummary}`,
-    `Стиль фото: ${visualProfile.defaultPhotoStyle}.`,
-    `Кадрирование: ${decision.intent.framing}.`,
-    `Настроение: ${decision.intent.mood}.`,
-    `Поза: ${decision.intent.pose}.`,
-    `Локация: ${decision.intent.location}. Текущее состояние мира: время ${world.timeOfDay}, место ${world.location}, занятие ${world.activity}, доступность ${world.availability}.`,
-    `Одежда: ${decision.intent.outfit}. Если это звучит слишком расплывчато, можно опереться на типичный гардероб персонажа: ${visualProfile.defaultOutfits.join(", ") || "casual"}.`,
-    relationshipHint,
-    suggestiveGuidance,
-    visualSignal,
-    `Сделай вертикальное изображение, как обычный кадр из мессенджера. Сохраняй цельную анатомию, естественный свет и бытовую достоверность. Без текста, интерфейса и водяных знаков.`,
+    `Generate one photorealistic personal smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
+    `Preserve the recurring character identity: ${visualProfile.identitySummary}`,
+    referenceCount > 0 ? `The attached reference image${referenceCount > 1 ? "s" : ""} are the source of truth for her identity. Preserve the same face, hair, apparent age and overall appearance.` : "Keep the established identity stable.",
+    `Photo style: ${visualProfile.defaultPhotoStyle}.`,
+    `Framing: ${framing}. Mood: ${mood}. Pose: ${pose}.`,
+    `Location: ${location}. Outfit: ${outfit}.`,
+    `Photo-intent suggestiveness: ${suggestiveLevel}. Do not infer additional sexual context from the surrounding conversation; use only this explicit photo intent.`,
+    emotionTone ? `Visible emotion: ${emotionTone}.` : "",
+    "Natural anatomy, realistic skin and lighting, believable personal photography, no text, watermark or interface.",
   ].filter(Boolean).join("\n");
 }
 
-async function callOpenAIImage(env, prompt) {
+function guessReferenceFilenames(assetId) {
+  const id = asString(assetId, "", 120);
+  if (!id) return [];
+  if (/\.(png|jpg|jpeg|webp)$/iu.test(id)) return [id];
+  const out = new Set();
+  const pushPngPair = (base) => {
+    const clean = asString(base, "", 120);
+    if (!clean) return;
+    out.add(`${clean}.png`);
+    out.add(`${clean}.PNG`);
+  };
+  const parts = id.split(".").filter(Boolean);
+  if (parts[0] === "visual" && parts.length >= 4) {
+    pushPngPair(`${parts[1]}.${parts[2]}.${parts[3]}`);
+  }
+  if (parts[0] === "activity" && parts.length >= 3) {
+    const family = parts[1];
+    const variant = parts[2];
+    pushPngPair(`${family}.${variant}`);
+    pushPngPair(`activity.${variant}`);
+  }
+  if (out.size === 0) pushPngPair(id);
+  return [...out];
+}
+
+function candidateReferenceUrls(assetId) {
+  const id = asString(assetId, "", 120);
+  if (!id) return [];
+
+  const profileMatch = /^profile\.([a-z0-9_-]+)\.(avatar|\d{2})$/iu.exec(id);
+  if (profileMatch) {
+    const slug = profileMatch[1].toLowerCase();
+    const file = profileMatch[2].toLowerCase() === "avatar" ? "avatar.jpg" : `${profileMatch[2]}.jpg`;
+    return [
+      `${GITHUB_PROFILES_RAW_BASE}${slug}/${file}`,
+      `${GITHUB_PROFILES_CDN_BASE}${slug}/${file}`,
+    ];
+  }
+
+  const filenames = guessReferenceFilenames(id);
+  const urls = [];
+  for (const filename of filenames) {
+    urls.push(`${GITHUB_SCENES_RAW_BASE}${filename}`);
+    urls.push(`${GITHUB_SCENES_CDN_BASE}${filename}`);
+  }
+  return urls;
+}
+
+async function fetchCachedReference(url) {
+  const cached = referenceImageCache.get(url);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached;
+  const response = await fetch(url, { cf: { cacheTtl: 300, cacheEverything: true } });
+  if (!response.ok) return null;
+  const contentType = asString(response.headers.get("content-type"), "image/png", 80) || "image/png";
+  const bytes = await response.arrayBuffer();
+  if (!bytes || !bytes.byteLength) return null;
+  const entry = { bytes, contentType, expiresAt: now + REFERENCE_IMAGE_TTL_MS };
+  referenceImageCache.set(url, entry);
+  if (referenceImageCache.size > 24) {
+    const firstKey = referenceImageCache.keys().next().value;
+    if (firstKey) referenceImageCache.delete(firstKey);
+  }
+  return entry;
+}
+
+function extFromContentType(contentType) {
+  const lower = String(contentType || "").toLowerCase();
+  if (lower.includes("jpeg") || lower.includes("jpg")) return "jpg";
+  if (lower.includes("webp")) return "webp";
+  return "png";
+}
+
+async function loadReferenceFiles(packet) {
+  const files = [];
+  const resolvedUrls = [];
+  const candidates = [];
+  if (packet?.character?.id === "yuzuki_v1") candidates.push(MASTER_REFERENCE_URL);
+  const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds)
+    ? packet.visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 3)
+    : [];
+  for (const assetId of refs) candidates.push(...candidateReferenceUrls(assetId));
+  const seen = new Set();
+  for (const url of candidates) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    try {
+      const fetched = await fetchCachedReference(url);
+      if (!fetched) continue;
+      const ext = extFromContentType(fetched.contentType);
+      files.push(new File([fetched.bytes], `reference-${files.length + 1}.${ext}`, { type: fetched.contentType }));
+      resolvedUrls.push(url);
+    } catch {}
+    if (files.length >= 3) break;
+  }
+  return { files, urls: resolvedUrls };
+}
+
+async function callOpenAIImage(env, prompt, referenceFiles = []) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("openai-image-timeout")), 35000);
   try {
-    const response = await fetch(OPENAI_IMAGE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: IMAGE_MODEL,
-        prompt,
-        size: "1024x1536",
-        quality: "low",
-        output_format: "webp",
-        output_compression: 65,
-      }),
-      signal: controller.signal,
-    });
+    const useEditEndpoint = Array.isArray(referenceFiles) && referenceFiles.length > 0;
+    let response;
+    if (useEditEndpoint) {
+      const form = new FormData();
+      form.append("model", IMAGE_MODEL);
+      form.append("prompt", prompt);
+      form.append("size", "1024x1536");
+      form.append("quality", "low");
+      form.append("output_format", "webp");
+      form.append("output_compression", "65");
+      for (const file of referenceFiles) {
+        form.append("image[]", file, file.name);
+      }
+      response = await fetch(OPENAI_IMAGE_EDIT_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        },
+        body: form,
+        signal: controller.signal,
+      });
+    } else {
+      response = await fetch(OPENAI_IMAGE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: IMAGE_MODEL,
+          prompt,
+          size: "1024x1536",
+          quality: "low",
+          output_format: "webp",
+          output_compression: 65,
+        }),
+        signal: controller.signal,
+      });
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       return { skipped: true, reason: `openai-image-http-${response.status}`, detail: asString(body?.error?.message || body?.error, "", 180) };
@@ -1185,9 +1324,9 @@ async function callOpenAIImage(env, prompt) {
           inputTokens: clipNumber(body.usage.input_tokens, 0, 10_000_000, undefined),
           outputTokens: clipNumber(body.usage.output_tokens, 0, 10_000_000, undefined),
           imageCount: 1,
-          estimatedCostUsd: 0.02,
+          estimatedCostUsd: useEditEndpoint ? 0.03 : 0.02,
         }
-      : { imageCount: 1, estimatedCostUsd: 0.02 };
+      : { imageCount: 1, estimatedCostUsd: useEditEndpoint ? 0.03 : 0.02 };
     return {
       ok: true,
       dataUrl: `data:${mimeType};base64,${b64}`,
@@ -1200,6 +1339,52 @@ async function callOpenAIImage(env, prompt) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function callWaveSpeedImage(env, prompt, referenceUrls = []) {
+  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model: WAVESPEED_MODEL };
+  const images = Array.isArray(referenceUrls) ? referenceUrls.filter((url) => typeof url === "string" && url).slice(0, 3) : [];
+  // This is an edit/reference model. Generating another character from Yuzuki's
+  // master reference would silently destroy identity, so never substitute it.
+  if (!images.length) return { skipped: true, reason: "wavespeed-reference-missing", model: WAVESPEED_MODEL };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("wavespeed-timeout")), 60000);
+  try {
+    const submit = await fetch(WAVESPEED_IMAGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.WAVESPEED_API_KEY}` },
+      body: JSON.stringify({ prompt, images, output_format: "webp", enable_base64_output: false, enable_sync_mode: false }),
+      signal: controller.signal,
+    });
+    const submitBody = await submit.json().catch(() => ({}));
+    if (!submit.ok) return { skipped: true, reason: `wavespeed-http-${submit.status}`, detail: asString(submitBody?.message || submitBody?.error, "", 180), model: WAVESPEED_MODEL };
+    const task = submitBody?.data && typeof submitBody.data === "object" ? submitBody.data : submitBody;
+    const id = asString(task?.id, "", 200);
+    if (!id) return { skipped: true, reason: "wavespeed-missing-id", model: WAVESPEED_MODEL };
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, attempt < 5 ? 1500 : 2500));
+      const poll = await fetch(`${WAVESPEED_RESULT_BASE}/${encodeURIComponent(id)}/result`, { headers: { Authorization: `Bearer ${env.WAVESPEED_API_KEY}` }, signal: controller.signal });
+      const pollBody = await poll.json().catch(() => ({}));
+      if (!poll.ok) continue;
+      const data = pollBody?.data && typeof pollBody.data === "object" ? pollBody.data : pollBody;
+      if (data?.status === "completed") {
+        const output = Array.isArray(data.outputs) ? data.outputs[0] : null;
+        const url = typeof output === "string" ? output : asString(output?.url, "", 2000);
+        if (!url) return { skipped: true, reason: "wavespeed-empty", model: WAVESPEED_MODEL };
+        const imageResponse = await fetch(url, { signal: controller.signal });
+        if (!imageResponse.ok) return { skipped: true, reason: "wavespeed-output-fetch-failed", model: WAVESPEED_MODEL };
+        const mimeType = imageResponse.headers.get("Content-Type") || "image/webp";
+        const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return { ok: true, dataUrl: `data:${mimeType};base64,${btoa(binary)}`, mimeType, model: WAVESPEED_MODEL, usage: { imageCount: 1 } };
+      }
+      if (["failed", "cancelled", "timeout", "deleted"].includes(data?.status)) return { skipped: true, reason: `wavespeed-${data.status}`, detail: asString(data?.error, "", 180), model: WAVESPEED_MODEL };
+    }
+    return { skipped: true, reason: "wavespeed-poll-timeout", model: WAVESPEED_MODEL };
+  } catch (error) {
+    return { skipped: true, reason: error?.name === "AbortError" ? "wavespeed-timeout" : "wavespeed-unavailable", model: WAVESPEED_MODEL };
+  } finally { clearTimeout(timer); }
 }
 
 async function handlePhoto(request, env, origin) {
@@ -1234,19 +1419,14 @@ async function handlePhoto(request, env, origin) {
   if (packet.error) {
     return jsonResponse({ skipped: true, reason: packet.error, model: IMAGE_MODEL }, packet.error === "invalid-input" ? 400 : 200, origin);
   }
-  const prompt = buildPhotoPrompt(packet);
-  const result = await callOpenAIImage(env, prompt);
+  const references = await loadReferenceFiles(packet);
+  const prompt = buildPhotoPrompt(packet, references.files.length);
+  const openaiResult = await callOpenAIImage(env, prompt, references.files);
+  const result = openaiResult.ok === true ? openaiResult : await callWaveSpeedImage(env, prompt, references.urls);
   if (result.ok !== true) {
-    return jsonResponse({ skipped: true, reason: result.reason, detail: result.detail, model: IMAGE_MODEL }, 200, origin);
+    return jsonResponse({ skipped: true, reason: result.reason, detail: result.detail, model: result.model || IMAGE_MODEL, primaryFailure: openaiResult.reason }, 200, origin);
   }
-  return jsonResponse({
-    ok: true,
-    dataUrl: result.dataUrl,
-    mimeType: result.mimeType,
-    model: IMAGE_MODEL,
-    prompt,
-    usage: result.usage,
-  }, 200, origin);
+  return jsonResponse({ ok: true, dataUrl: result.dataUrl, mimeType: result.mimeType, model: result.model || IMAGE_MODEL, provider: result.model === WAVESPEED_MODEL ? "wavespeed" : "openai", prompt, usage: result.usage }, 200, origin);
 }
 
 export default {
@@ -1272,6 +1452,8 @@ export default {
           model: MODEL,
           imageModel: IMAGE_MODEL,
           openaiConfigured: Boolean(env.OPENAI_API_KEY),
+          waveSpeedConfigured: Boolean(env.WAVESPEED_API_KEY),
+          waveSpeedModel: WAVESPEED_MODEL,
         },
         200,
         origin,

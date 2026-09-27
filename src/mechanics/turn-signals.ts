@@ -37,13 +37,13 @@ export function detectAppearanceRequest(value: string): AppearanceRequestInput {
   const directImperative =
     /(?:^|\s)(?:сядь(?:\s+по-другому)?|встань|ляг|ложись|приляг|повернись(?:\s+(?:боком|спиной|ко\s+мне))?|наклонись|улыбнись|посмотри\s+(?:на\s+меня|сюда))(?:\s|$)/u.test(normalized);
   const requestVerb =
-    /(?:смени|сменить|поменяй|поменять|измени|изменить|покажи|показать|сделай|сделать|прими|принять|можешь\s+(?:сменить|поменять|показать|сесть|встать|лечь|прилечь|повернуться|наклониться|улыбнуться)|давай\s+(?:сменим|поменяем|другую))/u.test(normalized);
+    /(?:смени|сменить|поменяй|поменять|измени|изменить|покажи|показать|сделай|сделать|скинь|пришли|отправь|сфоткай|сфотографируй|прими|принять|можешь\s+(?:сменить|поменять|показать|скинуть|прислать|отправить|сфоткаться|сесть|встать|лечь|прилечь|повернуться|наклониться|улыбнуться)|давай\s+(?:сменим|поменяем|другую))/u.test(normalized);
   const visualTarget =
     /(?:поз(?:у|ы|е|ой)?|ракурс|кадр|фот(?:о|ку)?|вид|положение|стойк(?:у|е)?|по-другому|иначе|друг(?:ую|ой|ая)|сядь|встань|ляг|лечь|ложись|приляг|прилечь|повернись|наклонись|улыбнись)/u.test(normalized);
 
   if (!(directImperative || (requestVerb && visualTarget))) return empty;
 
-  const suggestive = /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн)/u.test(normalized);
+  const suggestive = /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его)\s+бель[её]|бель[её]|лифчик|бюстгальтер|трусик|стринг|обнаж|гол(?:ая|ой|ым)|нюд)/u.test(normalized);
   let vibe: AppearanceRequestInput["vibe"] = "different";
   if (suggestive) vibe = "seductive";
   else if (/(?:зл|сердит|ярост|раздраж|строг)/u.test(normalized)) vibe = "angry";
@@ -76,7 +76,7 @@ export function detectAppearanceRequest(value: string): AppearanceRequestInput {
 
 export function detectIntimacySignal(value: string): IntimacySignal {
   const normalized = normalize(value);
-  const hasIntimateContext = /(?:интим|18\+|близост|ближе|поцел|обним|прижм|ласк|возбуж|желан|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|соблазн|сексуаль|эрот|страст|секс|хими[яи])/u.test(normalized);
+  const hasIntimateContext = /(?:интим|18\+|близост|ближе|поцел|обним|прижм|ласк|возбуж|желан|хочу\s+тебя|тянет\s+к\s+тебе|между\s+нами|нежн|флирт|дразн|соблазн|сексуаль|эрот|страст|секс|хими[яи]|нижн(?:ее|ем|его)\s+бель[её]|бель[её]|лифчик|бюстгальтер|трусик|стринг|обнаж|гол(?:ая|ой|ым)|нюд)/u.test(normalized);
   const conversationalCorrection = /(?:^|\s)(?:стоп|подожди|погоди)[,.:;!?\s]+(?:я\s+)?(?:про\s+другое|не\s+про\s+это|не\s+это|в\s+смысле|я\s+имею\s+в\s+виду|говорю\s+про|я\s+говорю\s+про)/u.test(normalized);
   const absoluteStop = !conversationalCorrection && /(?:^|\s)(?:стоп|хватит|прекрати|остановись)(?:\s|$|[,.!?])/u.test(normalized);
   const contextualStop = hasIntimateContext && /(?:^|\s)(?:не\s+хочу|не\s+надо|давай\s+не\s+будем|не\s+трогай|не\s+продолжай|не\s+хочу\s+дальше|мне\s+это\s+неприятно|мне\s+некомфортно)(?:\s|$|[,.!?])/u.test(normalized);
@@ -97,13 +97,28 @@ export function detectIntimacySignal(value: string): IntimacySignal {
   const aftercare = /(?:после\s+(?:этого|всего).*(?:побудь|обними|не\s+уходи|рядом|поговори)|(?:все|всё)\s+хорошо\s+между\s+нами|ты\s+в\s+порядке\s+после|как\s+ты\s+после|побудь\s+со\s+мной\s+после|не\s+уходи\s+сразу)/u.test(normalized);
   if (aftercare) return { kind: "aftercare", strength: 0.78, explicit: true, intimacyContext: true };
 
-  const directConsent = /(?:хочу\s+тебя|я\s+тебя\s+хочу|да\s*[,.-]?\s*(?:я\s+тебя\s+хочу|хочу\s+тебя)|хочу\s+быть\s+с\s+тобой\s+так\s+близко)/u.test(normalized);
+  const directConsent = /(?:хочу\s+тебя(?!\s+(?:подразн|увидеть|попросить|спросить|позвать|обнять|поцеловать))|я\s+тебя\s+хочу(?!\s+(?:подразн|увидеть|попросить|спросить|позвать|обнять|поцеловать))|да\s*[,.-]?\s*(?:я\s+тебя\s+хочу|хочу\s+тебя)(?!\s+(?:подразн|увидеть|попросить|спросить|позвать|обнять|поцеловать))|хочу\s+быть\s+с\s+тобой\s+так\s+близко)/u.test(normalized);
   const contextualConsent = hasIntimateContext && /(?:мне\s+это\s+нравится|да\s*[,.-]?\s*хочу|хочу\s+продолжить|хочу\s+дальше|мне\s+хочется\s+еще|мне\s+хочется\s+ещё|мне\s+нравится\s+куда\s+это\s+идет|мне\s+нравится\s+куда\s+это\s+идёт)/u.test(normalized);
   if (directConsent || contextualConsent)
     return { kind: "consent", strength: directConsent ? 0.94 : 0.88, explicit: true, intimacyContext: true };
 
   const approach = /(?:хочу\s+быть\s+ближе|давай\s+ближе|можешь\s+поцеловать|поцелуй\s+меня|обними\s+меня|хочу\s+быть\s+рядом|иди\s+сюда|сядь\s+ближе|подойди\s+ближе|можно\s+к\s+тебе\s+ближе|давай\s+поближе|прижмись\s+ко\s+мне|можно\s+я\s+тебя\s+обниму|можно\s+я\s+тебя\s+поцелую)/u.test(normalized);
   if (approach) return { kind: "approach", strength: 0.74, explicit: true, intimacyContext: true };
+
+  const intimatePhotoRequest =
+    /(?:скинь|пришли|отправь|покажи|сделай|сфоткай|сфотографируй|можешь\s+(?:скинуть|прислать|отправить|показать|сфоткаться)).{0,48}(?:фот(?:о|ку)?|селфи).{0,80}(?:нижн(?:ее|ем|его)\s+бель[её]|бель[её]|лифчик|бюстгальтер|трусик|стринг|обнаж|гол(?:ая|ой|ым)|соблазн|сексуаль|эрот|пошл)/u.test(normalized);
+  if (intimatePhotoRequest)
+    return { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true };
+
+  const arousalStatement =
+    /(?:ты\s+меня\s+(?:реально\s+|прям\s+|сильно\s+)?возбуждаешь|я\s+(?:уже\s+)?возбудил(?:ся|ась)|от\s+тебя\s+(?:реально\s+)?возбуждаюсь|меня\s+от\s+тебя\s+заводит|ты\s+меня\s+заводишь)/u.test(normalized);
+  if (arousalStatement)
+    return { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true };
+
+  const explicitAdultTurn = hasIntimateContext &&
+    /(?:(?:давай|хочу|продолжай|еще|ещ[её]|сильнее|ближе).{0,48}(?:секс|интим|возбуж|страст|соблазн|эрот)|(?:секс|интим|возбуж|страст|соблазн|эрот).{0,48}(?:хочу|давай|продолжай|нравится))/u.test(normalized);
+  if (explicitAdultTurn)
+    return { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true };
 
   const suggestiveCompliment = /(?:ты\s+(?:(?:очень|прям|безумно|чертовски|реально)\s+)?(?:сексуальная|горячая|соблазнительная|желанная)|ты\s+(?:сводишь|свела)\s+меня\s+с\s+ума|не\s+могу\s+отвести\s+(?:от\s+тебя\s+)?глаз|от\s+тебя\s+(?:реально\s+)?трудно\s+оторваться|у\s+тебя\s+(?:(?:очень|прям)\s+)?(?:шикарная|офигенная|красивая)\s+(?:фигура|талия|ноги|губы)|мне\s+(?:очень|безумно)\s+нравится\s+(?:твоя\s+)?(?:фигура|талия|ноги|губы|взгляд))/u.test(normalized);
   if (suggestiveCompliment)

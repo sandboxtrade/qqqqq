@@ -911,12 +911,9 @@ export function decodeIntimacyState(raw: unknown): IntimacyState {
   );
   return {
     revision: safeInteger(data.revision, entity, "revision", legacy ? 0 : undefined),
-    adultModeEnabled: booleanValue(
-      data.adultModeEnabled,
-      entity,
-      "adultModeEnabled",
-      legacy ? fallback.adultModeEnabled : undefined,
-    ),
+    // v0.20.7: adult capability is always enabled for all adult characters.
+    // Keep the stored field for schema compatibility, but never restore a disabled runtime mode.
+    adultModeEnabled: true,
     phase: enumValue(
       data.phase,
       intimacyPhases,

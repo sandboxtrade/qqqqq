@@ -175,3 +175,9 @@ No remote model is required. Gemini/OpenRouter/OpenAI/Hugging Face APIs are abse
 `bounded open threads + recent world events + relationship + elapsed absence + time-of-day + current emotion -> local initiative selection -> Local Dialogue Renderer -> character_action event -> existing Firebase/live-sync path`
 
 Autonomous decision logic remains in the Initiative/Character Brain layers; the renderer only phrases the selected initiative.
+
+## v0.20.7 character settings and adult capability
+
+Character-specific Personality, Memory, export/reset controls and diagnostics are reached from the settings gear on that character's profile. The bottom app navigation is intentionally limited to Chats and People.
+
+All registered characters are adults. Adult capability is part of the character runtime by default and cannot be disabled from UI. The persisted `adultModeEnabled` field remains only for schema compatibility and is normalized to enabled. This does not bypass consent or boundaries: stop, pause, hesitation and explicit boundary constraints remain mechanically enforced.

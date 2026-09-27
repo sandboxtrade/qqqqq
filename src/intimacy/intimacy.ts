@@ -158,7 +158,7 @@ export const defaultIntimacyCoreProfile: IntimacyCoreProfile = {
 export function createInitialIntimacyState(now = Date.now()): IntimacyState {
   return {
     revision: 0,
-    adultModeEnabled: false,
+    adultModeEnabled: true,
     phase: "normal",
     interactionStatus: "inactive",
     comfort: 0,
@@ -314,6 +314,9 @@ export function currentIntimacyState(
   now = Date.now(),
 ): IntimacyState {
   const base = state ? { ...state } : createInitialIntimacyState(now);
+  // v0.20.8: adult capability is a permanent part of the adult-character architecture.
+  // There is no user-facing on/off mode anymore; consent/boundaries still gate every interaction.
+  base.adultModeEnabled = true;
   const elapsedMinutes = Math.max(0, (now - base.updatedAt) / 60_000);
   if (elapsedMinutes <= 0) return base;
   const arousalDecay = Math.exp(-elapsedMinutes / 28);
@@ -322,7 +325,7 @@ export function currentIntimacyState(
   base.initiativeDrive = clampIntimacy(base.initiativeDrive * driveDecay);
   if (
     base.lastInteractionAt &&
-    now - base.lastInteractionAt > 45 * 60_000 &&
+    now - base.lastInteractionAt > 90 * 60_000 &&
     !["paused", "normal"].includes(base.phase)
   ) {
     base.phase = "normal";
@@ -497,10 +500,10 @@ export function buildIntimacyMind(input: {
     (state.comfort >= 0.48 && state.interest >= 0.5);
   const inwardArousal = active && state.arousal >= 0.4 && bonded;
   const outwardArousal = active && bonded &&
-    state.arousal >= 0.62 && state.comfort >= 0.48 && state.interest >= 0.5 &&
-    caution < 0.5 && !["paused", "stopped", "hesitant"].includes(state.interactionStatus);
-  const wantsCloseness = active && tenderness >= 0.52 && caution < 0.72;
-  const wantsMore = active && desire >= 0.6 && confidence >= 0.56 && caution < 0.46;
+    state.arousal >= 0.55 && state.comfort >= 0.45 && state.interest >= 0.46 &&
+    caution < 0.55 && !["paused", "stopped", "hesitant"].includes(state.interactionStatus);
+  const wantsCloseness = active && tenderness >= 0.5 && caution < 0.72;
+  const wantsMore = active && desire >= 0.55 && confidence >= 0.52 && caution < 0.5;
   const activePreferenceKeys = (preferences?.items ?? [])
     .filter((item) => item.validUntil === undefined && item.stance === "like" && item.confidence >= 0.4)
     .sort((a, b) => b.confidence * b.strength - a.confidence * a.strength)
@@ -513,11 +516,11 @@ export function buildIntimacyMind(input: {
       : state.phase === "aftercare"
         ? "Tenderness and emotional closeness are more important than escalation right now."
         : outwardArousal
-          ? "The attraction is strong enough that it can show in her wording and teasing. She can admit being affected, but it is still not automatic consent to any next step."
+          ? "The attraction is strong enough to show plainly in her wording and teasing. She does not need to become dry or repeatedly re-check the same mutual moment; a new stop, pause or hesitation still takes priority immediately."
           : inwardArousal
-            ? "She is genuinely aroused internally, though she may show it only as being flustered, bolder, or more teasing depending on confidence."
+            ? "She is genuinely aroused internally. If confidence and the conversation support it, she can sound bolder, more teasing and more direct instead of hiding that state behind vague wording."
             : wantsMore
-              ? "She wants more closeness and feels safe enough to show that desire without treating it as automatic consent."
+              ? "She wants more closeness and feels safe enough to show that desire naturally; only a new boundary signal should force the interaction to cool down."
               : wantsCloseness
                 ? "She wants closeness, but prefers to let the interaction build rather than force a next step."
                 : "She notices the intimate context but is not trying to escalate it.";
@@ -530,7 +533,7 @@ export function buildIntimacyMind(input: {
 function privateEnough(world: import("../world/world").WorldState) {
   return world.isAwake &&
     ["free", "resting"].includes(world.availability) &&
-    ["bedroom", "living_room"].includes(world.currentLocation);
+    ["bedroom", "living_room", "kitchen"].includes(world.currentLocation);
 }
 
 function neutralScene(phase: "intimate" | "high_intimacy", now: number): IntimacySceneState {
@@ -689,18 +692,36 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     return finish();
   }
 
+  const bondHeat = clampIntimacy(
+    input.relationship.closeness * 0.3 +
+    input.relationship.trust * 0.24 +
+    input.relationship.attachment * 0.18 +
+    input.relationship.security * 0.1 +
+    input.emotion.affection * 0.09 +
+    input.emotion.romanticInterest * 0.09,
+  );
+  const mutualOpen =
+    isPrivate &&
+    effectiveComfort >= 0.38 &&
+    effectiveInterest >= 0.4 &&
+    input.relationship.trust >= 0.34 &&
+    input.relationship.unresolvedTension < 0.38 &&
+    input.emotion.irritation < 0.44;
+  const stronglyMutual = mutualOpen &&
+    (input.relationship.closeness >= 0.5 || state.comfort >= 0.55) &&
+    (input.relationship.trust >= 0.5 || state.interest >= 0.58);
+
   if (signal.kind === "affection" || signal.kind === "flirt") {
-    state.phase = nextIntimacyPhase(state.phase, "close");
+    const heatedFlirt = signal.kind === "flirt" && signal.intimacyContext === true && signal.strength >= 0.82 && mutualOpen;
+    let ceiling: IntimacyPhase = "close";
+    if (heatedFlirt && intimacyPhaseRank(state.phase) >= intimacyPhaseRank("close")) {
+      ceiling = stronglyMutual && state.arousal >= 0.66 && state.comfort >= 0.54 && state.interest >= 0.58
+        ? "high_intimacy"
+        : "intimate";
+    }
+    state.phase = nextIntimacyPhase(state.phase, ceiling);
     state.interactionStatus = "open";
 
-    const bondHeat = clampIntimacy(
-      input.relationship.closeness * 0.3 +
-      input.relationship.trust * 0.24 +
-      input.relationship.attachment * 0.18 +
-      input.relationship.security * 0.1 +
-      input.emotion.affection * 0.09 +
-      input.emotion.romanticInterest * 0.09,
-    );
     const mutuality = clampIntimacy(state.comfort * 0.5 + state.interest * 0.34 + bondHeat * 0.16);
     const closeEnoughForArousal =
       isPrivate &&
@@ -755,7 +776,14 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
           : effectiveComfort >= 0.32 && effectiveInterest >= 0.34
             ? "intimate"
             : "close";
-    state.phase = nextIntimacyPhase(state.phase, ceiling);
+    const phaseSteps = signal.kind === "consent" && signal.strength >= 0.86 && mutualOpen
+      ? 2
+      : 1;
+    for (let step = 0; step < phaseSteps; step += 1) {
+      const next = nextIntimacyPhase(state.phase, ceiling);
+      if (next === state.phase) break;
+      state.phase = next;
+    }
     state.interactionStatus = "open";
     const mutuality = clampIntimacy(state.comfort * 0.58 + state.interest * 0.42);
     state.comfort = clampIntimacy(state.comfort + (signal.kind === "consent" ? 0.035 : 0.05) * strength);

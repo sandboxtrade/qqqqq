@@ -16,8 +16,10 @@ import {
   CharacterProfileScreen,
   InboxScreen,
   PeopleScreen,
+  ProfileAvatar,
 } from "./ui/SocialScreens";
 import "./styles.css";
+import "./social-v2.css";
 
 type SocialView = "inbox" | "people" | "chat" | "profile" | "settings";
 
@@ -31,7 +33,6 @@ export default function App() {
     initializing,
     busy,
     messages,
-    runtime,
     lastTrace,
     authStatus,
     user,
@@ -42,8 +43,6 @@ export default function App() {
     signOut,
     clearConversationAndMemory,
     resettingData,
-    setIntimacyAdultMode,
-    updatingIntimacyMode,
     send,
     clearError,
     retry,
@@ -70,6 +69,7 @@ export default function App() {
 
   const [view, setView] = useState<SocialView>("inbox");
   const [profileCharacterId, setProfileCharacterId] = useState(activeCharacterId);
+  const [profileReturnView, setProfileReturnView] = useState<SocialView>("people");
   const activeProfile = useMemo(
     () => getCharacterProfile(activeCharacterId),
     [activeCharacterId],
@@ -132,7 +132,14 @@ export default function App() {
 
   const openProfile = (characterId: string) => {
     setProfileCharacterId(characterId);
+    setProfileReturnView(view === "profile" ? "people" : view);
     setView("profile");
+  };
+
+  const openCharacterSettings = async (characterId: string) => {
+    setProfileCharacterId(characterId);
+    if (characterId !== activeCharacterId) await selectCharacter(characterId);
+    setView("settings");
   };
 
   const showBottomNav = view === "inbox" || view === "people";
@@ -143,9 +150,7 @@ export default function App() {
         <header className="messenger-header">
           <button className="messenger-back" type="button" onClick={() => setView("inbox")}>‹</button>
           <button className="messenger-person" type="button" onClick={() => openProfile(activeCharacterId)}>
-            <span className={`mini-social-avatar tone-${activeProfile.avatarTone}`}>
-              {activeProfile.core.name.slice(0, 1)}
-            </span>
+            <ProfileAvatar profile={activeProfile} size="mini" />
             <span>
               <strong>{activeProfile.core.name}</strong>
               <small>{initializing ? "подключение…" : busy ? "печатает…" : "в сети"}</small>
@@ -194,8 +199,9 @@ export default function App() {
         {view === "profile" && (
           <CharacterProfileScreen
             profile={profileCharacter}
-            onBack={() => setView("people")}
+            onBack={() => setView(profileReturnView)}
             onMessage={() => void openChat(profileCharacter.id)}
+            onSettings={() => void openCharacterSettings(profileCharacter.id)}
           />
         )}
 
@@ -222,7 +228,7 @@ export default function App() {
           <SettingsScreen
             characterName={activeProfile.core.name}
             firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
-            onClose={() => setView("inbox")}
+            onClose={() => setView("profile")}
             appCheckState={appCheckState}
             user={user}
             trace={lastTrace}
@@ -231,10 +237,6 @@ export default function App() {
             onClearConversationAndMemory={clearConversationAndMemory}
             clearingData={resettingData}
             resetDisabled={!ready || resettingData}
-            intimacyEnabled={runtime?.intimacy?.adultModeEnabled === true}
-            intimacyPhase={runtime?.intimacy?.phase ?? "normal"}
-            intimacyUpdating={updatingIntimacyMode}
-            onSetIntimacyEnabled={setIntimacyAdultMode}
             personality={editablePersonality}
             memory={editableMemory}
             contextUpdatedAt={editableContextUpdatedAt}
@@ -257,10 +259,6 @@ export default function App() {
           <button className={view === "people" ? "active" : ""} type="button" onClick={() => setView("people")}>
             <Icon name="together" size={20} />
             <span>Люди</span>
-          </button>
-          <button type="button" onClick={() => setView("settings")}>
-            <Icon name="settings" size={20} />
-            <span>Настройки</span>
           </button>
         </nav>
       )}

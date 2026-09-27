@@ -51,12 +51,10 @@ import {
 
 import {
   parseActivitySceneId,
-  parseSequenceSceneId,
   resolveVisualEmotionState,
   selectAmbientOrEmotionAppearance,
   selectAppearance,
   selectReadyToChatAppearance,
-  selectSequenceAppearance,
   type AppearanceState,
 } from "../avatar/avatar-model";
 import { resolveAppearanceRequest } from "../avatar/appearance-request";
@@ -503,36 +501,6 @@ export function applyBoundedCloudReaction(
   };
 }
 
-const SX_TURN_PATTERN = /(поцел|целу|обними|раздень|возьми|ласкай|трогай|горяч|возбуд|секс|sex|эрот|интим|пошл|хочу тебя|давай продолжим|продолжай|кончи|конч)/iu;
-
-function shouldTriggerSequence(
-  signal: IntimacySignal,
-  text: string,
-  intimacy?: IntimacyState,
-) {
-  if (!intimacy?.adultModeEnabled) return false;
-  const arousal = intimacy.arousal ?? 0;
-  const highPhase = intimacy.phase === "intimate" || intimacy.phase === "high_intimacy";
-  if (arousal < 0.72 && !highPhase) return false;
-  if (["stop", "pause", "hesitant", "aftercare"].includes(signal.kind)) return false;
-  if (["flirt", "approach", "consent", "resume"].includes(signal.kind)) return true;
-  return signal.intimacyContext === true && SX_TURN_PATTERN.test(text);
-}
-
-function shouldTriggerReplySequence(
-  intimacy: IntimacyState | undefined,
-  intimacyTone: string | undefined,
-  hardConstraint?: string,
-) {
-  if (!intimacy?.adultModeEnabled) return false;
-  if (["intimacy_stop", "intimacy_pause"].includes(hardConstraint ?? "")) return false;
-  if (["paused", "stopped", "hesitant"].includes(intimacy.interactionStatus)) return false;
-  if (!["intimate", "high_intimacy"].includes(intimacy.phase)) return false;
-  if (intimacy.arousal < 0.62) return false;
-  return intimacyTone === "high_arousal" ||
-    (intimacyTone === "aroused" && intimacy.phase === "high_intimacy" && intimacy.arousal >= 0.78);
-}
-
 const READY_TRANSITION_ACTIVITIES = new Set([
   "ready_to_chat",
   "putting_phone_away",
@@ -562,32 +530,11 @@ export function shouldShowReadyToChat(state: RuntimeState, now: number) {
   return true;
 }
 
-export function shouldHoldSequenceAppearance(state: RuntimeState, now: number) {
-  const sequence = parseSequenceSceneId(state.appearance?.assetId);
-  if (!sequence) return false;
-  const intimacy = state.intimacy;
-  if (!intimacy?.adultModeEnabled) return false;
-  if (["paused", "stopped"].includes(intimacy.interactionStatus)) return false;
-  const selectedAt = state.appearance?.selectedAt ?? 0;
-  const age = Math.max(0, now - selectedAt);
-  const lastIntimateInteraction = intimacy.lastInteractionAt ?? state.world.lastUserInteractionAt;
-  const idleFor = Math.max(0, now - lastIntimateInteraction);
-  const activeHeat =
-    intimacy.arousal >= 0.72 ||
-    intimacy.phase === "intimate" ||
-    intimacy.phase === "high_intimacy";
-  if (sequence.kind === "sxfin") {
-    return age <= 120_000 && idleFor <= 180_000 && (activeHeat || intimacy.phase === "aftercare");
-  }
-  return activeHeat && age <= 10 * 60_000 && idleFor <= 5 * 60_000;
-}
-
 function normalizeAmbientAppearance(
   state: RuntimeState,
   history: ConversationLine[],
   now = runtimeNow(state),
 ): RuntimeState {
-  if (shouldHoldSequenceAppearance(state, now)) return state;
   const sinceLastInteraction = Math.max(0, now - state.world.lastUserInteractionAt);
   if (state.world.currentActivity === "chatting" && sinceLastInteraction < 90_000 && state.appearance?.assetId)
     return state;
@@ -762,20 +709,15 @@ export async function setIntimacyAdultMode(
   const stored = await repository.loadIntimacyState();
   checkSignal(signal);
   const base = currentIntimacyState(stored ?? current.intimacy ?? createInitialIntimacyState(now), now);
-  if (base.adultModeEnabled === enabled) return { ...current, intimacy: base };
-  const next: IntimacyState = enabled
-    ? { ...base, adultModeEnabled: true, phase: "normal", interactionStatus: "inactive", updatedAt: now }
-    : {
-        ...base,
-        adultModeEnabled: false,
-        phase: "normal",
-        interactionStatus: "inactive",
-        arousal: 0,
-        initiativeDrive: 0,
-        activeScene: null,
-        cooldownUntil: undefined,
-        updatedAt: now,
-      };
+  // Compatibility API only: v0.20.7 no longer permits disabling adult capability.
+  // Keeping the function avoids breaking older callers while making false a no-op.
+  void enabled;
+  if (stored?.adultModeEnabled === true) return { ...current, intimacy: base };
+  const next: IntimacyState = {
+    ...base,
+    adultModeEnabled: true,
+    updatedAt: now,
+  };
   const persisted = await repository.commitIntimacyState(next, base.revision);
   checkSignal(signal);
   return { ...current, intimacy: persisted };
@@ -1093,16 +1035,13 @@ export async function handleUserMessage(
     input.id,
   );
   const recentAppearanceIds = recentCharacterAppearanceIds(stableHistory);
-  const sequenceAppearance = shouldTriggerSequence(intimacySignal, input.text, intimacy.state)
-    ? selectSequenceAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
-    : null;
   // An explicit visual request is higher priority than the automatic one-turn
   // "ready_to_chat" bridge. Previously that bridge silently swallowed pose
   // requests on the first message after an ambient activity.
-  const readyAppearance = !sequenceAppearance && !appearanceResolution.requested && shouldShowReadyToChat(visualRuntime, now)
+  const readyAppearance = !appearanceResolution.requested && shouldShowReadyToChat(visualRuntime, now)
     ? selectReadyToChatAppearance(visualRuntime, now, { recentAssetIds: recentAppearanceIds, seed: input.id })
     : null;
-  let appearance = sequenceAppearance?.appearance ?? readyAppearance ?? selectAppearance(
+  let appearance = readyAppearance ?? selectAppearance(
     visualRuntime,
     appearanceResolution.visualEmotion,
     now,
@@ -1113,20 +1052,9 @@ export async function handleUserMessage(
         appearanceResolution.forceVariantChange || appearanceRequest.wantsDifferentVariant,
     },
   );
-  const sceneMechanic = sequenceAppearance
-    ? {
-        mode: sequenceAppearance.kind === "sxfin" ? "sx_finish" : "sx_sequence",
-        family: sequenceAppearance.kind,
-        step: sequenceAppearance.step,
-        maxStep: sequenceAppearance.maxStep,
-        heat: sequenceAppearance.heat,
-      }
-    : readyAppearance
-      ? {
-          mode: "ready_to_chat",
-          family: parseActivitySceneId(readyAppearance.assetId)?.activity ?? "ready_to_chat",
-        }
-      : undefined;
+  const sceneMechanic = readyAppearance
+    ? { mode: "ready_to_chat", family: parseActivitySceneId(readyAppearance.assetId)?.activity ?? "ready_to_chat" }
+    : undefined;
 
   let cloudLanguage: CloudLanguageResult = {
     attempted: false,
@@ -1249,7 +1177,7 @@ export async function handleUserMessage(
   const intimacyChangedByCloud = reactedIntimacyState !== intimacy.state;
   romance = syncRomanceState(romance, emotion, relationship, reactedIntimacyState, intimacy.action, intimacySignal, now);
 
-  if (!sequenceAppearance && !appearanceResolution.requested) {
+  if (!appearanceResolution.requested) {
     const reactedVisualRuntime: RuntimeState = {
       ...visualRuntime,
       emotion,
@@ -1258,43 +1186,12 @@ export async function handleUserMessage(
       intimacy: reactedIntimacyState,
     };
     const cloudIntimacyTone = cloudLanguage.signals?.intimacyTone;
-    const replySequence = shouldTriggerReplySequence(
-      reactedIntimacyState,
-      cloudIntimacyTone,
-      constraintKind,
-    )
-      ? selectSequenceAppearance(reactedVisualRuntime, now, {
-          recentAssetIds: recentAppearanceIds,
-          seed: `${input.id}:reply-sequence`,
-        })
-      : null;
+    const reactedVisualEmotion = resolveVisualEmotionState(reactedVisualRuntime, {
+      emotionTone: cloudLanguage.signals?.emotionTone, userTone: cloudLanguage.signals?.userTone, relationshipEvent: cloudLanguage.signals?.relationshipEvent, intimacyTone: cloudIntimacyTone, intimacySignalKind: intimacySignal.kind, eventIntensity: intimacySignal.strength, hardConstraintKind: constraintKind,
+    });
+    const cloudVisualShouldOverrideReady = cloudIntimacyTone === "flirty" || cloudIntimacyTone === "aroused" || cloudIntimacyTone === "high_arousal" || ![undefined, "neutral"].includes(cloudLanguage.signals?.emotionTone);
+    if (!readyAppearance || cloudVisualShouldOverrideReady) appearance = selectAppearance(reactedVisualRuntime, reactedVisualEmotion, now, { recentAssetIds: recentAppearanceIds, seed: input.id + ":reaction" });
 
-    if (replySequence) {
-      appearance = replySequence.appearance;
-    } else {
-      const reactedVisualEmotion = resolveVisualEmotionState(reactedVisualRuntime, {
-        emotionTone: cloudLanguage.signals?.emotionTone,
-        userTone: cloudLanguage.signals?.userTone,
-        relationshipEvent: cloudLanguage.signals?.relationshipEvent,
-        intimacyTone: cloudIntimacyTone,
-        intimacySignalKind: intimacySignal.kind,
-        eventIntensity: intimacySignal.strength,
-        hardConstraintKind: constraintKind,
-      });
-      const cloudVisualShouldOverrideReady =
-        cloudIntimacyTone === "flirty" ||
-        cloudIntimacyTone === "aroused" ||
-        cloudIntimacyTone === "high_arousal" ||
-        ![undefined, "neutral"].includes(cloudLanguage.signals?.emotionTone);
-      if (!readyAppearance || cloudVisualShouldOverrideReady) {
-        appearance = selectAppearance(
-          reactedVisualRuntime,
-          reactedVisualEmotion,
-          now,
-          { recentAssetIds: recentAppearanceIds, seed: `${input.id}:reaction` },
-        );
-      }
-    }
   }
 
   const reply = replyParts.join("\n");

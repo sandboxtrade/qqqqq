@@ -1288,48 +1288,6 @@ body { overscroll-behavior: none; }
 .settings-export-grid button:active { background: rgba(255,255,255,.065); }
 .settings-export-grid button:disabled { opacity: .42; }
 
-.settings-mode-card {
-  display: grid;
-  gap: 13px;
-  padding: 14px;
-  overflow: visible;
-}
-.settings-mode-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.settings-mode-row > div {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-.settings-mode-row strong {
-  color: #e9e2ed;
-  font-size: 13px;
-}
-.settings-mode-row > div > span {
-  color: #877e8e;
-  font-size: 10px;
-  line-height: 1.45;
-}
-.settings-state-pill {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 999px;
-  color: #807888;
-  background: rgba(255,255,255,.025);
-  font-size: 9px;
-  white-space: nowrap;
-}
-.settings-state-pill.active {
-  border-color: rgba(122,224,164,.13);
-  color: #9fd9b5;
-  background: rgba(84,174,117,.07);
-}
-.settings-action-button,
 .settings-danger-button,
 .settings-confirmation button,
 .settings-signout {
@@ -1340,8 +1298,6 @@ body { overscroll-behavior: none; }
   background: rgba(255,255,255,.035);
   font-size: 11px;
 }
-.settings-action-button { width: 100%; }
-.settings-action-button:disabled,
 .settings-danger-button:disabled,
 .settings-confirmation button:disabled,
 .settings-signout:disabled { opacity: .42; }
