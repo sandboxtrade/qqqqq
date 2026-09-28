@@ -1436,11 +1436,21 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const framing = framingMap[decision.intent.framing] || "selfie shot";
   const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
   const casual = isCasualPhotoIntent(packet);
+
+  let compositionInstruction = "";
+  if (!casual) {
+    if (suggestiveLevel === "low") {
+      compositionInstruction = "Make the photo visually appealing and flattering rather than technical: a pleasing angle, attractive composition, natural but charming body language, and a face/expression that feels inviting and photogenic.";
+    } else if (suggestiveLevel === "medium" || suggestiveLevel === "high") {
+      compositionInstruction = "Make this an intentionally attractive intimate personal photo, not a technical reference shot. Use a flattering sensual angle, visually pleasing composition, appealing body language, and an expression that suits the character. The image should feel sexy, polished and enjoyable to look at while still believable as a personal smartphone photo. If the character guidance implies shyness, blend the sensuality with bashfulness or light blush; if it implies confidence, let the gaze and posture feel more direct and self-assured.";
+    }
+  }
+
   return [
     `Generate ONE new photorealistic smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
     `Identity description: ${visualProfile.identitySummary}`,
     referenceCount > 0
-      ? "The supplied reference images are strict identity references. One of them may be a 3x2 multi-view identity sheet. Preserve the SAME person across face shape, eye shape and spacing, nose, lips, jawline, skin tone, hairline, hair color/length/texture, apparent age, body build and proportions. Do not average her into a generic model and do not copy the reference-sheet layout into the result."
+      ? "The supplied reference image may be a 3x2 multi-view identity sheet. Treat it as a strict identity reference and preserve the SAME person across face shape, eye shape and spacing, nose, lips, jawline, skin tone, hairline, hair color/length/texture, apparent age, body build and proportions. Do not average her into a generic model and do not copy the reference-sheet layout into the result."
       : "Preserve the established identity exactly; do not replace her with a generic similar-looking person.",
     `Photo style: ${visualProfile.defaultPhotoStyle}.`,
     visualProfile.expressionGuidance ? `Character-specific expression/body language: ${visualProfile.expressionGuidance}` : "",
@@ -1448,7 +1458,8 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
     `Location: ${location}. Outfit: ${outfit}.`,
     casual
       ? "This is an ordinary non-explicit personal photo. Keep it natural and realistic."
-      : `Structured photo-intent suggestiveness: ${suggestiveLevel}. Follow only the requested pose/outfit details and do not invent extra sexual content.`,
+      : `Structured photo-intent suggestiveness: ${suggestiveLevel}. Follow only the requested pose/outfit details and do not invent unrelated extra sexual content.`,
+    compositionInstruction,
     emotionTone ? `Visible emotion: ${emotionTone}.` : "",
     "Final output must be a single realistic photo, not a collage, reference sheet, split screen or contact sheet. Natural anatomy, realistic skin texture, believable lighting, no text, watermark or interface."
   ].filter(Boolean).join("\n");
@@ -1593,13 +1604,18 @@ async function loadReferenceBundle(packet) {
     openaiFiles.push(new File([avatarResolved.bytes], `avatar-reference.${ext}`, { type: avatarResolved.contentType }));
   }
 
-  // For WaveSpeed place the multi-view identity sheet first, then the regular
-  // avatar. If the sheet is absent, avatar-only behavior stays backward compatible.
+  // For WaveSpeed prefer only the multi-view identity sheet.
+  // Fall back to avatar-only when the sheet is missing.
   if (slug) {
     const identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
-    if (identityResolved) addWaveUrl("identity-sheet", identityResolved);
+    if (identityResolved) {
+      addWaveUrl("identity-sheet", identityResolved);
+    } else if (avatarResolved) {
+      addWaveUrl("avatar", avatarResolved);
+    }
+  } else if (avatarResolved) {
+    addWaveUrl("avatar", avatarResolved);
   }
-  if (avatarResolved) addWaveUrl("avatar", avatarResolved);
 
   // Preserve compatibility with any explicit non-profile visual references.
   const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds)
