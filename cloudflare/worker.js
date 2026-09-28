@@ -10,7 +10,9 @@ const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
 const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/minimax-h3/image-edit";
 const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
-const WAVESPEED_MODEL = "wavespeed-ai/minimax-h3/image-edit";
+const WAVESPEED_MINIMAX_MODEL = "wavespeed-ai/minimax-h3/image-edit";
+const WAVESPEED_WAN_MODEL = "alibaba/wan-2.6/image-edit";
+const WAVESPEED_MODEL = WAVESPEED_MINIMAX_MODEL;
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
 const GITHUB_SCENES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/src/assets/character/scenes/";
 const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/src/assets/character/scenes/";
@@ -1805,11 +1807,11 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
   }
 }
 
-async function submitWaveSpeedImage(env, prompt, referenceUrls = []) {
-  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model: WAVESPEED_MODEL };
+async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAVESPEED_MODEL) {
+  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model };
   const images = Array.isArray(referenceUrls) ? referenceUrls.filter((url) => typeof url === "string" && url).slice(0, 3) : [];
   // This is an edit/reference model. Never substitute another character's face.
-  if (!images.length) return { skipped: true, reason: "wavespeed-reference-missing", model: WAVESPEED_MODEL };
+  if (!images.length) return { skipped: true, reason: "wavespeed-reference-missing", model };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("wavespeed-submit-timeout")), 25000);
   try {
@@ -1817,6 +1819,7 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = []) {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.WAVESPEED_API_KEY}` },
       body: JSON.stringify({
+        model,
         prompt,
         images,
         aspect_ratio: "2:3",
@@ -1831,18 +1834,18 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = []) {
         skipped: true,
         reason: `wavespeed-http-${submit.status}`,
         detail: asString(submitBody?.message || submitBody?.error, "", 180),
-        model: WAVESPEED_MODEL,
+        model,
       };
     }
     const task = submitBody?.data && typeof submitBody.data === "object" ? submitBody.data : submitBody;
     const taskId = asString(task?.id, "", 200);
-    if (!taskId) return { skipped: true, reason: "wavespeed-missing-id", model: WAVESPEED_MODEL };
-    return { ok: true, pending: true, taskId, model: WAVESPEED_MODEL };
+    if (!taskId) return { skipped: true, reason: "wavespeed-missing-id", model };
+    return { ok: true, pending: true, taskId, model };
   } catch (error) {
     return {
       skipped: true,
       reason: error?.name === "AbortError" ? "wavespeed-submit-timeout" : "wavespeed-unavailable",
-      model: WAVESPEED_MODEL,
+      model,
     };
   } finally {
     clearTimeout(timer);
@@ -1875,11 +1878,11 @@ async function downloadWaveSpeedOutput(url) {
   return { skipped: true, reason: lastReason };
 }
 
-async function readWaveSpeedImage(env, taskId) {
-  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model: WAVESPEED_MODEL, taskId };
+async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
+  if (!env.WAVESPEED_API_KEY) return { skipped: true, reason: "wavespeed-not-configured", model, taskId };
   const id = asString(taskId, "", 200);
   if (!id || !/^[A-Za-z0-9._:-]+$/u.test(id)) {
-    return { skipped: true, reason: "wavespeed-invalid-task-id", model: WAVESPEED_MODEL };
+    return { skipped: true, reason: "wavespeed-invalid-task-id", model };
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("wavespeed-result-timeout")), 20000);
@@ -1894,7 +1897,7 @@ async function readWaveSpeedImage(env, taskId) {
         skipped: true,
         reason: `wavespeed-result-http-${poll.status}`,
         detail: asString(pollBody?.message || pollBody?.error, "", 180),
-        model: WAVESPEED_MODEL,
+        model,
         taskId: id,
         retryable: poll.status === 429 || poll.status >= 500,
       };
@@ -1902,23 +1905,23 @@ async function readWaveSpeedImage(env, taskId) {
     const data = pollBody?.data && typeof pollBody.data === "object" ? pollBody.data : pollBody;
     const status = asString(data?.status, "", 40).toLowerCase();
     if (!status || ["created", "queued", "pending", "processing", "running"].includes(status)) {
-      return { ok: true, pending: true, taskId: id, model: WAVESPEED_MODEL };
+      return { ok: true, pending: true, taskId: id, model };
     }
     if (status === "completed") {
       const output = Array.isArray(data.outputs) ? data.outputs[0] : null;
       const url = typeof output === "string" ? output : asString(output?.url, "", 2000);
-      if (!url) return { skipped: true, reason: "wavespeed-empty", model: WAVESPEED_MODEL, taskId: id };
+      if (!url) return { skipped: true, reason: "wavespeed-empty", model, taskId: id };
       // Generation is already paid/completed at this point. Download it with a
       // separate retry budget so a late output fetch cannot discard the job.
       const downloaded = await downloadWaveSpeedOutput(url);
       if (downloaded.ok !== true) {
-        return { ...downloaded, model: WAVESPEED_MODEL, taskId: id };
+        return { ...downloaded, model, taskId: id };
       }
       return {
         ok: true,
         dataUrl: downloaded.dataUrl,
         mimeType: downloaded.mimeType,
-        model: WAVESPEED_MODEL,
+        model,
         taskId: id,
         usage: { imageCount: 1 },
       };
@@ -1928,16 +1931,16 @@ async function readWaveSpeedImage(env, taskId) {
         skipped: true,
         reason: `wavespeed-${status}`,
         detail: asString(data?.error, "", 180),
-        model: WAVESPEED_MODEL,
+        model,
         taskId: id,
       };
     }
-    return { ok: true, pending: true, taskId: id, model: WAVESPEED_MODEL };
+    return { ok: true, pending: true, taskId: id, model };
   } catch (error) {
     return {
       skipped: true,
       reason: error?.name === "AbortError" ? "wavespeed-result-timeout" : "wavespeed-unavailable",
-      model: WAVESPEED_MODEL,
+      model,
       taskId: id,
       retryable: true,
     };
@@ -1980,20 +1983,20 @@ async function handlePhoto(request, env, origin) {
   }
   const directIntimateWaveSpeed = isWaveSpeedIntimateIntent(packet);
 
-  // medium/high intimate photos go directly to MiniMax H3 on WaveSpeed.
-  // Ordinary and low-suggestive photos stay on OpenAI Images.
+  // medium/high intimate photos go directly to WAN 2.6 on WaveSpeed.
+  // Ordinary and low-suggestive photos first try OpenAI, then MiniMax H3, then WAN 2.6.
   if (directIntimateWaveSpeed) {
     const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
     const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
-    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls);
+    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_WAN_MODEL);
     if (waveStart.ok !== true || !waveStart.taskId) {
       return jsonResponse({
         skipped: true,
         reason: waveStart.reason,
         detail: waveStart.detail,
-        model: waveStart.model || WAVESPEED_MODEL,
+        model: waveStart.model || WAVESPEED_WAN_MODEL,
         provider: "wavespeed",
-        routingMode: "direct-intimate-h3",
+        routingMode: "direct-intimate-wan",
         referenceDebug: references.debug,
       }, 200, origin);
     }
@@ -2002,8 +2005,8 @@ async function handlePhoto(request, env, origin) {
       pending: true,
       provider: "wavespeed",
       providerTaskId: waveStart.taskId,
-      model: WAVESPEED_MODEL,
-      routingMode: "direct-intimate-h3",
+      model: waveStart.model || WAVESPEED_WAN_MODEL,
+      routingMode: "direct-intimate-wan",
       referenceDebug: references.debug,
       prompt: wavePrompt,
     }, 200, origin);
@@ -2055,19 +2058,50 @@ async function handlePhoto(request, env, origin) {
     }, 200, origin);
   }
 
-  // Do not silently route ordinary/low photos to WaveSpeed.
-  // The intended architecture is OpenAI for ordinary photos and H3 for medium/high intimacy.
+  const waveReferences = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
+  const wavePrompt = buildWaveSpeedPhotoPrompt(packet, waveReferences.waveUrls.length);
+
+  let waveStart = await submitWaveSpeedImage(env, wavePrompt, waveReferences.waveUrls, WAVESPEED_MINIMAX_MODEL);
+  const fallbackChain = [waveStart.model || WAVESPEED_MINIMAX_MODEL];
+  if (waveStart.ok !== true || !waveStart.taskId) {
+    const wanStart = await submitWaveSpeedImage(env, wavePrompt, waveReferences.waveUrls, WAVESPEED_WAN_MODEL);
+    fallbackChain.push(wanStart.model || WAVESPEED_WAN_MODEL);
+    if (wanStart.ok === true && wanStart.taskId) {
+      waveStart = wanStart;
+    } else {
+      return jsonResponse({
+        skipped: true,
+        reason: wanStart.reason || waveStart.reason,
+        detail: wanStart.detail || waveStart.detail || openaiResult.detail,
+        model: wanStart.model || waveStart.model || WAVESPEED_WAN_MODEL,
+        provider: "wavespeed",
+        primaryFailure: openaiResult.reason,
+        primaryDetail: openaiResult.detail,
+        primaryRequestId: openaiResult.requestId,
+        primaryAttempts: openaiAttempts,
+        primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+        routingMode: "openai-then-minimax-then-wan",
+        fallbackChain,
+        referenceDebug: waveReferences.debug,
+      }, 200, origin);
+    }
+  }
+
   return jsonResponse({
-    skipped: true,
-    reason: openaiResult.reason,
-    detail: openaiResult.detail,
-    model: IMAGE_MODEL,
-    provider: "openai",
+    ok: true,
+    pending: true,
+    provider: "wavespeed",
+    providerTaskId: waveStart.taskId,
+    model: waveStart.model || WAVESPEED_MINIMAX_MODEL,
+    primaryFailure: openaiResult.reason,
+    primaryDetail: openaiResult.detail,
     primaryRequestId: openaiResult.requestId,
     primaryAttempts: openaiAttempts,
     primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
-    routingMode: "openai-photo",
-    referenceDebug: references.debug,
+    routingMode: "openai-then-minimax-then-wan",
+    fallbackChain,
+    referenceDebug: waveReferences.debug,
+    prompt: wavePrompt,
   }, 200, origin);
 
 
@@ -2097,15 +2131,16 @@ async function handlePhotoResult(request, env, origin) {
     return jsonResponse({ error: "invalid-json" }, 400, origin);
   }
   const taskId = asString(raw?.taskId, "", 200);
+  const taskModel = asString(raw?.model, "", 120) || WAVESPEED_MODEL;
   if (!taskId) return jsonResponse({ error: "missing-task-id" }, 400, origin);
-  const result = await readWaveSpeedImage(env, taskId);
+  const result = await readWaveSpeedImage(env, taskId, taskModel);
   if (result.pending === true) {
     return jsonResponse({
       ok: true,
       pending: true,
       provider: "wavespeed",
       providerTaskId: taskId,
-      model: WAVESPEED_MODEL,
+      model,
     }, 200, origin);
   }
   if (result.ok !== true) {
@@ -2116,7 +2151,7 @@ async function handlePhotoResult(request, env, origin) {
         reason: result.reason,
         provider: "wavespeed",
         providerTaskId: taskId,
-        model: WAVESPEED_MODEL,
+        model,
       }, 200, origin);
     }
     return jsonResponse({
@@ -2125,7 +2160,7 @@ async function handlePhotoResult(request, env, origin) {
       detail: result.detail,
       provider: "wavespeed",
       providerTaskId: taskId,
-      model: WAVESPEED_MODEL,
+      model,
     }, 200, origin);
   }
   return jsonResponse({
@@ -2134,7 +2169,7 @@ async function handlePhotoResult(request, env, origin) {
     mimeType: result.mimeType,
     provider: "wavespeed",
     providerTaskId: taskId,
-    model: WAVESPEED_MODEL,
+    model,
     usage: result.usage,
   }, 200, origin);
 }
