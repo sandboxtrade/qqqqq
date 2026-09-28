@@ -1478,6 +1478,39 @@ function isCasualPhotoIntent(packet) {
   return !/(lingerie|бель|nude|гол|топлесс|underwear|бикини|купаль|без бель|без одежды|bra|pant|thong|naked)/iu.test(outfit);
 }
 
+function buildWaveSpeedIntimateDirection(packet) {
+  const intent = packet?.decision?.intent || {};
+  const framing = intent.framing || "selfie";
+  const level = ["low", "medium", "high"].includes(intent.suggestiveLevel) ? intent.suggestiveLevel : "low";
+
+  const framingDirection = framing === "full_body"
+    ? "Use a flattering three-quarter full-body camera position rather than a flat straight-on catalogue stance. Let the body have a natural S-curve or slight hip/shoulder counter-rotation, with relaxed weight distribution and believable smartphone perspective."
+    : framing === "upper_body"
+      ? "Use a close, flattering three-quarter upper-body angle with slight shoulder turn and natural asymmetry. Avoid passport-photo symmetry or rigid square shoulders."
+      : framing === "mirror"
+        ? "Make it feel like an intentionally attractive private mirror photo: believable phone placement, natural body turn, asymmetrical stance and a composed but spontaneous look."
+        : framing === "portrait"
+          ? "Use a close personal portrait angle with expressive eyes, relaxed lips, subtle head tilt and natural asymmetry rather than a neutral ID-photo pose."
+          : "Make it feel like a private personal selfie taken for someone she likes: slightly imperfect handheld framing, flattering angle, expressive eye contact and natural asymmetry.";
+
+  const intensityDirection = level === "high"
+    ? "The mood should be clearly intimate and sensual without becoming clinical or anatomical. The pose may be confident, inviting or softly provocative depending on her personality, but the image should remain believable as a private personal photograph."
+    : level === "medium"
+      ? "The mood should be sensual and intentionally attractive, with visible chemistry in the eyes and body language, while still looking like a believable personal photo rather than a staged glamour catalogue image."
+      : "Keep the attraction subtle: flattering angle, warm eye contact, relaxed body language and a lightly flirtatious personal-photo feeling.";
+
+  return [
+    "IMPORTANT COMPOSITION DIRECTION:",
+    "Do NOT pose her like a technical identity reference, catalogue model, passport photo, mannequin or neutral character sheet.",
+    framingDirection,
+    intensityDirection,
+    "Use natural asymmetry: a slight torso turn, uneven shoulders, relaxed arms/hands, a believable shift of weight, and small imperfections that make the pose feel human rather than constructed.",
+    "Expression matters as much as pose. Give her an emotionally readable face that matches her character: direct confident eye contact for bold personalities; softer gaze, slight blush or shy half-smile for reserved personalities; playful eyes and a restrained smile for playful personalities.",
+    "Lighting should be flattering and atmospheric rather than flat studio light: soft window light, warm bedside light, or gentle indoor ambient light appropriate to the location. Preserve realistic skin texture.",
+    "The result should feel like a photo she deliberately chose to send privately to someone she is attracted to, not a reference image made for documentation.",
+  ].join("\n");
+}
+
 function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const { character, visualProfile, decision, world, signals } = packet;
   const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual home clothes";
@@ -1490,32 +1523,24 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const framing = framingMap[decision.intent.framing] || "selfie shot";
   const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
   const casual = isCasualPhotoIntent(packet);
-
-  let compositionInstruction = "";
-  if (!casual) {
-    if (suggestiveLevel === "low") {
-      compositionInstruction = "Make the photo visually appealing and flattering rather than technical: a pleasing angle, attractive composition, natural but charming body language, and a face/expression that feels inviting and photogenic.";
-    } else if (suggestiveLevel === "medium" || suggestiveLevel === "high") {
-      compositionInstruction = "Make this an intentionally attractive intimate personal photo, not a technical reference shot. Use a flattering sensual angle, visually pleasing composition, appealing body language, and an expression that suits the character. The image should feel sexy, polished and enjoyable to look at while still believable as a personal smartphone photo. If the character guidance implies shyness, blend the sensuality with bashfulness or light blush; if it implies confidence, let the gaze and posture feel more direct and self-assured.";
-    }
-  }
+  const intimateDirection = casual ? "" : buildWaveSpeedIntimateDirection(packet);
 
   return [
     `Generate ONE new photorealistic smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
-    `Identity description: ${visualProfile.identitySummary}`,
     referenceCount > 0
-      ? "The supplied reference image may be a 3x2 multi-view identity sheet. Treat it as a strict identity reference and preserve the SAME person across face shape, eye shape and spacing, nose, lips, jawline, skin tone, hairline, hair color/length/texture, apparent age, body build and proportions. Do not average her into a generic model and do not copy the reference-sheet layout into the result."
-      : "Preserve the established identity exactly; do not replace her with a generic similar-looking person.",
+      ? "IDENTITY REFERENCE: The supplied image may be a 3x2 multi-view identity sheet. Use it only to preserve who she is. Keep the SAME face, eyes, nose, lips, jawline, skin tone, hair, apparent age, body build and proportions. Do NOT imitate the identity-sheet pose, lighting, background, layout or neutral expression. Do NOT output a collage."
+      : `IDENTITY: Preserve the established same person. ${visualProfile.identitySummary}`,
+    `Identity description: ${visualProfile.identitySummary}`,
     `Photo style: ${visualProfile.defaultPhotoStyle}.`,
-    visualProfile.expressionGuidance ? `Character-specific expression/body language: ${visualProfile.expressionGuidance}` : "",
-    `Framing: ${framing}. Mood: ${mood}. Pose: ${pose}.`,
+    `Requested framing: ${framing}. Requested mood: ${mood}. Requested pose: ${pose}.`,
     `Location: ${location}. Outfit: ${outfit}.`,
+    visualProfile.expressionGuidance ? `CHARACTER EXPRESSION: ${visualProfile.expressionGuidance}` : "",
     casual
-      ? "This is an ordinary non-explicit personal photo. Keep it natural and realistic."
-      : `Structured photo-intent suggestiveness: ${suggestiveLevel}. Follow only the requested pose/outfit details and do not invent unrelated extra sexual content.`,
-    compositionInstruction,
-    emotionTone ? `Visible emotion: ${emotionTone}.` : "",
-    "Final output must be a single realistic photo, not a collage, reference sheet, split screen or contact sheet. Natural anatomy, realistic skin texture, believable lighting, no text, watermark or interface."
+      ? "This is an ordinary non-explicit personal photo. Keep it natural, casual and realistic."
+      : `INTIMACY LEVEL: ${suggestiveLevel}. Follow the requested clothing and pose. Keep the composition sensual and personal rather than clinical or technical.`,
+    intimateDirection,
+    emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
+    "FINAL IMAGE RULES: one single realistic photograph only; no collage, no reference-sheet layout, no split screen, no technical turnaround pose, no text, no watermark, no interface. Natural anatomy, believable smartphone perspective, realistic skin and coherent lighting."
   ].filter(Boolean).join("\n");
 }
 
