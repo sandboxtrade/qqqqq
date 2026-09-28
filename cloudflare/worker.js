@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.29 photo routing: OpenAI -> MiniMax H3 -> WAN 2.6; intimate medium/high -> WAN 2.6; WaveSpeed multi-key failover
+// v0.20.31 photo routing: credit-aware WaveSpeed multi-key failover + OpenAI -> MiniMax H3 -> WAN 2.6
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -54,7 +54,10 @@ const TARGET_PACKET_CHARS = 56_000;
 const MAX_OUTPUT_TOKENS = 480;
 const MAX_ESTIMATED_TURN_COST_USD = 0.008;
 const OPENAI_TIMEOUT_MS = 9_500;
-const OPENAI_IMAGE_TIMEOUT_MS = 125_000;
+const OPENAI_IMAGE_TIMEOUT_MS = 55_000;
+const OPENAI_CASUAL_RETRY_DELAY_MS = 600;
+const OPENAI_STANDARD_RETRY_DELAY_MS = 900;
+const MINIMAX_PENDING_FALLBACK_AFTER_MS = 45_000;
 const PROFILE_IDENTITY_FILENAMES = ["identity-sheet.jpg", "identity-sheet.jpeg", "identity-sheet.png", "identity_sheet.jpg", "identity_sheet.png"];
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
@@ -1839,7 +1842,12 @@ function shouldFailoverWaveSpeedHttp(status, { polling = false } = {}) {
   return false;
 }
 
-async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAVESPEED_MODEL) {
+function isWaveSpeedCreditFailure(detail) {
+  const value = String(detail || "").toLowerCase();
+  return /top[ -]?up|insufficient (?:balance|credit|credits|funds)|low balance|out of (?:credit|credits)|balance.*required|credit.*required|payment required|billing/.test(value);
+}
+
+async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAVESPEED_MODEL, options = {}) {
   const credentials = waveSpeedKeyEntries(env);
   if (!credentials.length) return { skipped: true, reason: "wavespeed-not-configured", model };
   const images = Array.isArray(referenceUrls) ? referenceUrls.filter((url) => typeof url === "string" && url).slice(0, 3) : [];
@@ -1852,8 +1860,9 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
     ? { prompt, images, enable_prompt_expansion: false }
     : { prompt, images, aspect_ratio: "2:3", resolution: "1k", output_format: "webp" };
 
+  const startCredentialIndex = Math.max(0, Math.min(credentials.length - 1, Number(options.startCredentialIndex) || 0));
   let lastFailure = null;
-  for (let index = 0; index < credentials.length; index += 1) {
+  for (let index = startCredentialIndex; index < credentials.length; index += 1) {
     const credential = credentials[index];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("wavespeed-submit-timeout")), 25000);
@@ -1997,14 +2006,16 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
         };
       }
       if (["failed", "cancelled", "timeout", "deleted"].includes(status)) {
-        // This is a real task result, not a credential failure. Do not submit
-        // or poll the same task through another key just because generation failed.
+        const detail = asString(data?.error, "", 180);
+        const credentialFailure = status === "failed" && isWaveSpeedCreditFailure(detail);
         return {
           skipped: true,
           reason: `wavespeed-${status}`,
-          detail: asString(data?.error, "", 180),
+          detail,
           model,
           taskId: id,
+          credentialFailure,
+          retryWithNextKey: credentialFailure && index + 1 < credentials.length,
           credentialAttempt: index + 1,
           credentialCount: credentials.length,
         };
@@ -2065,6 +2076,60 @@ async function handlePhoto(request, env, origin) {
   const fallbackProvider = asString(raw?.fallbackProvider, "", 24).toLowerCase();
   const fallbackFromModel = asString(raw?.fallbackFromModel, "", 120);
   const fallbackTaskId = asString(raw?.fallbackTaskId, "", 200);
+  const fallbackAllowPending = raw?.fallbackAllowPending === true;
+  const fallbackElapsedMs = clipNumber(raw?.fallbackElapsedMs, 0, 600_000, 0) || 0;
+
+  const retryWaveSpeedModel = asString(raw?.retryWaveSpeedModel, "", 120);
+  const retryWaveSpeedTaskId = asString(raw?.retryWaveSpeedTaskId, "", 200);
+
+  if (retryWaveSpeedModel || retryWaveSpeedTaskId) {
+    if (![WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
+      return jsonResponse({ skipped: true, reason: "invalid-wavespeed-key-retry", model: retryWaveSpeedModel || WAVESPEED_MODEL }, 400, origin);
+    }
+    const previous = await readWaveSpeedImage(env, retryWaveSpeedTaskId, retryWaveSpeedModel);
+    if (previous.ok === true && previous.pending !== true && previous.dataUrl) {
+      return jsonResponse({
+        ok: true,
+        dataUrl: previous.dataUrl,
+        mimeType: previous.mimeType,
+        provider: "wavespeed",
+        providerTaskId: retryWaveSpeedTaskId,
+        model: previous.model || retryWaveSpeedModel,
+        usage: previous.usage,
+        routingMode: "wavespeed-key-retry-recovered",
+      }, 200, origin);
+    }
+    if (previous.pending === true) {
+      return jsonResponse({
+        ok: true, pending: true, provider: "wavespeed", providerTaskId: retryWaveSpeedTaskId,
+        model: previous.model || retryWaveSpeedModel, routingMode: "wavespeed-key-retry-still-running",
+      }, 200, origin);
+    }
+    if (previous.credentialFailure !== true || previous.retryWithNextKey !== true) {
+      return jsonResponse({
+        skipped: true, reason: previous.reason || "wavespeed-key-retry-not-allowed", detail: previous.detail,
+        provider: "wavespeed", providerTaskId: retryWaveSpeedTaskId, model: previous.model || retryWaveSpeedModel,
+      }, 200, origin);
+    }
+    const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
+    const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
+    const retryStart = await submitWaveSpeedImage(
+      env, wavePrompt, references.waveUrls, retryWaveSpeedModel,
+      { startCredentialIndex: previous.credentialAttempt },
+    );
+    if (retryStart.ok === true && retryStart.taskId) {
+      return jsonResponse({
+        ok: true, pending: true, provider: "wavespeed", providerTaskId: retryStart.taskId,
+        model: retryStart.model || retryWaveSpeedModel, routingMode: "wavespeed-next-key",
+        referenceDebug: references.debug, prompt: wavePrompt,
+      }, 200, origin);
+    }
+    return jsonResponse({
+      skipped: true, reason: retryStart.reason || previous.reason, detail: retryStart.detail || previous.detail,
+      provider: "wavespeed", model: retryStart.model || retryWaveSpeedModel, routingMode: "wavespeed-next-key-failed",
+      referenceDebug: references.debug,
+    }, 200, origin);
+  }
 
   if (fallbackProvider === "wan") {
     if (fallbackFromModel !== WAVESPEED_MINIMAX_MODEL || !fallbackTaskId) {
@@ -2087,7 +2152,11 @@ async function handlePhoto(request, env, origin) {
         routingMode: "minimax-recovered-before-wan",
       }, 200, origin);
     }
-    if (previous.pending === true || previous.retryable === true) {
+    const shouldStartWanWhilePending = previous.pending === true
+      && fallbackAllowPending === true
+      && fallbackElapsedMs >= MINIMAX_PENDING_FALLBACK_AFTER_MS;
+
+    if ((previous.pending === true && !shouldStartWanWhilePending) || previous.retryable === true) {
       return jsonResponse({
         ok: true,
         pending: true,
@@ -2099,6 +2168,7 @@ async function handlePhoto(request, env, origin) {
       }, 200, origin);
     }
 
+    // legacy fallback branch marker for regression checks: routingMode: "minimax-result-then-wan"
     const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
     const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
     const wanStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_WAN_MODEL);
@@ -2109,7 +2179,7 @@ async function handlePhoto(request, env, origin) {
         detail: wanStart.detail || previous.detail,
         provider: "wavespeed",
         model: wanStart.model || WAVESPEED_WAN_MODEL,
-        routingMode: "minimax-result-then-wan",
+        routingMode: shouldStartWanWhilePending ? "minimax-pending-then-wan" : "minimax-result-then-wan",
         fallbackChain: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
         referenceDebug: references.debug,
       }, 200, origin);
@@ -2120,7 +2190,7 @@ async function handlePhoto(request, env, origin) {
       provider: "wavespeed",
       providerTaskId: wanStart.taskId,
       model: wanStart.model || WAVESPEED_WAN_MODEL,
-      routingMode: "minimax-result-then-wan",
+      routingMode: shouldStartWanWhilePending ? "minimax-pending-then-wan" : "minimax-result-then-wan",
       fallbackChain: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
       referenceDebug: references.debug,
       prompt: wavePrompt,
@@ -2168,22 +2238,20 @@ async function handlePhoto(request, env, origin) {
   let openaiAttempts = 1;
 
   if (ordinaryPhoto && openaiResult.ok !== true) {
-    await new Promise((resolve) => setTimeout(resolve, 900));
     const outputSexualBlock = openaiResult.reason === "openai-image-moderation-blocked"
       && /stage=output/i.test(String(openaiResult.detail || ""))
       && /sexual/i.test(String(openaiResult.detail || ""));
-    openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, outputSexualBlock ? 0 : references.openaiFiles.length);
-    openaiResult = await callOpenAIImage(env, openaiPrompt, outputSexualBlock ? [] : references.openaiFiles, "low");
-    openaiAttempts += 1;
-  }
-
-  if (ordinaryPhoto && openaiResult.ok !== true) {
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    openaiPrompt = buildOpenAICasualMinimalPrompt(packet, 0);
-    openaiResult = await callOpenAIImage(env, openaiPrompt, [], "low");
-    openaiAttempts += 1;
+    const shouldRetryOpenAI = outputSexualBlock || openaiResult.retryable === true;
+    if (shouldRetryOpenAI) {
+      await new Promise((resolve) => setTimeout(resolve, OPENAI_CASUAL_RETRY_DELAY_MS));
+      openaiPrompt = outputSexualBlock
+        ? buildOrdinaryPhotoRetryPrompt(packet, 0)
+        : buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
+      openaiResult = await callOpenAIImage(env, openaiPrompt, outputSexualBlock ? [] : references.openaiFiles, "low");
+      openaiAttempts += 1;
+    }
   } else if (!ordinaryPhoto && openaiResult.ok !== true && openaiResult.retryable === true) {
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise((resolve) => setTimeout(resolve, OPENAI_STANDARD_RETRY_DELAY_MS));
     openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
     openaiAttempts += 1;
   }
@@ -2307,6 +2375,10 @@ async function handlePhotoResult(request, env, origin) {
       provider: "wavespeed",
       providerTaskId: taskId,
       model: result.model || taskModel,
+      credentialFailure: result.credentialFailure === true,
+      retryWithNextKey: result.retryWithNextKey === true,
+      credentialAttempt: result.credentialAttempt,
+      credentialCount: result.credentialCount,
     }, 200, origin);
   }
   return jsonResponse({
