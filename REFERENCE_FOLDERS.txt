@@ -1,0 +1,24 @@
+Готовые папки для референсов персонажей
+
+В каждую папку можно просто положить:
+- avatar.jpg — основной аватар/портрет
+- identity-sheet.jpg — один multi-view лист 3×2 с шестью ракурсами
+
+Папки:
+public/assets/profiles/yuzuki/
+public/assets/profiles/mika/
+public/assets/profiles/rin/
+public/assets/profiles/lea/
+public/assets/profiles/sofia/
+public/assets/profiles/eva/
+public/assets/profiles/nora/
+public/assets/profiles/aiko/
+public/assets/profiles/hina/
+public/assets/profiles/sasha/
+public/assets/profiles/kira/
+public/assets/profiles/valeria/
+public/assets/profiles/mei/
+public/assets/profiles/alina/
+
+Worker автоматически использует identity-sheet.jpg прежде всего для WaveSpeed fallback.
+Если identity-sheet.jpg отсутствует, остаётся fallback на avatar.jpg.

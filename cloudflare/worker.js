@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.20 Alina character + cumulative v0.20.19 character pack
+// v0.20.21 cumulative characters + stabilized photo references
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -52,6 +52,7 @@ const MAX_OUTPUT_TOKENS = 480;
 const MAX_ESTIMATED_TURN_COST_USD = 0.008;
 const OPENAI_TIMEOUT_MS = 9_500;
 const OPENAI_IMAGE_TIMEOUT_MS = 105_000;
+const PROFILE_IDENTITY_FILENAMES = ["identity-sheet.jpg", "identity-sheet.jpeg", "identity-sheet.png", "identity_sheet.jpg", "identity_sheet.png"];
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
 const PRICE_INPUT = 0.10;
@@ -1416,6 +1417,43 @@ function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
   ].join("\n");
 }
 
+function isCasualPhotoIntent(packet) {
+  const intent = packet?.decision?.intent || {};
+  if (intent.suggestiveLevel !== "none") return false;
+  const outfit = asString(intent.outfit, "", 200).toLowerCase();
+  return !/(lingerie|бель|nude|гол|топлесс|underwear|бикини|купаль|без бель|без одежды|bra|pant|thong|naked)/iu.test(outfit);
+}
+
+function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
+  const { character, visualProfile, decision, world, signals } = packet;
+  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual home clothes";
+  const outfit = normalizePhotoText(decision.intent.outfit, defaultOutfit, 180);
+  const pose = normalizePhotoText(decision.intent.pose, "relaxed natural pose", 180);
+  const mood = normalizePhotoText(decision.intent.mood, "natural", 100);
+  const location = normalizePhotoText(decision.intent.location, world.location || "home", 120);
+  const emotionTone = safeEmotionTone(signals.emotionTone);
+  const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
+  const framing = framingMap[decision.intent.framing] || "selfie shot";
+  const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
+  const casual = isCasualPhotoIntent(packet);
+  return [
+    `Generate ONE new photorealistic smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
+    `Identity description: ${visualProfile.identitySummary}`,
+    referenceCount > 0
+      ? "The supplied reference images are strict identity references. One of them may be a 3x2 multi-view identity sheet. Preserve the SAME person across face shape, eye shape and spacing, nose, lips, jawline, skin tone, hairline, hair color/length/texture, apparent age, body build and proportions. Do not average her into a generic model and do not copy the reference-sheet layout into the result."
+      : "Preserve the established identity exactly; do not replace her with a generic similar-looking person.",
+    `Photo style: ${visualProfile.defaultPhotoStyle}.`,
+    visualProfile.expressionGuidance ? `Character-specific expression/body language: ${visualProfile.expressionGuidance}` : "",
+    `Framing: ${framing}. Mood: ${mood}. Pose: ${pose}.`,
+    `Location: ${location}. Outfit: ${outfit}.`,
+    casual
+      ? "This is an ordinary non-explicit personal photo. Keep it natural and realistic."
+      : `Structured photo-intent suggestiveness: ${suggestiveLevel}. Follow only the requested pose/outfit details and do not invent extra sexual content.`,
+    emotionTone ? `Visible emotion: ${emotionTone}.` : "",
+    "Final output must be a single realistic photo, not a collage, reference sheet, split screen or contact sheet. Natural anatomy, realistic skin texture, believable lighting, no text, watermark or interface."
+  ].filter(Boolean).join("\n");
+}
+
 function guessReferenceFilenames(assetId) {
   const id = asString(assetId, "", 120);
   if (!id) return [];
@@ -1441,18 +1479,38 @@ function guessReferenceFilenames(assetId) {
   return [...out];
 }
 
+function buildProfileAssetUrls(slug, filenames) {
+  const cleanSlug = asString(slug, "", 80).toLowerCase();
+  if (!cleanSlug) return [];
+  const urls = [];
+  for (const file of filenames) {
+    const cleanFile = asString(file, "", 120);
+    if (!cleanFile) continue;
+    urls.push(`${GITHUB_PROFILES_RAW_BASE}${cleanSlug}/${cleanFile}`);
+    urls.push(`${GITHUB_PROFILES_CDN_BASE}${cleanSlug}/${cleanFile}`);
+  }
+  return urls;
+}
+
+function candidateProfileAvatarUrls(slug) {
+  return buildProfileAssetUrls(slug, ["avatar.jpg", "avatar.jpeg", "avatar.png", "avatar.webp"]);
+}
+
+function candidateIdentitySheetUrls(slug) {
+  return buildProfileAssetUrls(slug, PROFILE_IDENTITY_FILENAMES);
+}
+
 function candidateReferenceUrls(assetId) {
   const id = asString(assetId, "", 120);
   if (!id) return [];
 
-  const profileMatch = /^profile\.([a-z0-9_-]+)\.(avatar|\d{2})$/iu.exec(id);
+  const profileMatch = /^profile\.([a-z0-9_-]+)\.(avatar|identity|sheet|\d{2})$/iu.exec(id);
   if (profileMatch) {
     const slug = profileMatch[1].toLowerCase();
-    const file = profileMatch[2].toLowerCase() === "avatar" ? "avatar.jpg" : `${profileMatch[2]}.jpg`;
-    return [
-      `${GITHUB_PROFILES_RAW_BASE}${slug}/${file}`,
-      `${GITHUB_PROFILES_CDN_BASE}${slug}/${file}`,
-    ];
+    const kind = profileMatch[2].toLowerCase();
+    if (kind === "avatar") return candidateProfileAvatarUrls(slug);
+    if (kind === "identity" || kind === "sheet") return candidateIdentitySheetUrls(slug);
+    return buildProfileAssetUrls(slug, [`${kind}.jpg`, `${kind}.png`]);
   }
 
   const filenames = guessReferenceFilenames(id);
@@ -1489,31 +1547,73 @@ function extFromContentType(contentType) {
   return "png";
 }
 
-async function loadReferenceFiles(packet) {
-  const files = [];
-  const resolvedUrls = [];
+function profileSlugFromPacket(packet) {
+  const mapped = CHARACTER_PROFILE_SLUGS[asString(packet?.character?.id, "", 64)];
+  if (mapped) return mapped;
+  const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds) ? packet.visualProfile.referenceAssetIds : [];
+  for (const assetId of refs) {
+    const match = /^profile\.([a-z0-9_-]+)\./iu.exec(String(assetId || ""));
+    if (match) return match[1].toLowerCase();
+  }
+  return "";
+}
+
+async function resolveFirstReference(urls) {
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      const fetched = await fetchCachedReference(url);
+      if (fetched) return { url, ...fetched };
+    } catch {}
+  }
+  return null;
+}
+
+async function loadReferenceBundle(packet) {
+  const openaiFiles = [];
+  const waveUrls = [];
+  const debug = [];
+  const slug = profileSlugFromPacket(packet);
+
+  const addWaveUrl = (kind, resolved) => {
+    if (!resolved?.url) return;
+    if (!waveUrls.includes(resolved.url)) waveUrls.push(resolved.url);
+    debug.push({ kind, url: resolved.url });
+  };
+
+  // OpenAI gets the normal avatar reference. A multi-view sheet is primarily
+  // intended for WaveSpeed fallback so ordinary OpenAI photos stay simple.
+  let avatarResolved = null;
+  if (slug) avatarResolved = await resolveFirstReference(candidateProfileAvatarUrls(slug));
+  if (!avatarResolved && packet?.character?.id === "yuzuki_v1") {
+    avatarResolved = await resolveFirstReference([MASTER_REFERENCE_URL]);
+  }
+  if (avatarResolved) {
+    const ext = extFromContentType(avatarResolved.contentType);
+    openaiFiles.push(new File([avatarResolved.bytes], `avatar-reference.${ext}`, { type: avatarResolved.contentType }));
+  }
+
+  // For WaveSpeed place the multi-view identity sheet first, then the regular
+  // avatar. If the sheet is absent, avatar-only behavior stays backward compatible.
+  if (slug) {
+    const identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
+    if (identityResolved) addWaveUrl("identity-sheet", identityResolved);
+  }
+  if (avatarResolved) addWaveUrl("avatar", avatarResolved);
+
+  // Preserve compatibility with any explicit non-profile visual references.
   const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds)
-    ? packet.visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 3)
+    ? packet.visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 6)
     : [];
   for (const assetId of refs) {
-    const candidates = candidateReferenceUrls(assetId);
-    if (packet?.character?.id === "yuzuki_v1" && assetId === "profile.yuzuki.avatar") {
-      candidates.push(MASTER_REFERENCE_URL);
-    }
-    for (const url of candidates) {
-      if (!url) continue;
-      try {
-        const fetched = await fetchCachedReference(url);
-        if (!fetched) continue;
-        const ext = extFromContentType(fetched.contentType);
-        files.push(new File([fetched.bytes], `reference-${files.length + 1}.${ext}`, { type: fetched.contentType }));
-        resolvedUrls.push(url);
-        break; // RAW/CDN/master are alternatives for the same identity reference, not separate images.
-      } catch {}
-    }
-    if (files.length >= 1) break; // One canonical face reference is enough and avoids duplicate identity inputs.
+    if (/^profile\.[a-z0-9_-]+\.(avatar|identity|sheet)$/iu.test(assetId)) continue;
+    const resolved = await resolveFirstReference(candidateReferenceUrls(assetId));
+    if (!resolved) continue;
+    addWaveUrl("extra", resolved);
+    if (waveUrls.length >= 3) break;
   }
-  return { files, urls: resolvedUrls };
+
+  return { openaiFiles, waveUrls: waveUrls.slice(0, 3), debug, slug };
 }
 
 async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "auto") {
@@ -1777,17 +1877,20 @@ async function handlePhoto(request, env, origin) {
   if (packet.error) {
     return jsonResponse({ skipped: true, reason: packet.error, model: IMAGE_MODEL }, packet.error === "invalid-input" ? 400 : 200, origin);
   }
-  const references = await loadReferenceFiles(packet);
-  const prompt = buildPhotoPrompt(packet, references.files.length);
-  const ordinaryPhoto = packet.decision.intent.suggestiveLevel === "none";
+  const references = await loadReferenceBundle(packet);
+  const openaiPrompt = buildPhotoPrompt(packet, references.openaiFiles.length);
+  const ordinaryPhoto = isCasualPhotoIntent(packet);
   const openaiModeration = ["none", "low"].includes(packet.decision.intent.suggestiveLevel) ? "low" : "auto";
-  let openaiResult = await callOpenAIImage(env, prompt, references.files, openaiModeration);
+  let openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
+  let openaiAttempts = 1;
   if (ordinaryPhoto && openaiResult.reason === "openai-image-moderation-blocked") {
-    const retryPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.files.length);
-    openaiResult = await callOpenAIImage(env, retryPrompt, references.files, "low");
+    const retryPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
+    openaiResult = await callOpenAIImage(env, retryPrompt, references.openaiFiles, "low");
+    openaiAttempts += 1;
   } else if (openaiResult.ok !== true && openaiResult.retryable === true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    openaiResult = await callOpenAIImage(env, prompt, references.files, openaiModeration);
+    openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
+    openaiAttempts += 1;
   }
   if (openaiResult.ok === true) {
     return jsonResponse({
@@ -1796,15 +1899,17 @@ async function handlePhoto(request, env, origin) {
       mimeType: openaiResult.mimeType,
       model: openaiResult.model || IMAGE_MODEL,
       provider: "openai",
-      prompt,
+      prompt: openaiPrompt,
       usage: openaiResult.usage,
+      referenceDebug: references.debug,
+      primaryAttempts: openaiAttempts,
     }, 200, origin);
   }
 
-  // WaveSpeed is asynchronous. Return its task id immediately and let the
-  // client poll a dedicated authenticated endpoint. This prevents a finished
-  // image from disappearing because one long Worker request was interrupted.
-  const waveStart = await submitWaveSpeedImage(env, prompt, references.urls);
+  // WaveSpeed receives a stronger identity-heavy prompt and, when present,
+  // the character's multi-view identity-sheet before the normal avatar.
+  const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
+  const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls);
   if (waveStart.ok !== true || !waveStart.taskId) {
     return jsonResponse({
       skipped: true,
@@ -1814,6 +1919,8 @@ async function handlePhoto(request, env, origin) {
       primaryFailure: openaiResult.reason,
       primaryDetail: openaiResult.detail,
       primaryRequestId: openaiResult.requestId,
+      primaryAttempts: openaiAttempts,
+      referenceDebug: references.debug,
     }, 200, origin);
   }
   return jsonResponse({
@@ -1825,7 +1932,9 @@ async function handlePhoto(request, env, origin) {
     primaryFailure: openaiResult.reason,
     primaryDetail: openaiResult.detail,
     primaryRequestId: openaiResult.requestId,
-    prompt,
+    primaryAttempts: openaiAttempts,
+    referenceDebug: references.debug,
+    prompt: wavePrompt,
   }, 200, origin);
 }
 
