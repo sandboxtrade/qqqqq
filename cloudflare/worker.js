@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.24 cumulative characters + stabilized photo references
+// v0.20.26 OpenAI ordinary photos + MiniMax H3 intimate WaveSpeed branch
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -8,9 +8,9 @@ const OPENAI_URL = "https://api.openai.com/v1/responses";
 const IMAGE_MODEL = "gpt-image-2";
 const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
-const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/alibaba/wan-2.6/image-edit";
+const WAVESPEED_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/minimax-h3/image-edit";
 const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
-const WAVESPEED_MODEL = "alibaba/wan-2.6/image-edit";
+const WAVESPEED_MODEL = "wavespeed-ai/minimax-h3/image-edit";
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
 const GITHUB_SCENES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/src/assets/character/scenes/";
 const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/src/assets/character/scenes/";
@@ -1478,6 +1478,11 @@ function isCasualPhotoIntent(packet) {
   return !/(lingerie|бель|nude|гол|топлесс|underwear|бикини|купаль|без бель|без одежды|bra|pant|thong|naked)/iu.test(outfit);
 }
 
+function isWaveSpeedIntimateIntent(packet) {
+  const level = packet?.decision?.intent?.suggestiveLevel;
+  return level === "medium" || level === "high";
+}
+
 function buildWaveSpeedIntimateDirection(packet) {
   const intent = packet?.decision?.intent || {};
   const framing = intent.framing || "selfie";
@@ -1528,7 +1533,7 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   return [
     `Generate ONE new photorealistic smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
     referenceCount > 0
-      ? "IDENTITY REFERENCE: The supplied image may be a 3x2 multi-view identity sheet. Use it only to preserve who she is. Keep the SAME face, eyes, nose, lips, jawline, skin tone, hair, apparent age, body build and proportions. Do NOT imitate the identity-sheet pose, lighting, background, layout or neutral expression. Do NOT output a collage."
+      ? "IDENTITY REFERENCE: <Picture 1> is the strict identity reference. It may be a 3x2 multi-view identity sheet. Generate the SAME woman from <Picture 1>. Preserve the same face, eyes, nose, lips, jawline, skin tone, hair, apparent age, body build and proportions. Do NOT imitate the identity-sheet pose, lighting, background, layout or neutral expression. Do NOT output a collage."
       : `IDENTITY: Preserve the established same person. ${visualProfile.identitySummary}`,
     `Identity description: ${visualProfile.identitySummary}`,
     `Photo style: ${visualProfile.defaultPhotoStyle}.`,
@@ -1659,56 +1664,51 @@ async function resolveFirstReference(urls) {
   return null;
 }
 
-async function loadReferenceBundle(packet) {
+async function loadReferenceBundle(packet, options = {}) {
+  const needOpenAI = options.needOpenAI !== false;
+  const needWaveSpeed = options.needWaveSpeed === true;
   const openaiFiles = [];
   const waveUrls = [];
   const debug = [];
   const slug = profileSlugFromPacket(packet);
+  let avatarResolved = null;
 
-  const addWaveUrl = (kind, resolved) => {
-    if (!resolved?.url) return;
-    if (!waveUrls.includes(resolved.url)) waveUrls.push(resolved.url);
-    debug.push({ kind, url: resolved.url });
+  const resolveAvatar = async () => {
+    if (avatarResolved) return avatarResolved;
+    if (slug) avatarResolved = await resolveFirstReference(candidateProfileAvatarUrls(slug));
+    if (!avatarResolved && packet?.character?.id === "yuzuki_v1") {
+      avatarResolved = await resolveFirstReference([MASTER_REFERENCE_URL]);
+    }
+    return avatarResolved;
   };
 
-  // OpenAI gets the normal avatar reference. A multi-view sheet is primarily
-  // intended for WaveSpeed fallback so ordinary OpenAI photos stay simple.
-  let avatarResolved = null;
-  if (slug) avatarResolved = await resolveFirstReference(candidateProfileAvatarUrls(slug));
-  if (!avatarResolved && packet?.character?.id === "yuzuki_v1") {
-    avatarResolved = await resolveFirstReference([MASTER_REFERENCE_URL]);
-  }
-  if (avatarResolved) {
-    const ext = extFromContentType(avatarResolved.contentType);
-    openaiFiles.push(new File([avatarResolved.bytes], `avatar-reference.${ext}`, { type: avatarResolved.contentType }));
-  }
-
-  // For WaveSpeed prefer only the multi-view identity sheet.
-  // Fall back to avatar-only when the sheet is missing.
-  if (slug) {
-    const identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
-    if (identityResolved) {
-      addWaveUrl("identity-sheet", identityResolved);
-    } else if (avatarResolved) {
-      addWaveUrl("avatar", avatarResolved);
+  if (needOpenAI) {
+    const avatar = await resolveAvatar();
+    if (avatar) {
+      const ext = extFromContentType(avatar.contentType);
+      openaiFiles.push(new File([avatar.bytes], `avatar-reference.${ext}`, { type: avatar.contentType }));
+      debug.push({ kind: "openai-avatar", url: avatar.url });
     }
-  } else if (avatarResolved) {
-    addWaveUrl("avatar", avatarResolved);
   }
 
-  // Preserve compatibility with any explicit non-profile visual references.
-  const refs = Array.isArray(packet?.visualProfile?.referenceAssetIds)
-    ? packet.visualProfile.referenceAssetIds.filter((item) => typeof item === "string").slice(0, 6)
-    : [];
-  for (const assetId of refs) {
-    if (/^profile\.[a-z0-9_-]+\.(avatar|identity|sheet)$/iu.test(assetId)) continue;
-    const resolved = await resolveFirstReference(candidateReferenceUrls(assetId));
-    if (!resolved) continue;
-    addWaveUrl("extra", resolved);
-    if (waveUrls.length >= 3) break;
+  if (needWaveSpeed) {
+    // WaveSpeed gets exactly ONE character reference:
+    // identity-sheet first; avatar only when identity-sheet is absent.
+    let identityResolved = null;
+    if (slug) identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
+    if (identityResolved) {
+      waveUrls.push(identityResolved.url);
+      debug.push({ kind: "identity-sheet", url: identityResolved.url });
+    } else {
+      const avatar = await resolveAvatar();
+      if (avatar) {
+        waveUrls.push(avatar.url);
+        debug.push({ kind: "avatar-fallback", url: avatar.url });
+      }
+    }
   }
 
-  return { openaiFiles, waveUrls: waveUrls.slice(0, 3), debug, slug };
+  return { openaiFiles, waveUrls, debug, slug };
 }
 
 async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "auto") {
@@ -1816,7 +1816,13 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = []) {
     const submit = await fetch(WAVESPEED_IMAGE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.WAVESPEED_API_KEY}` },
-      body: JSON.stringify({ prompt, images, enable_prompt_expansion: false }),
+      body: JSON.stringify({
+        prompt,
+        images,
+        aspect_ratio: "2:3",
+        resolution: "1k",
+        output_format: "webp",
+      }),
       signal: controller.signal,
     });
     const submitBody = await submit.json().catch(() => ({}));
@@ -1972,7 +1978,38 @@ async function handlePhoto(request, env, origin) {
   if (packet.error) {
     return jsonResponse({ skipped: true, reason: packet.error, model: IMAGE_MODEL }, packet.error === "invalid-input" ? 400 : 200, origin);
   }
-  const references = await loadReferenceBundle(packet);
+  const directIntimateWaveSpeed = isWaveSpeedIntimateIntent(packet);
+
+  // medium/high intimate photos go directly to MiniMax H3 on WaveSpeed.
+  // Ordinary and low-suggestive photos stay on OpenAI Images.
+  if (directIntimateWaveSpeed) {
+    const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
+    const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
+    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls);
+    if (waveStart.ok !== true || !waveStart.taskId) {
+      return jsonResponse({
+        skipped: true,
+        reason: waveStart.reason,
+        detail: waveStart.detail,
+        model: waveStart.model || WAVESPEED_MODEL,
+        provider: "wavespeed",
+        routingMode: "direct-intimate-h3",
+        referenceDebug: references.debug,
+      }, 200, origin);
+    }
+    return jsonResponse({
+      ok: true,
+      pending: true,
+      provider: "wavespeed",
+      providerTaskId: waveStart.taskId,
+      model: WAVESPEED_MODEL,
+      routingMode: "direct-intimate-h3",
+      referenceDebug: references.debug,
+      prompt: wavePrompt,
+    }, 200, origin);
+  }
+
+  const references = await loadReferenceBundle(packet, { needOpenAI: true, needWaveSpeed: false });
   const ordinaryPhoto = isCasualPhotoIntent(packet);
   const openaiModeration = ["none", "low"].includes(packet.decision.intent.suggestiveLevel) ? "low" : "auto";
   let openaiPrompt = ordinaryPhoto
@@ -1987,18 +2024,12 @@ async function handlePhoto(request, env, origin) {
       && /stage=output/i.test(String(openaiResult.detail || ""))
       && /sexual/i.test(String(openaiResult.detail || ""));
     openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, outputSexualBlock ? 0 : references.openaiFiles.length);
-    // If the first reference-conditioned result was blocked as sexual at OUTPUT,
-    // stop feeding the avatar on the next ordinary attempt. The request itself
-    // remains fully clothed and ordinary; identity is carried by identitySummary.
     openaiResult = await callOpenAIImage(env, openaiPrompt, outputSexualBlock ? [] : references.openaiFiles, "low");
     openaiAttempts += 1;
   }
 
   if (ordinaryPhoto && openaiResult.ok !== true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    // Final ordinary-photo attempt deliberately drops the image reference.
-    // It prevents source-avatar/edit-conditioning from repeatedly creating a
-    // result that is rejected by output moderation. Identity remains textual.
     openaiPrompt = buildOpenAICasualMinimalPrompt(packet, 0);
     openaiResult = await callOpenAIImage(env, openaiPrompt, [], "low");
     openaiAttempts += 1;
@@ -2020,40 +2051,27 @@ async function handlePhoto(request, env, origin) {
       referenceDebug: references.debug,
       primaryAttempts: openaiAttempts,
       primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+      routingMode: "openai-photo",
     }, 200, origin);
   }
 
-  // WaveSpeed receives a stronger identity-heavy prompt and, when present,
-  // the character's multi-view identity-sheet before the normal avatar.
-  const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
-  const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls);
-  if (waveStart.ok !== true || !waveStart.taskId) {
-    return jsonResponse({
-      skipped: true,
-      reason: waveStart.reason,
-      detail: waveStart.detail,
-      model: waveStart.model || WAVESPEED_MODEL,
-      primaryFailure: openaiResult.reason,
-      primaryDetail: openaiResult.detail,
-      primaryRequestId: openaiResult.requestId,
-      primaryAttempts: openaiAttempts,
-      primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
-      referenceDebug: references.debug,
-    }, 200, origin);
-  }
+  // Do not silently route ordinary/low photos to WaveSpeed.
+  // The intended architecture is OpenAI for ordinary photos and H3 for medium/high intimacy.
   return jsonResponse({
-    ok: true,
-    pending: true,
-    provider: "wavespeed",
-    providerTaskId: waveStart.taskId,
-    model: WAVESPEED_MODEL,
-    primaryFailure: openaiResult.reason,
-    primaryDetail: openaiResult.detail,
+    skipped: true,
+    reason: openaiResult.reason,
+    detail: openaiResult.detail,
+    model: IMAGE_MODEL,
+    provider: "openai",
     primaryRequestId: openaiResult.requestId,
     primaryAttempts: openaiAttempts,
+    primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+    routingMode: "openai-photo",
     referenceDebug: references.debug,
-    prompt: wavePrompt,
   }, 200, origin);
+
+
+
 }
 
 async function handlePhotoResult(request, env, origin) {
