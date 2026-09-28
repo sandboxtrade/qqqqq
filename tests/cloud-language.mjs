@@ -326,6 +326,8 @@ assert.match(workerSource, /MEMORY — единственная канониче
 assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
 assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
 assert.doesNotMatch(cloudSource, /isRetryableCloudFailure/);
-assert.match(workerSource, /Не перезапускай беседу generic-фразами/);
+assert.match(workerSource, /Не перезапускай понятную тему generic-фразами/);
+assert.match(workerSource, /VOICE STYLE — это распределение привычек, а не чек-лист/);
+assert.match(workerSource, /не переключайся на отдельного «эротического рассказчика»/i);
 
 console.log("PASS cloud dialogue: manual personality/memory, GPT-first routing, multi-bubble replies, 30-message context, Cloudflare transport, token refresh, fail-fast transient handling, Auth, App Check and local fallback");

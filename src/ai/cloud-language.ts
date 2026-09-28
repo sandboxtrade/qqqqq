@@ -20,6 +20,8 @@ export interface CloudLanguageInput {
   userText: string;
   /** User-editable stable character description. */
   personality: string;
+  /** Stable per-character surface voice: rhythm, punctuation, verbal habits. */
+  voiceStyle?: string;
   /** User-editable canonical long-term memory. */
   memory: string;
   proactive?: {
@@ -43,7 +45,6 @@ export interface CloudLanguageInput {
     selectedEmotion: string;
     suggestive: boolean;
   };
-  /** Character-scoped user preference. This only overrides character-side photo refusal logic. */
   photoPolicy?: {
     noRefusalMode: boolean;
   };

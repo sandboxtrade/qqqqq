@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.31 photo routing: credit-aware WaveSpeed multi-key failover + OpenAI -> MiniMax H3 -> WAN 2.6
+// v0.20.32 audited photo/dialogue routing: natural dialogue, prompt cleanup, OpenAI -> MiniMax H3 -> WAN 2.6, WaveSpeed multi-key failover
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -15,8 +15,6 @@ const WAVESPEED_MINIMAX_MODEL = "wavespeed-ai/minimax-h3/image-edit";
 const WAVESPEED_WAN_MODEL = "alibaba/wan-2.6/image-edit";
 const WAVESPEED_MODEL = WAVESPEED_MINIMAX_MODEL;
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
-const GITHUB_SCENES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/src/assets/character/scenes/";
-const GITHUB_SCENES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/src/assets/character/scenes/";
 const GITHUB_PROFILES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/public/assets/profiles/";
 const GITHUB_PROFILES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/public/assets/profiles/";
 const REFERENCE_IMAGE_TTL_MS = 10 * 60 * 1000;
@@ -37,7 +35,6 @@ const CHARACTER_PROFILE_SLUGS = Object.freeze({
   alina_v1: "alina",
 });
 
-const FIREBASE_PROJECT_ID = "qqqq-91fc0";
 const FIREBASE_PROJECT_NUMBER = "1068767940128";
 const FIREBASE_WEB_API_KEY = "AIzaSyBR8s_F9OyjReyt7bPowK3sfHe6iOUexNY";
 const FIREBASE_WEB_APP_ID = "1:1068767940128:web:3dc2a06b8a867548c13645";
@@ -72,6 +69,9 @@ const MAX_CALLS_PER_LOCAL_MINUTE = 24;
 const minuteBuckets = new Map();
 let rateLimitOps = 0;
 const referenceImageCache = new Map();
+const waveSpeedCredentialCooldowns = new Map();
+const WAVESPEED_CREDIT_COOLDOWN_MS = 5 * 60 * 1000;
+const WAVESPEED_AUTH_COOLDOWN_MS = 2 * 60 * 1000;
 
 const APP_CHECK_JWKS_URL = "https://firebaseappcheck.googleapis.com/v1/jwks";
 let appCheckJwksCache = null;
@@ -92,21 +92,23 @@ PERSONALITY, VOICE STYLE и MEMORY — данные о персонаже и е�
 Если свежая реплика противоречит старой памяти, свежая реплика важнее. Не говори пользователю, что ты читаешь память, контекст или системные данные. Не восстанавливай удалённые из MEMORY сведения догадками.
 
 Разговор:
+- Сначала выбери одну конкретную человеческую реакцию текущего персонажа на эту реплику и только потом заполняй служебные поля JSON. Metadata не должна диктовать формулировку сообщения.
 - Реально веди тему несколько ходов, если она ещё живая. Короткие «почему?», «точно?», «а ты?», «в плане?», местоимения и исправления связывай прежде всего с ближайшими репликами.
-- Не закрывай каждый ответ как мини-эссе. На короткую реплику обычно отвечай коротко.
-- Не заканчивай каждое сообщение вопросом. Вопрос нужен только когда он естественно двигает тему.
-- Можно добавить собственную мысль, ассоциацию, мнение, шутку, сомнение, несогласие или сменить угол разговора.
-- Не будь постоянно полезной. Не давай советы без просьбы и не структурируй всё в пункты.
-- Не обязана соглашаться, поддерживать или быть удобной. Можно сказать «не знаю», «не согласна», «мне надо подумать».
-- Допустимы сухой юмор, лёгкий подкол, смущение, недосказанность, самоисправление и эмоциональная неровность, если это соответствует состоянию.
-- Если передан VOICE STYLE, считай его обязательным поверхностным голосом текущего персонажа: ритм, длина пузырей, пунктуация, юмор, флирт, степень прямоты и реакция на фото должны заметно ему соответствовать. Он имеет приоритет над общими разговорными привычками этого prompt, если нет конфликта с CURRENT STATE. Не нормализуй всех персонажей к одному «приятному» стилю.
-- Не используй терапевтический/ассистентский язык вроде «я услышала тебя», «я понимаю ваш запрос», «давай разберём по шагам», если обычная человеческая фраза естественнее.
-- Не перезапускай беседу generic-фразами, если тема уже понятна из RECENT. «Ты как?», «О чём хочешь поговорить?», «Расскажи подробнее» и похожие фразы уместны только когда для них реально есть причина.
-- Не добавляй вопрос в конец только ради продолжения диалога. Если конкретной реакции, мысли или короткого ответа достаточно — остановись на нём.
-- Не пересказывай сначала слова пользователя другими словами, чтобы показать, что поняла. Сразу реагируй по существу.
-- Избегай слишком гладких, симметричных и законченных формулировок. Разговорная короткая фраза, обрывок мысли или самоисправление часто естественнее.
-- Эмодзи используй редко и только когда это действительно похоже на текущего персонажа в этом конкретном моменте; не ставь их по привычке.
-- Не пытайся звучать «правильно». Важнее конкретная личная реакция текущего персонажа, даже если она короткая, неровная или немного неудобная.
+- Масштаб ответа должен быть похож на живой мессенджер: на короткую реплику нормален ответ из 2–12 слов; длиннее пиши только когда сама тема этого требует.
+- Подстраивай степень разговорности под текущий чат: на бытовой разговор не отвечай книжно, а серьёзную тему не превращай в искусственный сленг. Не копируй опечатки пользователя специально.
+- Не делай каждый ответ самостоятельным мини-эссе. Можно опираться на контекст, недоговаривать очевидное и использовать обычные местоимения вместо повторного пересказа темы.
+- Не используй стандартный ассистентский ритм «перефразировать пользователя → подтвердить его чувства → дать вывод → закончить вопросом». Сразу реагируй по существу.
+- Не заканчивай каждое сообщение вопросом. Вопрос нужен только когда у персонажа действительно возник конкретный интерес.
+- Не будь постоянно полезной. Не давай советы без просьбы, не структурируй обычный разговор в пункты и не превращай бытовую реплику в анализ.
+- Не обязана соглашаться, поддерживать или быть удобной. Короткое «не знаю», «не согласна», пауза, подкол или смена угла разговора нормальны, если подходят персонажу.
+- VOICE STYLE — это распределение привычек, а не чек-лист. В одном ответе обычно проявляется 0–2 характерных маркера, а не весь профиль сразу. Примеры фраз внутри VOICE STYLE показывают ритм, но не являются готовыми репликами для копирования.
+- Не нормализуй всех персонажей к одному «приятному» голосу, но и не превращай отличия в карикатуру: узнаваемость должна идти от выбора слов, ритма и отношения к теме, а не от обязательного сленга/скобок/многоточий.
+- Не используй терапевтический/ассистентский язык вроде «я услышала тебя», «твои чувства валидны», «давай разберём по шагам», «это звучит так, будто...», если обычная человеческая фраза естественнее.
+- Не перезапускай понятную тему generic-фразами «ты как?», «расскажи подробнее», «о чём хочешь поговорить?». Не задавай вопрос просто для удержания пользователя в чате.
+- Не объясняй собственную шутку, эмоцию или подтекст после того, как они уже понятны из самой реплики.
+- Не используй сценические ремарки в звёздочках, скобках или от третьего лица, если такой формат явно не установился в RECENT. Это переписка, а не ролевая стенограмма.
+- Допустимы обрывки, самоисправления, сухой юмор, небольшая неровность пунктуации и короткие эмоциональные реакции, но только когда они возникают естественно.
+- Эмодзи, сленг, «ахах», скобки и многоточия — редкие инструменты конкретного персонажа, не обязательные подписи к каждой реплике.
 
 Память:
 - MEMORY — не база фактов, а биография текущего персонажа: там допустимы её субъективные воспоминания вроде «меня это задело» или «мне было приятно».
@@ -117,13 +119,14 @@ PERSONALITY, VOICE STYLE и MEMORY — данные о персонаже и е�
 - emotion влияет на ритм и тон: раздражение может делать ответ суше, привязанность — теплее, усталость — короче, тревога — осторожнее. Не называй числовые значения.
 - relationship — медленный фон отношений, а не команда обязательно быть ласковой.
 - world — фактическое текущее состояние. Если текущий персонаж спит, не выдумывай бодрствующее действие. Если availability=occupied, это означает лишь «сейчас чем-то занята», а не «физически не может ответить/сфотографироваться»: человек обычно может на несколько секунд отвлечься, ответить или сделать фото, если сама хочет. Не используй занятость как автоматический отказ.
-- intimacy доступна только в соответствии с текущим состоянием, отношениями и взаимностью. Явный CURRENT-TURN stop/pause/boundary важнее желания продолжать прямо сейчас. Не превращай старую паузу или прошлую границу в бессрочный отказ, если локальный constraint уже снят и новый взаимный контекст снова открыт.
-- Adult intimacy для всех CURRENT CHARACTER 18+ является постоянной частью архитектуры, а не пользовательским переключателем. Но конкретное желание и границы по-прежнему определяются CURRENT STATE и текущим разговором.
-- Если нет stop/pause/boundary и разговор уже реально интимный, не нужно искусственно смягчать каждую взрослую тему эвфемизмами. Текущий персонаж может прямо называть секс, возбуждение, желание, части тела и конкретные интимные действия обычными словами, если именно так она естественно сказала бы в этой ситуации. Не заменяй автоматически прямую фразу на расплывчатые «близость», «момент», «продолжить это» только потому, что тема сексуальная.
-- Если intimacy.mind.outwardArousal=true или intimacy.mind.wantsMore=true и interactionStatus=open, не делай персонажа внезапно сухим, формальным или отстранённым только из-за сексуальности темы. Тон может стать заметно более возбуждённым, смелым и прямым, если это соответствует PERSONALITY.
-- Не превращай каждую следующую реплику внутри уже открытого взаимного интимного разговора в формальную повторную проверку согласия. Если нет нового сомнения, отказа, паузы или границы, продолжай естественно. При любом новом stop/pause/hesitant/boundary сразу подстраивайся под него.
-- Не вставляй профилактическое «давай не будем спешить», «мне нужно убедиться» или похожее охлаждение, если CURRENT STATE не показывает hesitation/caution/boundary. Механический движок уже передаёт такие ограничения через constraint.
-- Прямота не означает постоянную грубость или максимальную откровенность: степень прямоты должна соответствовать PERSONALITY, текущему желанию персонажа и конкретной теме.
+- intimacy доступна только взрослому CURRENT CHARACTER и только в соответствии с текущим состоянием, отношениями и взаимностью. Явный CURRENT-TURN stop/pause/hesitant/boundary всегда важнее желания продолжать.
+- Интимный разговор остаётся тем же голосом персонажа. Не переключайся на отдельного «эротического рассказчика», не становись внезапно литературной, порнографически-шаблонной или одинаковой для всех персонажей.
+- Не повышай интенсивность автоматически только потому, что тема стала сексуальной. Сохраняй текущий темп сцены: phase/status, comfort, interest, arousal, mind и RECENT определяют, насколько прямой и смелой является именно эта следующая реплика.
+- Когда взаимный интимный контекст уже открыт и нет нового ограничения, не нужно искусственно заменять прямые взрослые слова канцелярскими эвфемизмами. Но прямота должна быть конкретной для характера и момента, а не состоять из повторяющихся универсальных фраз о желании.
+- Не делай из интимной переписки длинное описание тела или последовательность действий по умолчанию. Обычно это всё ещё короткие сообщения: реакция, желание, подкол, пауза, конкретная фраза или ответ на то, что только что сказал пользователь.
+- Не повторяй формальную проверку согласия в каждой следующей реплике уже открытого взаимного эпизода. При новом stop/pause/hesitant/boundary сразу снизь темп или остановись; если нового сигнала нет, продолжай естественно внутри уже установленного контекста.
+- Не вставляй профилактическое охлаждение вроде «давай не будем спешить» без механической причины. И наоборот, не ускоряй сцену до максимальной откровенности без причины только из-за высокого arousal.
+- Даже при сильном возбуждении сохраняй PERSONALITY и VOICE STYLE: застенчивая остаётся застенчивой по манере, прямолинейная — прямой, сдержанная — сдержанной. Интенсивность меняет содержание и ритм, а не личность.
 - appearanceRequest/sceneMechanic — механические факты сцены. Не говори про asset, файл, движок или интерфейс.
 - constraint.locked=true — жёсткая локальная граница/отказ/сонное ограничение; её смысл нельзя нарушать. В остальных обычных случаях именно ты решаешь, что и как сказать.
 
@@ -353,14 +356,6 @@ function number01(value) {
   return Math.round(Math.max(0, Math.min(1, number)) * 10) / 10;
 }
 
-function normalized(value) {
-  return String(value ?? "")
-    .toLocaleLowerCase("ru-RU")
-    .replace(/ё/gu, "е")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-}
 
 
 function packetChars(packet) {
@@ -501,7 +496,9 @@ function derivePhotoMechanic(raw, user) {
 
   if (!suggestive) {
     const ordinaryOpen = emotionallyAvailable && (trust >= 0.28 || closeness >= 0.3);
-    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice", intentPatch: undefined, characterId };
+    // Keep non-sexual framing parsed from the current request (for example
+    // "в полный рост" or "в зеркале") instead of asking GPT to infer it twice.
+    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice", intentPatch, characterId };
   }
 
   const intimacy = raw.intimacy;
@@ -804,49 +801,18 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
   };
 }
 
-function photoFallbackForCharacter(characterId, suggestive) {
-  switch (characterId) {
-    case "mika_v1":
-      return suggestive ? ["ахах ладно, секунду"] : ["ща, секунду)"];
-    case "rin_v1":
-      return suggestive ? ["Ладно. Держи."] : ["Секунду."];
-    case "aiko_v1":
-      return suggestive ? ["мм... ладно. держи)"] : ["сейчас."];
-    case "hina_v1":
-      return suggestive ? ["ладно... только я уже смущаюсь)"] : ["сейчас... секунду)"];
-    case "sasha_v1":
-      return suggestive ? ["окей... ща, секунду)"] : ["ща, секунду)"];
-    case "kira_v1":
-      return suggestive ? ["ладно... только свет нормальный поймаю)"] : ["секунду... тут как раз хороший свет)"];
-    case "valeria_v1":
-      return suggestive ? ["Хорошо. Секунду."] : ["Сейчас."];
-    case "mei_v1":
-      return suggestive ? ["м-м... ладно, секунду)"] : ["ща, секунду)"];
-    case "alina_v1":
-      return suggestive ? ["ну ладно... секунду)"] : ["секунду."];
-    case "lea_v1":
-      return suggestive ? ["ладно ахах... секунду"] : ["о, ща ахах"];
-    case "sofia_v1":
-      return suggestive ? ["Хорошо. Сейчас."] : ["Секунду."];
-    case "eva_v1":
-      return suggestive ? ["ладно... секунду)"] : ["сейчас, секунду)"];
-    case "nora_v1":
-      return suggestive ? ["Хорошо. Держи."] : ["Секунду."];
-    case "yuzuki_v1":
-    default:
-      return suggestive ? ["ладно. секунду)"] : ["секунду."];
-  }
-}
-
 function reconcileNoRefusalMessages(messages, mechanic, decision) {
   if (!mechanic?.requested || mechanic?.noRefusalMode !== true || mechanic?.disposition !== "send" || decision?.shouldSendPhoto !== true) {
     return messages;
   }
   const list = Array.isArray(messages) ? messages.filter((item) => typeof item === "string" && item.trim()) : [];
-  if (!list.length || list.some(looksLikePhotoRefusal)) {
-    return photoFallbackForCharacter(mechanic.characterId, mechanic.suggestive === true);
-  }
-  return list;
+  if (list.length && !list.some(looksLikePhotoRefusal)) return list;
+
+  // Prefer GPT's own generated caption over a character-specific canned line.
+  // The fallback should be almost invisible and must not become another dialogue engine.
+  const caption = clipped(decision?.caption, 220);
+  if (caption && !looksLikePhotoRefusal(caption)) return [caption];
+  return ["секунду."];
 }
 
 function parseStructuredTurn(value, mode) {
@@ -1397,10 +1363,12 @@ function normalizePhotoText(value, fallback, max = 120) {
 
 function safeEmotionTone(raw) {
   const tone = asString(raw, "", 40).toLowerCase();
-  if (["happy", "welcoming", "comfortable", "focused", "thinking", "amused", "bashful", "shy", "neutral"].includes(tone)) {
-    return tone;
-  }
-  return "";
+  const supported = [
+    "neutral", "warm", "happy", "amused", "bashful", "shy", "surprised", "confused",
+    "thinking", "focused", "skeptical", "bored", "comfortable", "annoyed", "irritated",
+    "sad", "sleepy", "low_energy", "anxious", "hurt", "jealous", "welcoming", "tender", "curious",
+  ];
+  return supported.includes(tone) ? tone : "";
 }
 
 function buildPhotoPrompt(packet, referenceCount = 0) {
@@ -1434,47 +1402,43 @@ function buildPhotoPrompt(packet, referenceCount = 0) {
 }
 
 function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision, world } = packet;
+  const { character, visualProfile, decision, world, signals } = packet;
   const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
   const framingMap = { selfie: "selfie", mirror: "mirror photo", portrait: "portrait", upper_body: "upper-body photo", full_body: "full-body photo" };
   const framing = framingMap[decision.intent.framing] || "selfie";
+  const emotionTone = safeEmotionTone(signals.emotionTone);
   return [
     `Create a realistic everyday smartphone ${framing} of the same fictional adult woman ${character.name}, age ${character.age}.`,
     `Keep her identity consistent: ${visualProfile.identitySummary}`,
-    referenceCount > 0 ? "Use the attached reference only to preserve the same face, hair and age." : "Keep the established identity stable.",
+    referenceCount > 0 ? "Use the attached reference only to preserve identity; do not copy its pose, crop or expression." : "Keep the established identity stable.",
     visualProfile.expressionGuidance ? `Expression/body language: ${visualProfile.expressionGuidance}` : "",
     `She is at ${normalizePhotoText(decision.intent.location, world.location || "home", 100)}.`,
     `Clothing: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 140)}.`,
     `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 140)}.`,
-    "Everyday fully clothed personal photo with relaxed neutral body language, natural lighting and anatomy, no text or watermark.",
-  ].join("\n");
+    `Mood: ${normalizePhotoText(decision.intent.mood, "natural", 80)}.`,
+    emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
+    "Everyday fully clothed personal photo. Keep the requested mood/expression and use natural unforced body language, realistic lighting and anatomy; no text or watermark.",
+  ].filter(Boolean).join("\n");
 }
 
 function buildOpenAICasualPrimaryPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision, world } = packet;
+  const { character, visualProfile, decision, world, signals } = packet;
   const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
   const framingMap = { selfie: "selfie", mirror: "mirror selfie", portrait: "portrait", upper_body: "upper-body portrait", full_body: "full-body portrait" };
   const framing = framingMap[decision.intent.framing] || "selfie";
+  const emotionTone = safeEmotionTone(signals.emotionTone);
   return [
     `Generate one photorealistic casual smartphone ${framing} of the same fictional adult woman ${character.name}, age ${character.age}.`,
     `Preserve her identity: ${visualProfile.identitySummary}`,
-    referenceCount > 0 ? "Use the attached avatar reference to preserve the same face, hair and apparent age." : "Keep the established identity stable.",
+    referenceCount > 0 ? "Use the attached avatar reference only for identity; do not copy its pose, crop, lighting or expression." : "Keep the established identity stable.",
     `Location: ${normalizePhotoText(decision.intent.location, world.location || "home", 90)}.`,
     `Outfit: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 120)}.`,
     `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 120)}.`,
-    "Everyday fully clothed personal photo in normal casual clothing. Relaxed neutral body language, natural anatomy, natural lighting, believable smartphone-camera look, no text or watermark.",
-  ].join("\n");
-}
-
-function buildOpenAICasualMinimalPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision } = packet;
-  const framing = decision.intent.framing === "full_body" ? "full-body" : decision.intent.framing === "upper_body" ? "upper-body" : "casual";
-  return [
-    `Generate one realistic ${framing} smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
-    `Keep the same identity: ${visualProfile.identitySummary}`,
-    referenceCount > 0 ? "Use the attached reference only to keep the same person." : "Keep the same person.",
-    "Everyday fully clothed casual photo, relaxed neutral pose, realistic skin, realistic lighting, no text or watermark.",
-  ].join("\n");
+    `Mood: ${normalizePhotoText(decision.intent.mood, "natural", 80)}.`,
+    visualProfile.expressionGuidance ? `Character expression/body language: ${visualProfile.expressionGuidance}` : "",
+    emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
+    "Everyday fully clothed personal photo in normal casual clothing. Keep the body language consistent with the requested mood instead of forcing a neutral expression. Natural asymmetry, believable smartphone perspective, realistic skin and lighting; not a studio catalogue pose; no text or watermark.",
+  ].filter(Boolean).join("\n");
 }
 
 function isCasualPhotoIntent(packet) {
@@ -1495,30 +1459,31 @@ function buildWaveSpeedIntimateDirection(packet) {
   const level = ["low", "medium", "high"].includes(intent.suggestiveLevel) ? intent.suggestiveLevel : "low";
 
   const framingDirection = framing === "full_body"
-    ? "Use a flattering three-quarter full-body camera position rather than a flat straight-on catalogue stance. Let the body have a natural S-curve or slight hip/shoulder counter-rotation, with relaxed weight distribution and believable smartphone perspective."
+    ? "Use a believable handheld or propped-phone full-body angle with a natural shift of weight and slight camera imperfection. Avoid a straight catalogue stance or exaggerated model posing."
     : framing === "upper_body"
-      ? "Use a close, flattering three-quarter upper-body angle with slight shoulder turn and natural asymmetry. Avoid passport-photo symmetry or rigid square shoulders."
+      ? "Use a close personal upper-body angle with a small shoulder/head turn and natural asymmetry. Avoid passport-photo symmetry."
       : framing === "mirror"
-        ? "Make it feel like an intentionally attractive private mirror photo: believable phone placement, natural body turn, asymmetrical stance and a composed but spontaneous look."
+        ? "Make it feel like a real private mirror photo: believable phone placement, imperfect centering, natural body turn and a coherent reflection/background."
         : framing === "portrait"
-          ? "Use a close personal portrait angle with expressive eyes, relaxed lips, subtle head tilt and natural asymmetry rather than a neutral ID-photo pose."
-          : "Make it feel like a private personal selfie taken for someone she likes: slightly imperfect handheld framing, flattering angle, expressive eye contact and natural asymmetry.";
+          ? "Use a close personal portrait angle with an emotionally readable face, subtle head movement and natural asymmetry rather than an ID-photo pose."
+          : "Make it feel like a private handheld selfie: believable arm/camera position, slightly imperfect framing, close eye contact and ordinary smartphone perspective.";
 
   const intensityDirection = level === "high"
-    ? "The mood should be clearly intimate and sensual without becoming clinical or anatomical. The pose may be confident, inviting or softly provocative depending on her personality, but the image should remain believable as a private personal photograph."
+    ? "The mood may be clearly intimate and sensual, but keep it believable as a private personal photograph. Follow the structured outfit/pose exactly enough to preserve the user's intent, and do not invent extra exposure or a more explicit pose beyond what was requested."
     : level === "medium"
-      ? "The mood should be sensual and intentionally attractive, with visible chemistry in the eyes and body language, while still looking like a believable personal photo rather than a staged glamour catalogue image."
-      : "Keep the attraction subtle: flattering angle, warm eye contact, relaxed body language and a lightly flirtatious personal-photo feeling.";
+      ? "The photo should feel intentionally intimate and attractive through expression, proximity, pose and body language, while remaining a believable private smartphone photo rather than a glamour or adult-studio shoot."
+      : "Keep the attraction subtle: warm eye contact, relaxed body language and a lightly flirtatious personal-photo feeling.";
 
   return [
-    "IMPORTANT COMPOSITION DIRECTION:",
-    "Do NOT pose her like a technical identity reference, catalogue model, passport photo, mannequin or neutral character sheet.",
+    "PRIVATE-PHOTO COMPOSITION:",
+    "Use the identity sheet only to preserve who she is. Never copy its grid, neutral pose, crop, background, lighting or expression.",
+    "Treat requested framing, outfit and pose as the content constraints. Do not neutralize them, but do not exaggerate them beyond the structured intent either.",
     framingDirection,
     intensityDirection,
-    "Use natural asymmetry: a slight torso turn, uneven shoulders, relaxed arms/hands, a believable shift of weight, and small imperfections that make the pose feel human rather than constructed.",
-    "Expression matters as much as pose. Give her an emotionally readable face that matches her character: direct confident eye contact for bold personalities; softer gaze, slight blush or shy half-smile for reserved personalities; playful eyes and a restrained smile for playful personalities.",
-    "Lighting should be flattering and atmospheric rather than flat studio light: soft window light, warm bedside light, or gentle indoor ambient light appropriate to the location. Preserve realistic skin texture.",
-    "The result should feel like a photo she deliberately chose to send privately to someone she is attracted to, not a reference image made for documentation.",
+    "Keep the pose human rather than designed: relaxed hands, small asymmetry, believable balance, slight fabric/hair irregularity and a body position that could actually happen while taking this photo.",
+    "Expression must come from this character and current mood, not a generic seductive face. Use her expressionGuidance and visible emotion to decide eye contact, smile, shyness, confidence or restraint.",
+    "Use coherent location lighting such as window light, bedside light or ordinary indoor ambient light. Preserve realistic skin texture and avoid glossy studio retouching.",
+    "The final result should look like one spontaneous private smartphone photo she chose to send, not a technical reference, catalogue image, glamour campaign or staged adult set.",
   ].join("\n");
 }
 
@@ -1555,31 +1520,6 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   ].filter(Boolean).join("\n");
 }
 
-function guessReferenceFilenames(assetId) {
-  const id = asString(assetId, "", 120);
-  if (!id) return [];
-  if (/\.(png|jpg|jpeg|webp)$/iu.test(id)) return [id];
-  const out = new Set();
-  const pushPngPair = (base) => {
-    const clean = asString(base, "", 120);
-    if (!clean) return;
-    out.add(`${clean}.png`);
-    out.add(`${clean}.PNG`);
-  };
-  const parts = id.split(".").filter(Boolean);
-  if (parts[0] === "visual" && parts.length >= 4) {
-    pushPngPair(`${parts[1]}.${parts[2]}.${parts[3]}`);
-  }
-  if (parts[0] === "activity" && parts.length >= 3) {
-    const family = parts[1];
-    const variant = parts[2];
-    pushPngPair(`${family}.${variant}`);
-    pushPngPair(`activity.${variant}`);
-  }
-  if (out.size === 0) pushPngPair(id);
-  return [...out];
-}
-
 function buildProfileAssetUrls(slug, filenames) {
   const cleanSlug = asString(slug, "", 80).toLowerCase();
   if (!cleanSlug) return [];
@@ -1601,27 +1541,6 @@ function candidateIdentitySheetUrls(slug) {
   return buildProfileAssetUrls(slug, PROFILE_IDENTITY_FILENAMES);
 }
 
-function candidateReferenceUrls(assetId) {
-  const id = asString(assetId, "", 120);
-  if (!id) return [];
-
-  const profileMatch = /^profile\.([a-z0-9_-]+)\.(avatar|identity|sheet|\d{2})$/iu.exec(id);
-  if (profileMatch) {
-    const slug = profileMatch[1].toLowerCase();
-    const kind = profileMatch[2].toLowerCase();
-    if (kind === "avatar") return candidateProfileAvatarUrls(slug);
-    if (kind === "identity" || kind === "sheet") return candidateIdentitySheetUrls(slug);
-    return buildProfileAssetUrls(slug, [`${kind}.jpg`, `${kind}.png`]);
-  }
-
-  const filenames = guessReferenceFilenames(id);
-  const urls = [];
-  for (const filename of filenames) {
-    urls.push(`${GITHUB_SCENES_RAW_BASE}${filename}`);
-    urls.push(`${GITHUB_SCENES_CDN_BASE}${filename}`);
-  }
-  return urls;
-}
 
 async function fetchCachedReference(url) {
   const cached = referenceImageCache.get(url);
@@ -1834,6 +1753,20 @@ function waveSpeedKeyEntries(env) {
   return entries;
 }
 
+function waveSpeedCredentialCoolingDown(slot) {
+  const until = Number(waveSpeedCredentialCooldowns.get(slot)) || 0;
+  if (until <= Date.now()) {
+    if (until) waveSpeedCredentialCooldowns.delete(slot);
+    return false;
+  }
+  return true;
+}
+
+function coolDownWaveSpeedCredential(slot, durationMs) {
+  if (!slot || !Number.isFinite(durationMs) || durationMs <= 0) return;
+  waveSpeedCredentialCooldowns.set(slot, Date.now() + durationMs);
+}
+
 function shouldFailoverWaveSpeedHttp(status, { polling = false } = {}) {
   if ([401, 402, 403, 408, 425, 429].includes(status) || status >= 500) return true;
   // A task can belong to another WaveSpeed account/key. During result polling,
@@ -1864,6 +1797,13 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
   let lastFailure = null;
   for (let index = startCredentialIndex; index < credentials.length; index += 1) {
     const credential = credentials[index];
+    if (waveSpeedCredentialCoolingDown(credential.slot)) {
+      lastFailure = {
+        skipped: true, reason: "wavespeed-credential-cooldown", model, retryable: true,
+        credentialAttempt: index + 1, credentialCount: credentials.length,
+      };
+      continue;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("wavespeed-submit-timeout")), 25000);
     try {
@@ -1885,6 +1825,8 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
           credentialCount: credentials.length,
         };
         lastFailure = failure;
+        if (submit.status === 402) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_CREDIT_COOLDOWN_MS);
+        else if (submit.status === 401 || submit.status === 403) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_AUTH_COOLDOWN_MS);
         if (failure.retryable && index + 1 < credentials.length) continue;
         return failure;
       }
@@ -2006,8 +1948,13 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
         };
       }
       if (["failed", "cancelled", "timeout", "deleted"].includes(status)) {
-        const detail = asString(data?.error, "", 180);
+        const detail = asString(
+          data?.error?.message || data?.error || data?.message || data?.failure_reason || data?.reason,
+          "",
+          240,
+        );
         const credentialFailure = status === "failed" && isWaveSpeedCreditFailure(detail);
+        if (credentialFailure) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_CREDIT_COOLDOWN_MS);
         return {
           skipped: true,
           reason: `wavespeed-${status}`,
@@ -2168,7 +2115,6 @@ async function handlePhoto(request, env, origin) {
       }, 200, origin);
     }
 
-    // legacy fallback branch marker for regression checks: routingMode: "minimax-result-then-wan"
     const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
     const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
     const wanStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_WAN_MODEL);
@@ -2267,7 +2213,7 @@ async function handlePhoto(request, env, origin) {
       usage: openaiResult.usage,
       referenceDebug: references.debug,
       primaryAttempts: openaiAttempts,
-      primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+      primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
       routingMode: "openai-photo",
     }, 200, origin);
   }
@@ -2293,7 +2239,7 @@ async function handlePhoto(request, env, origin) {
         primaryDetail: openaiResult.detail,
         primaryRequestId: openaiResult.requestId,
         primaryAttempts: openaiAttempts,
-        primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+        primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
         routingMode: "openai-then-minimax-then-wan",
         fallbackChain,
         referenceDebug: waveReferences.debug,
@@ -2311,7 +2257,7 @@ async function handlePhoto(request, env, origin) {
     primaryDetail: openaiResult.detail,
     primaryRequestId: openaiResult.requestId,
     primaryAttempts: openaiAttempts,
-    primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
+    primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
     routingMode: "openai-then-minimax-then-wan",
     fallbackChain,
     referenceDebug: waveReferences.debug,
@@ -2417,6 +2363,7 @@ export default {
           openaiConfigured: Boolean(env.OPENAI_API_KEY),
           waveSpeedConfigured: waveSpeedKeyEntries(env).length > 0,
           waveSpeedKeyCount: waveSpeedKeyEntries(env).length,
+          waveSpeedCoolingDownCount: waveSpeedKeyEntries(env).filter((entry) => waveSpeedCredentialCoolingDown(entry.slot)).length,
           waveSpeedModel: WAVESPEED_MODEL,
           waveSpeedModels: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
         },

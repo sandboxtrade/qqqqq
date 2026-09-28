@@ -1,0 +1,53 @@
+Game2 / Virtual Companion — cleanup findings for v0.20.32
+
+SAFE TO DELETE FROM THE REPOSITORY NOW (not used by the production build):
+- tsconfig.node.tsbuildinfo  (generated build artifact; already covered by *.tsbuildinfo in .gitignore)
+- __external-stubs.d.ts     (temporary offline audit stubs, not referenced by normal tsconfig/package scripts)
+- tsconfig.socialcheck.json (temporary offline audit config, not referenced by normal tsconfig/package scripts)
+- PATCH_README_v0.20.8.txt
+- PATCH_README_v0.20.9.txt
+- old RELEASE_v0.20.*.md files after you have kept/committed RELEASE_v0.20.32.md
+- old START_MESSAGE_NEW_CHAT_v0.20.*.txt files
+- old FULL_ARCHIVE_NOTES_v0.20.*.txt files
+- docs/HISTORY.md if you do not want historical project notes in the working repository (runtime never reads it)
+
+KEEP:
+- README.md (rewritten for current architecture)
+- docs/ARCHITECTURE.md (rewritten)
+- docs/FIREBASE.md (rewritten)
+- docs/LOCAL_ENGINE.md (rewritten as current local-state boundary note)
+- YUZUKI_VOICE.md (rewritten as current pointer to active prompt/voice sources)
+- REFERENCE_FOLDERS.txt
+- all protected Firebase/Auth/live-sync files
+
+PRODUCTION-UNREACHABLE LEGACY SOURCE (41/62 TS/TSX files are reachable from src/main.tsx; these 21 are not):
+- src/ai/gemini-client.ts
+- src/ai/perception-client.ts
+- src/avatar/AssetScene.tsx
+- src/avatar/LivePhoto.tsx
+- src/cognition/local-cognition.ts
+- src/cognition/state-effects.ts
+- src/config/state-effects.ts
+- src/dialogue/dialogue.ts
+- src/local-dialogue/continuity.ts
+- src/local-dialogue/core.ts
+- src/local-dialogue/index.ts
+- src/local-dialogue/language-pack.ts
+- src/local-dialogue/nlu.ts
+- src/local-dialogue/planner.ts
+- src/local-dialogue/renderer.ts
+- src/local-dialogue/types.ts
+- src/memory/memory-consolidation.ts
+- src/memory/retrieval.ts
+- src/memory/semantic-extraction.ts
+- src/ui/CharacterStage.tsx
+- src/ui/SecondaryScreens.tsx
+
+Also tied to the legacy local-dialogue stack:
+- src/local-dialogue/language/ru/concepts.json
+- src/local-dialogue/language/ru/intents.json
+- src/local-dialogue/language/ru/lexicon.json
+- src/local-dialogue/language/ru/reactions.json
+- src/local-dialogue/language/ru/templates.json
+
+DO NOT delete that legacy source piecemeal yet if you want the current legacy regression suite to keep running: tests/regression.mjs, tests/local-dialogue.mjs, tests/benchmark-local.mjs and tests/ai-transport.mjs still intentionally import/read parts of it. It is absent from the production import graph, so leaving it temporarily does not put the old planner/renderer back into runtime dialogue. A later dedicated cleanup commit should delete the legacy source and remove only its legacy tests at the same time.

@@ -54,13 +54,7 @@ assert.match(chat, /message\.kind === "image"/);
 assert.match(worker, /CURRENT CHARACTER/);
 assert.match(worker, /raw\.character\?\.name/);
 assert.match(worker, /occupied\/personal_project\/reading\/music\/cooking\/errands/);
-assert.match(worker, /photoFallbackForCharacter/);
-assert.match(worker, /case "mika_v1"/);
-assert.match(worker, /case "nora_v1"/);
-assert.match(worker, /case "sasha_v1"/);
-assert.match(worker, /case "kira_v1"/);
-assert.match(worker, /case "valeria_v1"/);
-assert.match(worker, /case "mei_v1"/);
-assert.match(worker, /case "alina_v1"/);
+assert.match(worker, /reconcileNoRefusalMessages/);
+assert.match(worker, /Prefer GPT\'s own generated caption/);
 
 console.log("PASS social architecture foundation");
