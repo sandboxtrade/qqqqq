@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.32 audited photo/dialogue routing: natural dialogue, prompt cleanup, OpenAI -> MiniMax H3 -> WAN 2.6, WaveSpeed multi-key failover
+// v0.20.33 photo reliability audit: strict identity references, bounded WaveSpeed multi-key polling/submission, resilient fallback routing
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -55,6 +55,15 @@ const OPENAI_IMAGE_TIMEOUT_MS = 55_000;
 const OPENAI_CASUAL_RETRY_DELAY_MS = 600;
 const OPENAI_STANDARD_RETRY_DELAY_MS = 900;
 const MINIMAX_PENDING_FALLBACK_AFTER_MS = 45_000;
+const REFERENCE_FETCH_TIMEOUT_MS = 6_000;
+const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BYTES = 16 * 1024 * 1024;
+const MAX_OPENAI_BASE64_CHARS = 22_000_000;
+const WAVESPEED_SUBMIT_KEY_TIMEOUT_MS = 10_000;
+const WAVESPEED_SUBMIT_TOTAL_BUDGET_MS = 30_000;
+const WAVESPEED_RESULT_KEY_TIMEOUT_MS = 4_000;
+const WAVESPEED_RESULT_TOTAL_BUDGET_MS = 14_000;
+const WAVESPEED_OUTPUT_TIMEOUT_MS = 7_000;
 const PROFILE_IDENTITY_FILENAMES = ["identity-sheet.jpg", "identity-sheet.jpeg", "identity-sheet.png", "identity_sheet.jpg", "identity_sheet.png"];
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
@@ -1546,18 +1555,29 @@ async function fetchCachedReference(url) {
   const cached = referenceImageCache.get(url);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached;
-  const response = await fetch(url, { cf: { cacheTtl: 300, cacheEverything: true } });
-  if (!response.ok) return null;
-  const contentType = asString(response.headers.get("content-type"), "image/png", 80) || "image/png";
-  const bytes = await response.arrayBuffer();
-  if (!bytes || !bytes.byteLength) return null;
-  const entry = { bytes, contentType, expiresAt: now + REFERENCE_IMAGE_TTL_MS };
-  referenceImageCache.set(url, entry);
-  if (referenceImageCache.size > 24) {
-    const firstKey = referenceImageCache.keys().next().value;
-    if (firstKey) referenceImageCache.delete(firstKey);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("reference-fetch-timeout")), REFERENCE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { cf: { cacheTtl: 300, cacheEverything: true }, signal: controller.signal });
+    if (!response.ok) return null;
+    const contentType = asString(response.headers.get("content-type"), "", 80).toLowerCase();
+    if (!contentType.startsWith("image/")) return null;
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_REFERENCE_BYTES) return null;
+    const bytes = await response.arrayBuffer();
+    if (!bytes || !bytes.byteLength || bytes.byteLength > MAX_REFERENCE_BYTES) return null;
+    const entry = { bytes, contentType, expiresAt: now + REFERENCE_IMAGE_TTL_MS };
+    referenceImageCache.set(url, entry);
+    if (referenceImageCache.size > 24) {
+      const firstKey = referenceImageCache.keys().next().value;
+      if (firstKey) referenceImageCache.delete(firstKey);
+    }
+    return entry;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-  return entry;
 }
 
 function extFromContentType(contentType) {
@@ -1637,6 +1657,7 @@ async function loadReferenceBundle(packet, options = {}) {
 }
 
 async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "auto") {
+  if (!env.OPENAI_API_KEY) return { skipped: true, reason: "openai-image-not-configured" };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("openai-image-timeout")), OPENAI_IMAGE_TIMEOUT_MS);
   try {
@@ -1704,8 +1725,10 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
       };
     }
     const item = Array.isArray(body?.data) ? body.data[0] : null;
-    const b64 = asString(item?.b64_json || item?.b64, "", 10_000_000);
+    const rawB64 = typeof item?.b64_json === "string" ? item.b64_json : (typeof item?.b64 === "string" ? item.b64 : "");
+    const b64 = rawB64.replace(/\s+/gu, "").trim();
     if (!b64) return { skipped: true, reason: "openai-image-empty" };
+    if (b64.length > MAX_OPENAI_BASE64_CHARS) return { skipped: true, reason: "openai-image-too-large" };
     const mimeType = asString(item?.mime_type, "image/webp", 40) || "image/webp";
     const usage = body?.usage && typeof body.usage === "object"
       ? {
@@ -1730,6 +1753,15 @@ async function callOpenAIImage(env, prompt, referenceFiles = [], moderation = "a
   }
 }
 
+function waveSpeedCredentialId(key) {
+  let hash = 2166136261;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `ws-${key.length}-${(hash >>> 0).toString(16)}`;
+}
+
 function waveSpeedKeyEntries(env) {
   const entries = [];
   const seen = new Set();
@@ -1737,7 +1769,7 @@ function waveSpeedKeyEntries(env) {
     const key = typeof value === "string" ? value.trim() : "";
     if (!key || seen.has(key)) return;
     seen.add(key);
-    entries.push({ key, slot });
+    entries.push({ key, slot, credentialId: waveSpeedCredentialId(key) });
   };
 
   add(env.WAVESPEED_API_KEY, "primary");
@@ -1753,18 +1785,18 @@ function waveSpeedKeyEntries(env) {
   return entries;
 }
 
-function waveSpeedCredentialCoolingDown(slot) {
-  const until = Number(waveSpeedCredentialCooldowns.get(slot)) || 0;
+function waveSpeedCredentialCoolingDown(credentialId) {
+  const until = Number(waveSpeedCredentialCooldowns.get(credentialId)) || 0;
   if (until <= Date.now()) {
-    if (until) waveSpeedCredentialCooldowns.delete(slot);
+    if (until) waveSpeedCredentialCooldowns.delete(credentialId);
     return false;
   }
   return true;
 }
 
-function coolDownWaveSpeedCredential(slot, durationMs) {
-  if (!slot || !Number.isFinite(durationMs) || durationMs <= 0) return;
-  waveSpeedCredentialCooldowns.set(slot, Date.now() + durationMs);
+function coolDownWaveSpeedCredential(credentialId, durationMs) {
+  if (!credentialId || !Number.isFinite(durationMs) || durationMs <= 0) return;
+  waveSpeedCredentialCooldowns.set(credentialId, Date.now() + durationMs);
 }
 
 function shouldFailoverWaveSpeedHttp(status, { polling = false } = {}) {
@@ -1778,6 +1810,14 @@ function shouldFailoverWaveSpeedHttp(status, { polling = false } = {}) {
 function isWaveSpeedCreditFailure(detail) {
   const value = String(detail || "").toLowerCase();
   return /top[ -]?up|insufficient (?:balance|credit|credits|funds)|low balance|out of (?:credit|credits)|balance.*required|credit.*required|payment required|billing/.test(value);
+}
+
+function waveSpeedErrorDetail(body, max = 240) {
+  return asString(
+    body?.error?.message || body?.error?.detail || body?.message || body?.detail || body?.error || body?.failure_reason || body?.reason,
+    "",
+    max,
+  );
 }
 
 async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAVESPEED_MODEL, options = {}) {
@@ -1794,10 +1834,13 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
     : { prompt, images, aspect_ratio: "2:3", resolution: "1k", output_format: "webp" };
 
   const startCredentialIndex = Math.max(0, Math.min(credentials.length - 1, Number(options.startCredentialIndex) || 0));
+  const submitStartedAt = Date.now();
   let lastFailure = null;
   for (let index = startCredentialIndex; index < credentials.length; index += 1) {
+    const remainingBudget = WAVESPEED_SUBMIT_TOTAL_BUDGET_MS - (Date.now() - submitStartedAt);
+    if (remainingBudget <= 0) break;
     const credential = credentials[index];
-    if (waveSpeedCredentialCoolingDown(credential.slot)) {
+    if (waveSpeedCredentialCoolingDown(credential.credentialId)) {
       lastFailure = {
         skipped: true, reason: "wavespeed-credential-cooldown", model, retryable: true,
         credentialAttempt: index + 1, credentialCount: credentials.length,
@@ -1805,7 +1848,10 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
       continue;
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("wavespeed-submit-timeout")), 25000);
+    const timer = setTimeout(
+      () => controller.abort(new Error("wavespeed-submit-timeout")),
+      Math.max(1, Math.min(WAVESPEED_SUBMIT_KEY_TIMEOUT_MS, remainingBudget)),
+    );
     try {
       const submit = await fetch(endpoint, {
         method: "POST",
@@ -1818,15 +1864,15 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
         const failure = {
           skipped: true,
           reason: `wavespeed-http-${submit.status}`,
-          detail: asString(submitBody?.message || submitBody?.error, "", 180),
+          detail: waveSpeedErrorDetail(submitBody, 180),
           model,
           retryable: shouldFailoverWaveSpeedHttp(submit.status),
           credentialAttempt: index + 1,
           credentialCount: credentials.length,
         };
         lastFailure = failure;
-        if (submit.status === 402) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_CREDIT_COOLDOWN_MS);
-        else if (submit.status === 401 || submit.status === 403) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_AUTH_COOLDOWN_MS);
+        if (submit.status === 402) coolDownWaveSpeedCredential(credential.credentialId, WAVESPEED_CREDIT_COOLDOWN_MS);
+        else if (submit.status === 401 || submit.status === 403) coolDownWaveSpeedCredential(credential.credentialId, WAVESPEED_AUTH_COOLDOWN_MS);
         if (failure.retryable && index + 1 < credentials.length) continue;
         return failure;
       }
@@ -1857,22 +1903,34 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
     }
   }
 
-  return lastFailure || { skipped: true, reason: "wavespeed-unavailable", model, retryable: true };
+  if (lastFailure) return lastFailure;
+  return { skipped: true, reason: "wavespeed-submit-budget-exhausted", model, retryable: true };
 }
 
 async function downloadWaveSpeedOutput(url) {
   let lastReason = "wavespeed-output-fetch-failed";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("wavespeed-output-timeout")), 30000);
+    const timer = setTimeout(() => controller.abort(new Error("wavespeed-output-timeout")), WAVESPEED_OUTPUT_TIMEOUT_MS);
     try {
       const imageResponse = await fetch(url, { signal: controller.signal });
       if (!imageResponse.ok) {
         lastReason = `wavespeed-output-http-${imageResponse.status}`;
         continue;
       }
-      const mimeType = imageResponse.headers.get("Content-Type") || "image/webp";
+      const mimeType = asString(imageResponse.headers.get("Content-Type"), "", 80).toLowerCase();
+      if (!mimeType.startsWith("image/")) {
+        lastReason = "wavespeed-output-invalid-content-type";
+        continue;
+      }
+      const declaredLength = Number(imageResponse.headers.get("Content-Length"));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_GENERATED_IMAGE_BYTES) {
+        return { skipped: true, reason: "wavespeed-output-too-large" };
+      }
       const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+      if (!bytes.byteLength || bytes.byteLength > MAX_GENERATED_IMAGE_BYTES) {
+        return { skipped: true, reason: bytes.byteLength ? "wavespeed-output-too-large" : "wavespeed-output-empty" };
+      }
       let binary = "";
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       return { ok: true, dataUrl: `data:${mimeType};base64,${btoa(binary)}`, mimeType };
@@ -1881,12 +1939,12 @@ async function downloadWaveSpeedOutput(url) {
     } finally {
       clearTimeout(timer);
     }
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
   return { skipped: true, reason: lastReason };
 }
 
-async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
+async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL, options = {}) {
   const credentials = waveSpeedKeyEntries(env);
   if (!credentials.length) return { skipped: true, reason: "wavespeed-not-configured", model, taskId };
   const id = asString(taskId, "", 200);
@@ -1894,11 +1952,22 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
     return { skipped: true, reason: "wavespeed-invalid-task-id", model };
   }
 
+  const preferredAttempt = Math.round(Number(options.preferredCredentialAttempt) || 0);
+  const preferredIndex = preferredAttempt >= 1 && preferredAttempt <= credentials.length ? preferredAttempt - 1 : -1;
+  const credentialOrder = preferredIndex >= 0
+    ? [preferredIndex, ...credentials.map((_, index) => index).filter((index) => index !== preferredIndex)]
+    : credentials.map((_, index) => index);
+  const resultStartedAt = Date.now();
   let lastFailure = null;
-  for (let index = 0; index < credentials.length; index += 1) {
+  for (const index of credentialOrder) {
+    const remainingBudget = WAVESPEED_RESULT_TOTAL_BUDGET_MS - (Date.now() - resultStartedAt);
+    if (remainingBudget <= 0) break;
     const credential = credentials[index];
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("wavespeed-result-timeout")), 20000);
+    const timer = setTimeout(
+      () => controller.abort(new Error("wavespeed-result-timeout")),
+      Math.max(1, Math.min(WAVESPEED_RESULT_KEY_TIMEOUT_MS, remainingBudget)),
+    );
     try {
       const poll = await fetch(`${WAVESPEED_RESULT_BASE}/${encodeURIComponent(id)}/result`, {
         headers: { Authorization: `Bearer ${credential.key}` },
@@ -1909,7 +1978,7 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
         const failure = {
           skipped: true,
           reason: `wavespeed-result-http-${poll.status}`,
-          detail: asString(pollBody?.message || pollBody?.error, "", 180),
+          detail: waveSpeedErrorDetail(pollBody, 180),
           model,
           taskId: id,
           retryable: shouldFailoverWaveSpeedHttp(poll.status, { polling: true }),
@@ -1917,7 +1986,8 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
           credentialCount: credentials.length,
         };
         lastFailure = failure;
-        if (failure.retryable && index + 1 < credentials.length) continue;
+        if (poll.status === 401 || poll.status === 403) coolDownWaveSpeedCredential(credential.credentialId, WAVESPEED_AUTH_COOLDOWN_MS);
+        if (failure.retryable) continue;
         return failure;
       }
 
@@ -1948,13 +2018,9 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
         };
       }
       if (["failed", "cancelled", "timeout", "deleted"].includes(status)) {
-        const detail = asString(
-          data?.error?.message || data?.error || data?.message || data?.failure_reason || data?.reason,
-          "",
-          240,
-        );
+        const detail = waveSpeedErrorDetail(data, 240);
         const credentialFailure = status === "failed" && isWaveSpeedCreditFailure(detail);
-        if (credentialFailure) coolDownWaveSpeedCredential(credential.slot, WAVESPEED_CREDIT_COOLDOWN_MS);
+        if (credentialFailure) coolDownWaveSpeedCredential(credential.credentialId, WAVESPEED_CREDIT_COOLDOWN_MS);
         return {
           skipped: true,
           reason: `wavespeed-${status}`,
@@ -1978,14 +2044,13 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL) {
         credentialAttempt: index + 1,
         credentialCount: credentials.length,
       };
-      if (index + 1 < credentials.length) continue;
-      return lastFailure;
+      continue;
     } finally {
       clearTimeout(timer);
     }
   }
 
-  return lastFailure || { skipped: true, reason: "wavespeed-unavailable", model, taskId: id, retryable: true };
+  return lastFailure || { skipped: true, reason: "wavespeed-result-budget-exhausted", model, taskId: id, retryable: true };
 }
 
 async function handlePhoto(request, env, origin) {
@@ -2025,15 +2090,19 @@ async function handlePhoto(request, env, origin) {
   const fallbackTaskId = asString(raw?.fallbackTaskId, "", 200);
   const fallbackAllowPending = raw?.fallbackAllowPending === true;
   const fallbackElapsedMs = clipNumber(raw?.fallbackElapsedMs, 0, 600_000, 0) || 0;
+  const fallbackCredentialAttempt = Math.round(clipNumber(raw?.fallbackCredentialAttempt, 1, 100, 0) || 0);
 
   const retryWaveSpeedModel = asString(raw?.retryWaveSpeedModel, "", 120);
   const retryWaveSpeedTaskId = asString(raw?.retryWaveSpeedTaskId, "", 200);
+  const retryWaveSpeedCredentialAttempt = Math.round(clipNumber(raw?.retryWaveSpeedCredentialAttempt, 1, 100, 0) || 0);
 
   if (retryWaveSpeedModel || retryWaveSpeedTaskId) {
     if (![WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
       return jsonResponse({ skipped: true, reason: "invalid-wavespeed-key-retry", model: retryWaveSpeedModel || WAVESPEED_MODEL }, 400, origin);
     }
-    const previous = await readWaveSpeedImage(env, retryWaveSpeedTaskId, retryWaveSpeedModel);
+    const previous = await readWaveSpeedImage(env, retryWaveSpeedTaskId, retryWaveSpeedModel, {
+      preferredCredentialAttempt: retryWaveSpeedCredentialAttempt,
+    });
     if (previous.ok === true && previous.pending !== true && previous.dataUrl) {
       return jsonResponse({
         ok: true,
@@ -2067,7 +2136,8 @@ async function handlePhoto(request, env, origin) {
     if (retryStart.ok === true && retryStart.taskId) {
       return jsonResponse({
         ok: true, pending: true, provider: "wavespeed", providerTaskId: retryStart.taskId,
-        model: retryStart.model || retryWaveSpeedModel, routingMode: "wavespeed-next-key",
+        model: retryStart.model || retryWaveSpeedModel, credentialAttempt: retryStart.credentialAttempt,
+        credentialCount: retryStart.credentialCount, routingMode: "wavespeed-next-key",
         referenceDebug: references.debug, prompt: wavePrompt,
       }, 200, origin);
     }
@@ -2086,7 +2156,9 @@ async function handlePhoto(request, env, origin) {
     // Re-check the MiniMax task before spending on WAN. This keeps the fallback
     // endpoint from becoming a direct WAN bypass and can recover a late MiniMax
     // completion/output download without paying for a second generation.
-    const previous = await readWaveSpeedImage(env, fallbackTaskId, WAVESPEED_MINIMAX_MODEL);
+    const previous = await readWaveSpeedImage(env, fallbackTaskId, WAVESPEED_MINIMAX_MODEL, {
+      preferredCredentialAttempt: fallbackCredentialAttempt,
+    });
     if (previous.ok === true && previous.pending !== true && previous.dataUrl) {
       return jsonResponse({
         ok: true,
@@ -2136,6 +2208,8 @@ async function handlePhoto(request, env, origin) {
       provider: "wavespeed",
       providerTaskId: wanStart.taskId,
       model: wanStart.model || WAVESPEED_WAN_MODEL,
+      credentialAttempt: wanStart.credentialAttempt,
+      credentialCount: wanStart.credentialCount,
       routingMode: shouldStartWanWhilePending ? "minimax-pending-then-wan" : "minimax-result-then-wan",
       fallbackChain: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
       referenceDebug: references.debug,
@@ -2168,6 +2242,8 @@ async function handlePhoto(request, env, origin) {
       provider: "wavespeed",
       providerTaskId: waveStart.taskId,
       model: waveStart.model || WAVESPEED_WAN_MODEL,
+      credentialAttempt: waveStart.credentialAttempt,
+      credentialCount: waveStart.credentialCount,
       routingMode: "direct-intimate-wan",
       referenceDebug: references.debug,
       prompt: wavePrompt,
@@ -2180,8 +2256,10 @@ async function handlePhoto(request, env, origin) {
   let openaiPrompt = ordinaryPhoto
     ? buildOpenAICasualPrimaryPrompt(packet, references.openaiFiles.length)
     : buildPhotoPrompt(packet, references.openaiFiles.length);
-  let openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
-  let openaiAttempts = 1;
+  let openaiResult = references.openaiFiles.length > 0
+    ? await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration)
+    : { skipped: true, reason: "openai-reference-missing" };
+  let openaiAttempts = references.openaiFiles.length > 0 ? 1 : 0;
 
   if (ordinaryPhoto && openaiResult.ok !== true) {
     const outputSexualBlock = openaiResult.reason === "openai-image-moderation-blocked"
@@ -2190,10 +2268,8 @@ async function handlePhoto(request, env, origin) {
     const shouldRetryOpenAI = outputSexualBlock || openaiResult.retryable === true;
     if (shouldRetryOpenAI) {
       await new Promise((resolve) => setTimeout(resolve, OPENAI_CASUAL_RETRY_DELAY_MS));
-      openaiPrompt = outputSexualBlock
-        ? buildOrdinaryPhotoRetryPrompt(packet, 0)
-        : buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
-      openaiResult = await callOpenAIImage(env, openaiPrompt, outputSexualBlock ? [] : references.openaiFiles, "low");
+      openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
+      openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, "low");
       openaiAttempts += 1;
     }
   } else if (!ordinaryPhoto && openaiResult.ok !== true && openaiResult.retryable === true) {
@@ -2253,6 +2329,8 @@ async function handlePhoto(request, env, origin) {
     provider: "wavespeed",
     providerTaskId: waveStart.taskId,
     model: waveStart.model || WAVESPEED_MINIMAX_MODEL,
+    credentialAttempt: waveStart.credentialAttempt,
+    credentialCount: waveStart.credentialCount,
     primaryFailure: openaiResult.reason,
     primaryDetail: openaiResult.detail,
     primaryRequestId: openaiResult.requestId,
@@ -2292,8 +2370,9 @@ async function handlePhotoResult(request, env, origin) {
   }
   const taskId = asString(raw?.taskId, "", 200);
   const taskModel = asString(raw?.model, "", 120) || WAVESPEED_MODEL;
+  const preferredCredentialAttempt = Math.round(clipNumber(raw?.credentialAttempt, 1, 100, 0) || 0);
   if (!taskId) return jsonResponse({ error: "missing-task-id" }, 400, origin);
-  const result = await readWaveSpeedImage(env, taskId, taskModel);
+  const result = await readWaveSpeedImage(env, taskId, taskModel, { preferredCredentialAttempt });
   if (result.pending === true) {
     return jsonResponse({
       ok: true,
@@ -2301,6 +2380,8 @@ async function handlePhotoResult(request, env, origin) {
       provider: "wavespeed",
       providerTaskId: taskId,
       model: result.model || taskModel,
+      credentialAttempt: result.credentialAttempt,
+      credentialCount: result.credentialCount,
     }, 200, origin);
   }
   if (result.ok !== true) {
@@ -2312,6 +2393,8 @@ async function handlePhotoResult(request, env, origin) {
         provider: "wavespeed",
         providerTaskId: taskId,
         model: result.model || taskModel,
+        credentialAttempt: result.credentialAttempt,
+        credentialCount: result.credentialCount,
       }, 200, origin);
     }
     return jsonResponse({
@@ -2334,6 +2417,8 @@ async function handlePhotoResult(request, env, origin) {
     provider: "wavespeed",
     providerTaskId: taskId,
     model: result.model || taskModel,
+    credentialAttempt: result.credentialAttempt,
+    credentialCount: result.credentialCount,
     usage: result.usage,
   }, 200, origin);
 }
@@ -2363,7 +2448,7 @@ export default {
           openaiConfigured: Boolean(env.OPENAI_API_KEY),
           waveSpeedConfigured: waveSpeedKeyEntries(env).length > 0,
           waveSpeedKeyCount: waveSpeedKeyEntries(env).length,
-          waveSpeedCoolingDownCount: waveSpeedKeyEntries(env).filter((entry) => waveSpeedCredentialCoolingDown(entry.slot)).length,
+          waveSpeedCoolingDownCount: waveSpeedKeyEntries(env).filter((entry) => waveSpeedCredentialCoolingDown(entry.credentialId)).length,
           waveSpeedModel: WAVESPEED_MODEL,
           waveSpeedModels: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
         },

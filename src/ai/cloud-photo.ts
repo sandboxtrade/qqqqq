@@ -82,7 +82,7 @@ interface WorkerPhotoReply {
 const PHOTO_START_TIMEOUT_MS = 235_000;
 const WAVESPEED_POLL_TIMEOUT_MS = 150_000;
 const WAVESPEED_POLL_INTERVAL_MS = 3_000;
-const POLL_REQUEST_TIMEOUT_MS = 18_000;
+const POLL_REQUEST_TIMEOUT_MS = 32_000;
 const WAVESPEED_FALLBACK_START_TIMEOUT_MS = 35_000;
 const MINIMAX_PENDING_FALLBACK_AFTER_MS = 45_000;
 const WAVESPEED_MINIMAX_MODEL = "wavespeed-ai/minimax-h3/image-edit";
@@ -161,6 +161,7 @@ async function requestWaveSpeedKeyRetry(
         decision: normalizedDecision(input.decision),
         retryWaveSpeedModel: activeModel,
         retryWaveSpeedTaskId: taskId,
+        retryWaveSpeedCredentialAttempt: asNumber(initial.credentialAttempt),
       }),
       cache: "no-store",
       credentials: "omit",
@@ -189,6 +190,8 @@ async function requestWaveSpeedKeyRetry(
 
     const retryTaskId = firstString(retryData.providerTaskId);
     if (retryData.pending === true && retryData.provider === "wavespeed" && retryTaskId) {
+      const retryModel = firstString(retryData.model, activeModel);
+      if (retryTaskId === taskId && retryModel === activeModel) return null;
       return {
         nextTaskId: retryTaskId,
         nextInitial: {
@@ -242,6 +245,7 @@ async function requestWanFallback(
         fallbackTaskId: taskId,
         fallbackAllowPending: true,
         fallbackElapsedMs: elapsedMs,
+        fallbackCredentialAttempt: asNumber(initial.credentialAttempt),
       }),
       cache: "no-store",
       credentials: "omit",
@@ -280,6 +284,8 @@ async function requestWanFallback(
 
     const fallbackTaskId = firstString(fallbackData.providerTaskId);
     if (fallbackData.pending === true && fallbackData.provider === "wavespeed" && fallbackTaskId) {
+      const fallbackModel = firstString(fallbackData.model, activeModel);
+      if (fallbackTaskId === taskId && fallbackModel === activeModel) return null;
       return {
         nextTaskId: fallbackTaskId,
         nextInitial: {
@@ -371,7 +377,7 @@ async function pollWaveSpeedPhoto(
   const startedAt = Date.now();
   const deadline = startedAt + WAVESPEED_POLL_TIMEOUT_MS;
   let lastReason = "wavespeed-pending";
-  let wanFallbackRequested = false;
+  let pollContext = initial;
   while (Date.now() < deadline) {
     await sleep(WAVESPEED_POLL_INTERVAL_MS, signal);
     const controller = new AbortController();
@@ -388,13 +394,18 @@ async function pollWaveSpeedPhoto(
           Authorization: `Bearer ${idToken}`,
           "X-Firebase-AppCheck": appCheckToken,
         },
-        body: JSON.stringify({ taskId, model: firstString(initial.model) || undefined }),
+        body: JSON.stringify({
+          taskId,
+          model: firstString(pollContext.model) || undefined,
+          credentialAttempt: asNumber(pollContext.credentialAttempt),
+        }),
         cache: "no-store",
         credentials: "omit",
         referrerPolicy: "no-referrer",
         signal: controller.signal,
       });
       const data = (await response.json().catch(() => ({}))) as WorkerPhotoReply;
+      pollContext = { ...pollContext, ...data };
       if (!response.ok) {
         lastReason = reasonFrom(data, response.status);
         if (response.status >= 500 || response.status === 429) continue;
@@ -402,16 +413,15 @@ async function pollWaveSpeedPhoto(
       }
       if (data.pending === true) {
         lastReason = firstString(data.reason) || "wavespeed-pending";
-        const activePendingModel = firstString(data.model, initial.model);
+        const activePendingModel = firstString(data.model, pollContext.model);
         const elapsedMs = Date.now() - startedAt;
-        if (!wanFallbackRequested && activePendingModel === WAVESPEED_MINIMAX_MODEL && elapsedMs >= MINIMAX_PENDING_FALLBACK_AFTER_MS) {
-          wanFallbackRequested = true;
+        if (activePendingModel === WAVESPEED_MINIMAX_MODEL && elapsedMs >= MINIMAX_PENDING_FALLBACK_AFTER_MS) {
           const fallback = await requestWanFallback(
             taskId,
             activePendingModel,
             idToken,
             appCheckToken,
-            initial,
+            pollContext,
             input,
             elapsedMs,
             signal,
@@ -430,24 +440,24 @@ async function pollWaveSpeedPhoto(
           used: true,
           dataUrl,
           mimeType: firstString(data.mimeType) || "image/webp",
-          model: firstString(data.model, initial.model),
+          model: firstString(data.model, pollContext.model),
           provider: "wavespeed",
           providerTaskId: firstString(data.providerTaskId, taskId),
-          primaryFailure: firstString(data.primaryFailure, initial.primaryFailure) || undefined,
-          primaryDetail: firstString(data.primaryDetail, initial.primaryDetail) || undefined,
-          prompt: firstString(initial.prompt),
-          usage: parseUsage(data.usage) ?? parseUsage(initial.usage),
+          primaryFailure: firstString(data.primaryFailure, pollContext.primaryFailure) || undefined,
+          primaryDetail: firstString(data.primaryDetail, pollContext.primaryDetail) || undefined,
+          prompt: firstString(pollContext.prompt),
+          usage: parseUsage(data.usage) ?? parseUsage(pollContext.usage),
         };
       }
       const terminalReason = reasonFrom(data, response.status);
-      const activeModel = firstString(data.model, initial.model);
+      const activeModel = firstString(data.model, pollContext.model);
       if (data.retryWithNextKey === true) {
         const keyRetry = await requestWaveSpeedKeyRetry(
           taskId,
           activeModel,
           idToken,
           appCheckToken,
-          initial,
+          pollContext,
           input,
           signal,
         );
@@ -458,8 +468,8 @@ async function pollWaveSpeedPhoto(
         if (activeModel !== WAVESPEED_MINIMAX_MODEL) {
           return {
             attempted: true, used: false, provider: "wavespeed", providerTaskId: taskId,
-            primaryFailure: firstString(initial.primaryFailure) || undefined,
-            primaryDetail: firstString(initial.primaryDetail) || undefined, reason: terminalReason,
+            primaryFailure: firstString(pollContext.primaryFailure) || undefined,
+            primaryDetail: firstString(pollContext.primaryDetail) || undefined, reason: terminalReason,
           };
         }
       }
@@ -469,7 +479,7 @@ async function pollWaveSpeedPhoto(
           activeModel,
           idToken,
           appCheckToken,
-          initial,
+          pollContext,
           input,
           Date.now() - startedAt,
           signal,
@@ -485,8 +495,8 @@ async function pollWaveSpeedPhoto(
         used: false,
         provider: "wavespeed",
         providerTaskId: taskId,
-        primaryFailure: firstString(initial.primaryFailure) || undefined,
-        primaryDetail: firstString(initial.primaryDetail) || undefined,
+        primaryFailure: firstString(pollContext.primaryFailure) || undefined,
+        primaryDetail: firstString(pollContext.primaryDetail) || undefined,
         reason: terminalReason,
       };
     } catch (error) {
