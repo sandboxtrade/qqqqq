@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.34 intimacy/photo/speech consistency audit: active boundaries outrank photo overrides; direct photo intent stays canonical
+// v0.20.35 adds Alia as a first-class character with canonical profile references
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -24,6 +24,7 @@ const CHARACTER_PROFILE_SLUGS = Object.freeze({
   rin_v1: "rin",
   lea_v1: "lea",
   sofia_v1: "sofia",
+  alia_v1: "alia",
   eva_v1: "eva",
   nora_v1: "nora",
   aiko_v1: "aiko",

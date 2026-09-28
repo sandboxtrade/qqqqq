@@ -427,6 +427,29 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "сижу в кафе после встречи и наконец никуда не тороплюсь",
     ],
   },
+  alia_v1: {
+    personal_project: [
+      "смотрю правки по интерьеру и опять спорю сама с собой из-за одной детали в проекте",
+      "собираю референсы для проекта и пытаюсь не сохранить ещё двадцать одинаковых вариантов",
+      "заканчиваю рабочую задачу по интерьеру и уже хочу закрыть ноутбук хотя бы на час",
+    ],
+    cafe_break: [
+      "сижу с кофе между делами и специально ничего не открываю по работе",
+      "зашла в кафе после встречи и решила немного посидеть без спешки",
+    ],
+    errands: [
+      "заехала по нескольким делам для проекта и по пути закрываю свои мелочи",
+      "езжу по делам и постепенно вычёркиваю всё из списка",
+    ],
+    reading: [
+      "листаю журнал по архитектуре и интерьерам и отмечаю пару хороших решений",
+      "читаю про один старый проект и уже ушла по ссылкам дальше, чем собиралась",
+    ],
+    relaxing: [
+      "устроилась дома с телефоном и наконец никуда не тороплюсь",
+      "отдыхаю после работы и пока не хочу ничего планировать",
+    ],
+  },
   eva_v1: {
     walk: [
       "гуляю с камерой без конкретной цели и иногда что-то снимаю",
@@ -595,6 +618,16 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 15, end: 19, activities: ["personal_project", "errands"], targetEnergy: .64 },
     { start: 19, end: 22, activities: ["cooking", "relaxing"], targetEnergy: .48 },
     { start: 22, end: 24, activities: ["reading", "relaxing"], targetEnergy: .34 },
+  ],
+  alia_v1: [
+    { start: 0, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .86 },
+    { start: 7, end: 8, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .46 },
+    { start: 8, end: 9, activities: ["breakfast"], location: "kitchen", availability: "free", targetEnergy: .7 },
+    { start: 9, end: 13, activities: ["personal_project", "errands"], availability: "occupied", targetEnergy: .76 },
+    { start: 13, end: 15, activities: ["cafe_break", "errands"], targetEnergy: .66 },
+    { start: 15, end: 18, activities: ["personal_project", "reading"], availability: "occupied", targetEnergy: .62 },
+    { start: 18, end: 21, activities: ["walk", "cooking", "relaxing"], targetEnergy: .52 },
+    { start: 21, end: 24, activities: ["reading", "relaxing", "music"], targetEnergy: .38 },
   ],
   eva_v1: [
     { start: 0, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .85 },

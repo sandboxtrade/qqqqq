@@ -1,15 +1,25 @@
-# v0.20.35 — WaveSpeed insufficient-balance modal
+# v0.20.35 — Alia character
 
-## What changed
-- Added a dedicated frontend modal when photo generation fails specifically because WaveSpeed balance/credits are insufficient.
-- Photo failures now preserve provider/detail metadata strongly enough for the UI to distinguish balance exhaustion from generic generation errors.
-- `persistGeneratedPhotoMessage()` now throws a typed `CloudPhotoGenerationError` instead of a plain generic error for failed cloud-photo generations.
-- App store now keeps a `photoBalanceAlert` state and exposes `dismissPhotoBalanceAlert()`.
-- Added modal UI in `App.tsx` and styling in `styles.css`.
+Добавлен новый полноценный персонаж **Алия** (`alia_v1`), 33 года.
 
-## User-visible behavior
-When all available WaveSpeed keys fail due to low balance / top-up required / insufficient credits, the user sees a separate popup explaining that WaveSpeed balance must be topped up, instead of only a generic failed-photo state.
+## Профиль
+- Алия — взрослая казашка, 33 года, Алматы.
+- Профессия: дизайнер интерьеров.
+- Отдельные core traits, personality, surface voice и initial intimacy baseline.
+- Манера общения: спокойная взрослая уверенность, конкретность, мягкая сухая ирония, без ассистентской/терапевтической речи.
 
-## Version
-- ENGINE_VERSION=0.20.35
-- SCHEMA_VERSION=4
+## Внешность и фото
+Добавлена папка `public/assets/profiles/alia/`:
+- `avatar.jpg` — канонический OpenAI reference;
+- `identity-sheet.jpg` — чистый multi-view reference для WaveSpeed;
+- `01.jpg`, `02.jpg`, `03.jpg` — фотографии галереи.
+
+Worker теперь знает mapping `alia_v1 -> alia`, поэтому OpenAI/WaveSpeed автоматически используют её собственные reference assets и не смешивают Алию с другими персонажами.
+
+## World
+Для Алии добавлены отдельные activity details и ежедневный routine: работа над интерьерными проектами, встречи/дела, кафе, прогулки, чтение и отдых.
+
+## Compatibility
+- `SCHEMA_VERSION=4` не менялся.
+- Firebase/Auth/Firestore paths и live-sync contracts не менялись.
+- Итоговая версия: `ENGINE_VERSION=0.20.35`.

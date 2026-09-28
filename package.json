@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
-    "test": "node tests/regression.mjs && node tests/local-dialogue.mjs && node tests/ai-transport.mjs && node tests/cloud-language.mjs && node tests/social-architecture.mjs && node tests/photo-messages.mjs && node tests/intimacy-photo-speech.mjs && node tests/photo-routing-worker.mjs",
+    "test": "node tests/regression.mjs && node tests/local-dialogue.mjs && node tests/ai-transport.mjs && node tests/cloud-language.mjs && node tests/social-architecture.mjs && node tests/alia-character.mjs && node tests/photo-messages.mjs && node tests/intimacy-photo-speech.mjs && node tests/photo-routing-worker.mjs",
     "verify": "npm test && npm run typecheck && npm run build"
   },
   "dependencies": {

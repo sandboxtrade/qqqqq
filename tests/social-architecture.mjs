@@ -22,6 +22,7 @@ assert.match(registry, /mei_v1/);
 assert.match(registry, /alina_v1/);
 assert.match(registry, /lea_v1/);
 assert.match(registry, /sofia_v1/);
+assert.match(registry, /alia_v1/);
 assert.match(registry, /eva_v1/);
 assert.match(registry, /nora_v1/);
 assert.match(registry, /appearanceLabel/);
@@ -32,12 +33,13 @@ assert.match(registry, /assets\/profiles\/kira\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/valeria\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/mei\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/alina\/avatar\.jpg/);
+assert.match(registry, /assets\/profiles\/alia\/avatar\.jpg/);
 assert.match(registry, /initialIntimacy/);
 for (const voiceName of [
   "YUZUKI_VOICE_STYLE", "MIKA_VOICE_STYLE", "RIN_VOICE_STYLE", "AIKO_VOICE_STYLE", "HINA_VOICE_STYLE", "SASHA_VOICE_STYLE",
-  "KIRA_VOICE_STYLE", "VALERIA_VOICE_STYLE", "MEI_VOICE_STYLE", "ALINA_VOICE_STYLE", "LEA_VOICE_STYLE", "SOFIA_VOICE_STYLE", "EVA_VOICE_STYLE", "NORA_VOICE_STYLE",
+  "KIRA_VOICE_STYLE", "VALERIA_VOICE_STYLE", "MEI_VOICE_STYLE", "ALINA_VOICE_STYLE", "LEA_VOICE_STYLE", "SOFIA_VOICE_STYLE", "ALIA_VOICE_STYLE", "EVA_VOICE_STYLE", "NORA_VOICE_STYLE",
 ]) assert.match(registry, new RegExp(`voiceProfile: \{ styleGuide: ${voiceName} \}`));
-for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Hina", "Саша", "Kira", "Valeria", "Mei", "Alina", "Lea", "Sofia", "Eva", "Nora"])
+for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Hina", "Саша", "Kira", "Valeria", "Mei", "Alina", "Lea", "Sofia", "Алия", "Eva", "Nora"])
   assert.match(registry, new RegExp(`expressionGuidance: "${name}`));
 assert.match(store, /activeCharacterId/);
 assert.match(store, /selectCharacter:/);
@@ -53,6 +55,7 @@ assert.doesNotMatch(app, /CharacterStage/);
 assert.match(chat, /message\.kind === "image"/);
 assert.match(worker, /CURRENT CHARACTER/);
 assert.match(worker, /raw\.character\?\.name/);
+assert.match(worker, /alia_v1:\s*"alia"/);
 assert.match(worker, /occupied\/personal_project\/reading\/music\/cooking\/errands/);
 assert.match(worker, /reconcilePhotoSendMessages/);
 assert.match(worker, /Prefer GPT\'s own generated caption/);
