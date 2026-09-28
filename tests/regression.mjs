@@ -1919,7 +1919,7 @@ await test("world routine uses its persisted timezone instead of device-local ho
 });
 await test("v0.20.9 characters have independent daily-life routines", () => {
   const stamp = Date.UTC(2026, 0, 1, 11, 30, 0);
-  const ids = ["yuzuki_v1", "mika_v1", "rin_v1", "lea_v1", "sofia_v1", "eva_v1", "nora_v1", "aiko_v1", "hina_v1", "sasha_v1"];
+  const ids = ["yuzuki_v1", "mika_v1", "rin_v1", "lea_v1", "sofia_v1", "eva_v1", "nora_v1", "aiko_v1", "hina_v1", "sasha_v1", "kira_v1", "valeria_v1", "mei_v1", "alina_v1"];
   const activities = ids.map((id) => resolveRoutine(stamp, "UTC", id).activity);
   assert.ok(new Set(activities).size >= 4, activities.join(","));
   assert.notEqual(resolveRoutine(stamp, "UTC", "rin_v1").activity, "personal_project");
@@ -1946,6 +1946,24 @@ await test("v0.20.9 Aiko is an adult distinct profile with an open initial intim
   assert.equal(sasha.visualProfile.referenceAssetIds[0], "profile.sasha.avatar");
   assert.ok(sasha.voiceProfile?.styleGuide.includes("SASHA SURFACE VOICE"));
   assert.ok(characterProfiles.some((item) => item.id === "sasha_v1"));
+  const kira = getCharacterProfile("kira_v1");
+  assert.equal(kira.core.age, 22);
+  assert.equal(kira.visualProfile.referenceAssetIds[0], "profile.kira.avatar");
+  assert.ok(kira.voiceProfile?.styleGuide.includes("KIRA SURFACE VOICE"));
+  const valeria = getCharacterProfile("valeria_v1");
+  assert.equal(valeria.core.age, 20);
+  assert.equal(valeria.visualProfile.referenceAssetIds[0], "profile.valeria.avatar");
+  assert.ok(valeria.voiceProfile?.styleGuide.includes("VALERIA SURFACE VOICE"));
+  const mei = getCharacterProfile("mei_v1");
+  assert.equal(mei.core.age, 20);
+  assert.equal(mei.visualProfile.referenceAssetIds[0], "profile.mei.avatar");
+  assert.ok(mei.voiceProfile?.styleGuide.includes("MEI SURFACE VOICE"));
+  const alina = getCharacterProfile("alina_v1");
+  assert.equal(alina.core.age, 20);
+  assert.equal(alina.core.adult, true);
+  assert.equal(alina.visualProfile.referenceAssetIds[0], "profile.alina.avatar");
+  assert.ok(alina.voiceProfile?.styleGuide.includes("ALINA SURFACE VOICE"));
+  assert.ok(characterProfiles.some((item) => item.id === "alina_v1"));
 });
 await test("v0.19.4 home-bound routine never schedules Yuzuki outside", () => {
   const homeLocations = new Set(["bedroom", "living_room", "kitchen"]);

@@ -316,6 +316,92 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "наконец ничего не делаю, только листаю новинки и музыку",
     ],
   },
+
+  kira_v1: {
+    personal_project: [
+      "разбираю фотографии и опять зависла на одном кадре дольше, чем собиралась",
+      "собираю мудборд для учебного проекта и уже слишком серьёзно спорю сама с собой про свет",
+      "редактирую съёмку и пытаюсь не испортить то, что и так было нормальным",
+    ],
+    walk: [
+      "гуляю с камерой и снимаю всё, на что красиво падает свет",
+      "вышла ненадолго пройтись и опять свернула туда, где просто красивее",
+    ],
+    cafe_break: [
+      "сижу в маленьком кафе у окна, пью кофе и разбираю снимки",
+      "зашла погреться и в итоге уже минут сорок наблюдаю за людьми вокруг",
+    ],
+    music: [
+      "слушаю один альбом целиком и пока не хочу ничего переключать",
+      "включила музыку и пытаюсь подобрать её под фотографии, что звучит глупее, чем ощущается",
+    ],
+  },
+  valeria_v1: {
+    personal_project: [
+      "доделываю презентацию по учёбе и убираю из неё всё, что выглядит дёшево",
+      "разбираю кейс по менеджменту и спорю с половиной того, что нам дали на паре",
+      "собираю материалы к проекту и пытаюсь сделать это нормально с первого раза",
+    ],
+    errands: [
+      "езжу по делам и между ними успеваю ещё пару вещей, которых вообще не было в плане",
+      "закрываю дела в городе и уже думаю, куда поехать вечером",
+    ],
+    cafe_break: [
+      "сижу в кафе между делами и наконец никого не жду",
+      "взяла кофе после пар и специально никуда не тороплюсь минут двадцать",
+    ],
+    walk: [
+      "иду по центру после встречи и пока не хочу вызывать машину",
+      "гуляю после ужина, потому что город сейчас выглядит лучше обычного",
+    ],
+  },
+  mei_v1: {
+    personal_project: [
+      "делаю проект по медиа и опять ушла в оформление дальше, чем требовалось",
+      "собираю идеи для учебной кампании и сохраняю слишком много референсов",
+      "разбираю задание по маркетингу и параллельно смотрю, как это делают бренды в реальности",
+    ],
+    cafe_break: [
+      "сижу с кофе после пар и сортирую фотографии в телефоне",
+      "зашла в кафе просто на десять минут и, кажется, уже слишком удобно устроилась",
+    ],
+    music: [
+      "слушаю музыку в наушниках и отвечаю на сообщения между треками",
+      "нашла новый трек и уже поставила его по кругу, да",
+    ],
+    reading: [
+      "читаю материалы к паре и периодически отвлекаюсь на совсем другие статьи",
+      "листала конспекты и опять нашла тему, которую теперь хочется отдельно погуглить",
+    ],
+    relaxing: [
+      "лежу дома с телефоном и наконец ничего не обязана делать",
+      "устроилась с чаем и просто листаю всё подряд после длинного дня",
+    ],
+  },
+
+  alina_v1: {
+    personal_project: [
+      "доделываю проект по дизайну и уже третий раз меняю то, что вроде было нормальным",
+      "сижу над учебной штукой и пытаюсь сделать её не похожей на стандартный шаблон",
+      "разбираю референсы к проекту и опять ушла глубже, чем требовалось",
+    ],
+    music: [
+      "слушаю новый альбом в наушниках и пока не решила, нравится он мне или просто хорошо звучит ночью",
+      "переслушиваю старый плейлист и параллельно разбираю фотографии",
+    ],
+    cafe_break: [
+      "сижу в углу кофейни после пар, пью кофе и наконец никого не слушаю",
+      "зашла за кофе и осталась посидеть, потому что домой пока не хочется",
+    ],
+    walk: [
+      "иду пешком после пар, потому что вечером город хотя бы выглядит нормально",
+      "гуляю без особого маршрута и слушаю музыку",
+    ],
+    relaxing: [
+      "лежу дома с телефоном и музыкой, ничего полезного не делаю",
+      "залипла дома на фильм и пока не хочу никуда выходить",
+    ],
+  },
   lea_v1: {
     walk: [
       "иду куда глаза глядят и уже дважды свернула не туда",
@@ -451,6 +537,45 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 15, end: 18, activities: ["cafe_break", "errands", "music"], targetEnergy: .74 },
     { start: 18, end: 21, activities: ["personal_project", "music", "relaxing"], targetEnergy: .68 },
     { start: 21, end: 24, activities: ["music", "walk", "relaxing"], targetEnergy: .56 },
+  ],
+
+  kira_v1: [
+    { start: 0, end: 2, activities: ["music", "reading", "relaxing"], targetEnergy: .4 },
+    { start: 2, end: 9, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .86 },
+    { start: 9, end: 10, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .44 },
+    { start: 10, end: 12, activities: ["breakfast", "music"], targetEnergy: .62 },
+    { start: 12, end: 16, activities: ["personal_project", "cafe_break", "reading"], availability: "occupied", targetEnergy: .7 },
+    { start: 16, end: 20, activities: ["walk", "cafe_break", "personal_project"], targetEnergy: .64 },
+    { start: 20, end: 24, activities: ["walk", "music", "relaxing"], targetEnergy: .5 },
+  ],
+  valeria_v1: [
+    { start: 0, end: 2, activities: ["relaxing", "music"], targetEnergy: .46 },
+    { start: 2, end: 9, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 9, end: 10, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .52 },
+    { start: 10, end: 12, activities: ["breakfast", "errands"], targetEnergy: .74 },
+    { start: 12, end: 16, activities: ["personal_project", "errands", "cafe_break"], availability: "occupied", targetEnergy: .8 },
+    { start: 16, end: 20, activities: ["errands", "walk", "cafe_break"], targetEnergy: .74 },
+    { start: 20, end: 24, activities: ["walk", "music", "relaxing", "cafe_break"], targetEnergy: .62 },
+  ],
+  mei_v1: [
+    { start: 0, end: 1, activities: ["music", "relaxing"], targetEnergy: .4 },
+    { start: 1, end: 8, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 8, end: 9, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .46 },
+    { start: 9, end: 10, activities: ["breakfast", "music"], targetEnergy: .68 },
+    { start: 10, end: 15, activities: ["personal_project", "reading", "cafe_break"], availability: "occupied", targetEnergy: .72 },
+    { start: 15, end: 19, activities: ["cafe_break", "errands", "walk"], targetEnergy: .68 },
+    { start: 19, end: 22, activities: ["music", "relaxing", "cooking"], targetEnergy: .54 },
+    { start: 22, end: 24, activities: ["music", "reading", "relaxing"], targetEnergy: .4 },
+  ],
+
+  alina_v1: [
+    { start: 0, end: 2, activities: ["music", "relaxing"], targetEnergy: .42 },
+    { start: 2, end: 9, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .87 },
+    { start: 9, end: 10, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .44 },
+    { start: 10, end: 12, activities: ["breakfast", "music"], targetEnergy: .6 },
+    { start: 12, end: 17, activities: ["personal_project", "reading", "cafe_break"], availability: "occupied", targetEnergy: .69 },
+    { start: 17, end: 20, activities: ["cafe_break", "walk", "errands"], targetEnergy: .63 },
+    { start: 20, end: 24, activities: ["music", "walk", "relaxing"], targetEnergy: .52 },
   ],
   lea_v1: [
     { start: 0, end: 2, activities: ["music", "relaxing"], targetEnergy: .48 },
