@@ -1,0 +1,26 @@
+Game2 / Virtual Companion — full source archive v0.20.29
+
+Authoritative base: virtual-companion-current-full-v0.20.28.zip.
+Normalized to:
+- ENGINE_VERSION=0.20.29
+- package version=0.20.29
+- SCHEMA_VERSION=4
+
+Changes are intentionally limited to WaveSpeed credential resilience inside the Cloudflare Worker:
+- multiple server-side WaveSpeed secrets are supported;
+- submit and result polling fail over to the next key on credential/quota/rate-limit/server/network failures;
+- polling can locate a task created under another configured key/account;
+- invalid payload/model errors do not waste requests across every key;
+- health exposes configured key count only, never secret values.
+
+Recommended Cloudflare Production Secrets:
+- WAVESPEED_API_KEY
+- WAVESPEED_API_KEY_2
+- WAVESPEED_API_KEY_3
+- ... up to WAVESPEED_API_KEY_10
+
+Optional alternative/additional pooled secret:
+- WAVESPEED_API_KEYS = several keys separated by newline/comma/semicolon.
+
+No API key was added to frontend, runtime-config, GitHub source, Firebase, or client storage.
+No Firebase/Auth/Firestore/App Check/live-sync/persistence schema/path changes.

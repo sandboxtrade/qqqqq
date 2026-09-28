@@ -1,0 +1,29 @@
+Продолжаем проект Game2 / Virtual Companion / Yuzuki.
+
+ВАЖНО: единственная актуальная и авторитетная кодовая база — архив `virtual-companion-current-full-v0.20.29.zip`.
+Версия: ENGINE_VERSION=0.20.29, SCHEMA_VERSION=4.
+
+База v0.20.28 сохранена по архитектуре; v0.20.29 добавляет только server-side WaveSpeed multi-key failover:
+- исправлен `/yuzukiPhotoResult`, где использовалась undefined переменная `model`;
+- обычная/low ветка теперь полностью реализует OpenAI -> MiniMax H3 -> WAN 2.6 даже когда MiniMax task успешно стартовал, но позже завершился terminal failure;
+- перед запуском WAN Worker повторно проверяет MiniMax task и, если результат успел появиться, возвращает его без второй генерации;
+- medium/high intimate по-прежнему идут сразу в WAN 2.6;
+- WaveSpeed reference policy без изменений: identity-sheet first, иначе avatar той же девушки;
+- OpenAI обычной ветки по-прежнему использует avatar reference;
+- Firebase/Auth/Firestore/App Check/live-sync/persistence и SCHEMA_VERSION не менялись.
+
+GitHub: sandboxtrade/qqqqq
+Firebase: qqqq-91fc0
+Cloudflare Worker: shy-unit-ebfb
+Language model: gpt-6-luna
+OpenAI image model: gpt-image-2
+Secrets остаются только в Cloudflare Production Secrets.
+
+WAVESPEED MULTI-KEY v0.20.29:
+- основной secret: WAVESPEED_API_KEY;
+- дополнительные: WAVESPEED_API_KEY_2 ... WAVESPEED_API_KEY_10;
+- опционально WAVESPEED_API_KEYS со списком ключей через перенос строки/запятую/точку с запятой;
+- submit и polling автоматически переходят на следующий ключ при 401/402/403/408/425/429/5xx, timeout/network failure;
+- при polling 404 тоже пробуется следующий ключ, чтобы найти task другого account/key;
+- 400/422 не переключают ключи;
+- ключи остаются только в Cloudflare Production Secrets.
