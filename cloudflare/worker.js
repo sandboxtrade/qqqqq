@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.21 cumulative characters + stabilized photo references
+// v0.20.24 cumulative characters + stabilized photo references
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -471,7 +471,10 @@ function derivePhotoMechanic(raw, user) {
   if (!isDirectPhotoRequest(user)) return undefined;
   const characterId = clipped(raw.character?.id, 64) || "yuzuki_v1";
   const suggestive = raw.appearanceRequest?.suggestive === true || isSuggestivePhotoRequest(user);
-  const intentPatch = suggestive ? derivePhotoIntentPatch(user) : undefined;
+  // Framing (for example "в полный рост") is mechanical and must be preserved
+  // even for ordinary photos. Sexual/suggestive fields are still derived only
+  // from explicit words in the current user request.
+  const intentPatch = derivePhotoIntentPatch(user);
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
   const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
   if (worldBlocked) {
@@ -731,6 +734,16 @@ function looksLikePhotoRefusal(value) {
   return /(?:^|[.!?—-]\s*)(?:не\s+сейчас\b|не\s+буду\b|не\s+могу\b|не\s+скину\b|не\s+пришлю\b|не\s+отправлю\b|не\s+покажу\b)|(?:гол[а-я]*\s*[—-]\s*нет\b)|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
 }
 
+function ordinaryPhotoField(value, fallback, max = 160) {
+  const clean = clipped(value, max) || "";
+  if (!clean) return fallback;
+  const lower = normalizePhotoRequestText(clean);
+  if (/(?:lingerie|underwear|nude|naked|topless|sexy|sensual|erotic|бель|трус|лифчик|бюстгальтер|топлесс|гол|обнаж|нюд|эрот|сексуаль|соблазн)/u.test(lower)) {
+    return fallback;
+  }
+  return clean;
+}
+
 function reconcilePhotoMechanic(decision, mechanic, mode) {
   if (mode !== "reply" || !mechanic?.requested) return decision;
   if (mechanic.disposition === "blocked") {
@@ -746,27 +759,41 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
   const current = decision && typeof decision === "object" ? decision : {};
   const currentIntent = current.intent && typeof current.intent === "object" ? current.intent : {};
   const forceSuggestive = mechanic.suggestive === true && mechanic.noRefusalMode === true;
+  const ordinaryDirectRequest = mechanic.suggestive !== true;
   const caption = looksLikePhotoRefusal(current.caption) ? "" : clipped(current.caption, 220);
+
+  const framing = mechanic.intentPatch?.framing || (["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(currentIntent.framing)
+    ? currentIntent.framing
+    : "selfie");
+
   return {
     ...current,
     shouldSendPhoto: true,
     reason: "user_requested",
     caption,
     intent: {
-      framing: mechanic.intentPatch?.framing || (["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(currentIntent.framing)
-        ? currentIntent.framing
-        : "selfie"),
-      mood: clipped(currentIntent.mood, 80) || (forceSuggestive ? "confident" : "natural"),
-      pose: clipped(currentIntent.pose, 160) || "natural relaxed pose",
+      framing,
+      mood: ordinaryDirectRequest
+        ? ordinaryPhotoField(currentIntent.mood, "natural", 80)
+        : (clipped(currentIntent.mood, 80) || (forceSuggestive ? "confident" : "natural")),
+      pose: ordinaryDirectRequest
+        ? ordinaryPhotoField(currentIntent.pose, framing === "full_body" ? "standing naturally, relaxed neutral pose" : "natural relaxed pose", 160)
+        : (clipped(currentIntent.pose, 160) || "natural relaxed pose"),
       location: clipped(currentIntent.location, 100) || "current location",
-      outfit: forceSuggestive && mechanic.intentPatch?.outfit
-        ? mechanic.intentPatch.outfit
-        : (clipped(currentIntent.outfit, 140) || "current outfit"),
-      suggestiveLevel: forceSuggestive && mechanic.intentPatch?.suggestiveLevel
-        ? mechanic.intentPatch.suggestiveLevel
-        : forceSuggestive && currentIntent.suggestiveLevel === "none"
-          ? "high"
-          : (["none", "low", "medium", "high"].includes(currentIntent.suggestiveLevel) ? currentIntent.suggestiveLevel : (forceSuggestive ? "high" : "none")),
+      outfit: ordinaryDirectRequest
+        ? ordinaryPhotoField(currentIntent.outfit, "everyday casual clothes, fully clothed", 140)
+        : (forceSuggestive && mechanic.intentPatch?.outfit
+          ? mechanic.intentPatch.outfit
+          : (clipped(currentIntent.outfit, 140) || "current outfit")),
+      // Critical: an ordinary direct photo request must never inherit an intimate
+      // suggestive level from relationship/intimacy state or from GPT's prose choice.
+      suggestiveLevel: ordinaryDirectRequest
+        ? "none"
+        : (forceSuggestive && mechanic.intentPatch?.suggestiveLevel
+          ? mechanic.intentPatch.suggestiveLevel
+          : forceSuggestive && currentIntent.suggestiveLevel === "none"
+            ? "high"
+            : (["none", "low", "medium", "high"].includes(currentIntent.suggestiveLevel) ? currentIntent.suggestiveLevel : (forceSuggestive ? "high" : "none"))),
     },
   };
 }
@@ -1413,7 +1440,7 @@ function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
     `She is at ${normalizePhotoText(decision.intent.location, world.location || "home", 100)}.`,
     `Clothing: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 140)}.`,
     `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 140)}.`,
-    "Ordinary non-sexual personal photo, natural lighting and anatomy, no text or watermark.",
+    "Everyday fully clothed personal photo with relaxed neutral body language, natural lighting and anatomy, no text or watermark.",
   ].join("\n");
 }
 
@@ -1429,7 +1456,7 @@ function buildOpenAICasualPrimaryPrompt(packet, referenceCount = 0) {
     `Location: ${normalizePhotoText(decision.intent.location, world.location || "home", 90)}.`,
     `Outfit: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 120)}.`,
     `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 120)}.`,
-    "This is a normal everyday non-sexual personal photo. Natural anatomy, natural lighting, believable smartphone-camera look, no text or watermark.",
+    "Everyday fully clothed personal photo in normal casual clothing. Relaxed neutral body language, natural anatomy, natural lighting, believable smartphone-camera look, no text or watermark.",
   ].join("\n");
 }
 
@@ -1440,7 +1467,7 @@ function buildOpenAICasualMinimalPrompt(packet, referenceCount = 0) {
     `Generate one realistic ${framing} smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
     `Keep the same identity: ${visualProfile.identitySummary}`,
     referenceCount > 0 ? "Use the attached reference only to keep the same person." : "Keep the same person.",
-    "Ordinary non-sexual photo, casual clothes, natural pose, realistic skin, realistic lighting, no text or watermark.",
+    "Everyday fully clothed casual photo, relaxed neutral pose, realistic skin, realistic lighting, no text or watermark.",
   ].join("\n");
 }
 
@@ -1931,15 +1958,24 @@ async function handlePhoto(request, env, origin) {
 
   if (ordinaryPhoto && openaiResult.ok !== true) {
     await new Promise((resolve) => setTimeout(resolve, 900));
-    openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
-    openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, "low");
+    const outputSexualBlock = openaiResult.reason === "openai-image-moderation-blocked"
+      && /stage=output/i.test(String(openaiResult.detail || ""))
+      && /sexual/i.test(String(openaiResult.detail || ""));
+    openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, outputSexualBlock ? 0 : references.openaiFiles.length);
+    // If the first reference-conditioned result was blocked as sexual at OUTPUT,
+    // stop feeding the avatar on the next ordinary attempt. The request itself
+    // remains fully clothed and ordinary; identity is carried by identitySummary.
+    openaiResult = await callOpenAIImage(env, openaiPrompt, outputSexualBlock ? [] : references.openaiFiles, "low");
     openaiAttempts += 1;
   }
 
   if (ordinaryPhoto && openaiResult.ok !== true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    openaiPrompt = buildOpenAICasualMinimalPrompt(packet, references.openaiFiles.length);
-    openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, "low");
+    // Final ordinary-photo attempt deliberately drops the image reference.
+    // It prevents source-avatar/edit-conditioning from repeatedly creating a
+    // result that is rejected by output moderation. Identity remains textual.
+    openaiPrompt = buildOpenAICasualMinimalPrompt(packet, 0);
+    openaiResult = await callOpenAIImage(env, openaiPrompt, [], "low");
     openaiAttempts += 1;
   } else if (!ordinaryPhoto && openaiResult.ok !== true && openaiResult.retryable === true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -1958,6 +1994,7 @@ async function handlePhoto(request, env, origin) {
       usage: openaiResult.usage,
       referenceDebug: references.debug,
       primaryAttempts: openaiAttempts,
+      primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
     }, 200, origin);
   }
 
@@ -1975,6 +2012,7 @@ async function handlePhoto(request, env, origin) {
       primaryDetail: openaiResult.detail,
       primaryRequestId: openaiResult.requestId,
       primaryAttempts: openaiAttempts,
+      primaryMode: ordinaryPhoto && openaiAttempts >= 3 ? "casual-text-only-final" : (ordinaryPhoto ? "casual-reference" : "standard-reference"),
       referenceDebug: references.debug,
     }, 200, origin);
   }
