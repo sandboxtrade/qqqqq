@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.17 distinct per-character surface voices + photo expression guidance
+// v0.20.18 Sasha character + distinct voice/photo identity routing
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -27,6 +27,7 @@ const CHARACTER_PROFILE_SLUGS = Object.freeze({
   nora_v1: "nora",
   aiko_v1: "aiko",
   hina_v1: "hina",
+  sasha_v1: "sasha",
 });
 
 const FIREBASE_PROJECT_ID = "qqqq-91fc0";
@@ -775,6 +776,8 @@ function photoFallbackForCharacter(characterId, suggestive) {
       return suggestive ? ["мм... ладно. держи)"] : ["сейчас."];
     case "hina_v1":
       return suggestive ? ["ладно... только я уже смущаюсь)"] : ["сейчас... секунду)"];
+    case "sasha_v1":
+      return suggestive ? ["окей... ща, секунду)"] : ["ща, секунду)"];
     case "lea_v1":
       return suggestive ? ["ладно ахах... секунду"] : ["о, ща ахах"];
     case "sofia_v1":

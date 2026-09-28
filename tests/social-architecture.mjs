@@ -15,6 +15,7 @@ assert.match(registry, /mika_v1/);
 assert.match(registry, /rin_v1/);
 assert.match(registry, /aiko_v1/);
 assert.match(registry, /hina_v1/);
+assert.match(registry, /sasha_v1/);
 assert.match(registry, /lea_v1/);
 assert.match(registry, /sofia_v1/);
 assert.match(registry, /eva_v1/);
@@ -22,12 +23,13 @@ assert.match(registry, /nora_v1/);
 assert.match(registry, /appearanceLabel/);
 assert.match(registry, /assets\/profiles\/mika\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/aiko\/avatar\.jpg/);
+assert.match(registry, /assets\/profiles\/sasha\/avatar\.jpg/);
 assert.match(registry, /initialIntimacy/);
 for (const voiceName of [
-  "YUZUKI_VOICE_STYLE", "MIKA_VOICE_STYLE", "RIN_VOICE_STYLE", "AIKO_VOICE_STYLE", "HINA_VOICE_STYLE",
+  "YUZUKI_VOICE_STYLE", "MIKA_VOICE_STYLE", "RIN_VOICE_STYLE", "AIKO_VOICE_STYLE", "HINA_VOICE_STYLE", "SASHA_VOICE_STYLE",
   "LEA_VOICE_STYLE", "SOFIA_VOICE_STYLE", "EVA_VOICE_STYLE", "NORA_VOICE_STYLE",
 ]) assert.match(registry, new RegExp(`voiceProfile: \{ styleGuide: ${voiceName} \}`));
-for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Hina", "Lea", "Sofia", "Eva", "Nora"])
+for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Hina", "Саша", "Lea", "Sofia", "Eva", "Nora"])
   assert.match(registry, new RegExp(`expressionGuidance: "${name}`));
 assert.match(store, /activeCharacterId/);
 assert.match(store, /selectCharacter:/);
@@ -47,5 +49,6 @@ assert.match(worker, /occupied\/personal_project\/reading\/music\/cooking\/erran
 assert.match(worker, /photoFallbackForCharacter/);
 assert.match(worker, /case "mika_v1"/);
 assert.match(worker, /case "nora_v1"/);
+assert.match(worker, /case "sasha_v1"/);
 
 console.log("PASS social architecture foundation");
