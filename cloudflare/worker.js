@@ -51,7 +51,7 @@ const TARGET_PACKET_CHARS = 56_000;
 const MAX_OUTPUT_TOKENS = 480;
 const MAX_ESTIMATED_TURN_COST_USD = 0.008;
 const OPENAI_TIMEOUT_MS = 9_500;
-const OPENAI_IMAGE_TIMEOUT_MS = 105_000;
+const OPENAI_IMAGE_TIMEOUT_MS = 125_000;
 const PROFILE_IDENTITY_FILENAMES = ["identity-sheet.jpg", "identity-sheet.jpeg", "identity-sheet.png", "identity_sheet.jpg", "identity_sheet.png"];
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
@@ -1417,6 +1417,33 @@ function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
   ].join("\n");
 }
 
+function buildOpenAICasualPrimaryPrompt(packet, referenceCount = 0) {
+  const { character, visualProfile, decision, world } = packet;
+  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
+  const framingMap = { selfie: "selfie", mirror: "mirror selfie", portrait: "portrait", upper_body: "upper-body portrait", full_body: "full-body portrait" };
+  const framing = framingMap[decision.intent.framing] || "selfie";
+  return [
+    `Generate one photorealistic casual smartphone ${framing} of the same fictional adult woman ${character.name}, age ${character.age}.`,
+    `Preserve her identity: ${visualProfile.identitySummary}`,
+    referenceCount > 0 ? "Use the attached avatar reference to preserve the same face, hair and apparent age." : "Keep the established identity stable.",
+    `Location: ${normalizePhotoText(decision.intent.location, world.location || "home", 90)}.`,
+    `Outfit: ${normalizePhotoText(decision.intent.outfit, defaultOutfit, 120)}.`,
+    `Pose: ${normalizePhotoText(decision.intent.pose, "natural relaxed pose", 120)}.`,
+    "This is a normal everyday non-sexual personal photo. Natural anatomy, natural lighting, believable smartphone-camera look, no text or watermark.",
+  ].join("\n");
+}
+
+function buildOpenAICasualMinimalPrompt(packet, referenceCount = 0) {
+  const { character, visualProfile, decision } = packet;
+  const framing = decision.intent.framing === "full_body" ? "full-body" : decision.intent.framing === "upper_body" ? "upper-body" : "casual";
+  return [
+    `Generate one realistic ${framing} smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
+    `Keep the same identity: ${visualProfile.identitySummary}`,
+    referenceCount > 0 ? "Use the attached reference only to keep the same person." : "Keep the same person.",
+    "Ordinary non-sexual photo, casual clothes, natural pose, realistic skin, realistic lighting, no text or watermark.",
+  ].join("\n");
+}
+
 function isCasualPhotoIntent(packet) {
   const intent = packet?.decision?.intent || {};
   if (intent.suggestiveLevel !== "none") return false;
@@ -1894,20 +1921,32 @@ async function handlePhoto(request, env, origin) {
     return jsonResponse({ skipped: true, reason: packet.error, model: IMAGE_MODEL }, packet.error === "invalid-input" ? 400 : 200, origin);
   }
   const references = await loadReferenceBundle(packet);
-  const openaiPrompt = buildPhotoPrompt(packet, references.openaiFiles.length);
   const ordinaryPhoto = isCasualPhotoIntent(packet);
   const openaiModeration = ["none", "low"].includes(packet.decision.intent.suggestiveLevel) ? "low" : "auto";
+  let openaiPrompt = ordinaryPhoto
+    ? buildOpenAICasualPrimaryPrompt(packet, references.openaiFiles.length)
+    : buildPhotoPrompt(packet, references.openaiFiles.length);
   let openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
   let openaiAttempts = 1;
-  if (ordinaryPhoto && openaiResult.reason === "openai-image-moderation-blocked") {
-    const retryPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
-    openaiResult = await callOpenAIImage(env, retryPrompt, references.openaiFiles, "low");
+
+  if (ordinaryPhoto && openaiResult.ok !== true) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    openaiPrompt = buildOrdinaryPhotoRetryPrompt(packet, references.openaiFiles.length);
+    openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, "low");
     openaiAttempts += 1;
-  } else if (openaiResult.ok !== true && openaiResult.retryable === true) {
+  }
+
+  if (ordinaryPhoto && openaiResult.ok !== true) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    openaiPrompt = buildOpenAICasualMinimalPrompt(packet, references.openaiFiles.length);
+    openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, "low");
+    openaiAttempts += 1;
+  } else if (!ordinaryPhoto && openaiResult.ok !== true && openaiResult.retryable === true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     openaiResult = await callOpenAIImage(env, openaiPrompt, references.openaiFiles, openaiModeration);
     openaiAttempts += 1;
   }
+
   if (openaiResult.ok === true) {
     return jsonResponse({
       ok: true,
