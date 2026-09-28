@@ -162,10 +162,26 @@ export function resolveAppearanceRequest(
       (intimacy.arousal >= 0.55 || intimacy.initiativeDrive >= 0.58),
   );
 
+  // A live stop/pause remains a hard local boundary for suggestive requests,
+  // even when the optional photo no-refusal override is enabled. Expired old
+  // boundaries decay out of paused/stopped before reaching this resolver.
+  if (request.suggestive && paused) {
+    return {
+      requested: true,
+      requestedVibe: request.vibe,
+      suggestive: true,
+      outcome: "refused",
+      reason: "intimacy-paused",
+      selectedEmotion: base.emotion,
+      forceVariantChange: false,
+      visualEmotion: refusalVisual(runtime, base),
+    };
+  }
+
   // Optional per-character override. It changes only the character-side
   // acceptance decision for direct appearance/photo requests; provider/API
-  // failures remain outside this resolver. Keep sleeping as a physical state,
-  // but do not let mood/relationship/intimacy gates invent a refusal.
+  // failures remain outside this resolver. Keep sleeping and a live intimacy
+  // boundary authoritative, but do not let mood/randomness invent a refusal.
   if (options.photoNoRefusalMode && runtime.world.isAwake && runtime.world.availability !== "sleeping") {
     const overrideEmotion = request.suggestive
       ? "seductive"
@@ -193,18 +209,6 @@ export function resolveAppearanceRequest(
         suggestive: true,
         outcome: "refused",
         reason: "adult-mode-off",
-        selectedEmotion: base.emotion,
-        forceVariantChange: false,
-        visualEmotion: refusalVisual(runtime, base),
-      };
-    }
-    if (paused) {
-      return {
-        requested: true,
-        requestedVibe: request.vibe,
-        suggestive: true,
-        outcome: "refused",
-        reason: "intimacy-paused",
         selectedEmotion: base.emotion,
         forceVariantChange: false,
         visualEmotion: refusalVisual(runtime, base),

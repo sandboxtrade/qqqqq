@@ -3248,9 +3248,9 @@ await test("generic action verbs do not masquerade as photo requests", () => {
 
 await test("conversation corrections do not masquerade as intimacy stop while real stop still stops", () => {
   const lingeriePhoto = detectIntimacySignal("скинь фотку сзади в нижнем белье");
-  assert.equal(lingeriePhoto.kind, "flirt");
+  assert.equal(lingeriePhoto.kind, "none");
   assert.equal(lingeriePhoto.intimacyContext, true);
-  assert.ok(lingeriePhoto.strength >= 0.82);
+  assert.equal(lingeriePhoto.strength, 0);
   const lingerieAppearance = detectAppearanceRequest("скинь фотку сзади в нижнем белье");
   assert.equal(lingerieAppearance.requested, true);
   assert.equal(lingerieAppearance.suggestive, true);

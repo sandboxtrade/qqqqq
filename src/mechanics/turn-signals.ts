@@ -108,7 +108,10 @@ export function detectIntimacySignal(value: string): IntimacySignal {
   const intimatePhotoRequest =
     /(?:скинь|пришли|отправь|покажи|сделай|сфоткай|сфотографируй|можешь\s+(?:скинуть|прислать|отправить|показать|сфоткаться)).{0,48}(?:фот(?:о|ку)?|селфи).{0,80}(?:нижн(?:ее|ем|его)\s+бель[её]|бель[её]|лифчик|бюстгальтер|трусик|стринг|обнаж|гол(?:ая|ой|ым)|соблазн|сексуаль|эрот|пошл)/u.test(normalized);
   if (intimatePhotoRequest)
-    return { kind: "flirt", strength: 0.9, explicit: false, intimacyContext: true };
+    // Requesting an intimate photo is intimacy context, but it is not itself
+    // reciprocal consent or evidence that the character became more aroused.
+    // Photo willingness is decided separately from the intimacy state machine.
+    return { kind: "none", strength: 0, explicit: false, intimacyContext: true };
 
   const arousalStatement =
     /(?:ты\s+меня\s+(?:реально\s+|прям\s+|сильно\s+)?возбуждаешь|я\s+(?:уже\s+)?возбудил(?:ся|ась)|от\s+тебя\s+(?:реально\s+)?возбуждаюсь|меня\s+от\s+тебя\s+заводит|ты\s+меня\s+заводишь)/u.test(normalized);

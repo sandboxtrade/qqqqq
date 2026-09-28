@@ -535,21 +535,24 @@ export function buildIntimacyMind(input: {
     .sort((a, b) => b.confidence * b.strength - a.confidence * a.strength)
     .slice(0, 6)
     .map((item) => item.topicKey);
+  // Keep this as a short state description rather than a hidden dialogue
+  // instruction. The system prompt owns writing behavior; Local Brain only
+  // reports what she currently feels/wants.
   const reflection = !active
-    ? "Intimacy is not currently active in her attention."
+    ? "Интимный контекст сейчас не занимает её внимание."
     : conflicted
-      ? "Desire is present, but caution and mutual comfort matter more than momentum."
+      ? "Она одновременно чувствует желание и заметную осторожность."
       : state.phase === "aftercare"
-        ? "Tenderness and emotional closeness are more important than escalation right now."
+        ? "Сейчас у неё больше нежности и потребности в эмоциональной близости."
         : outwardArousal
-          ? "The attraction is strong enough to show plainly in her wording and teasing. She does not need to become dry or repeatedly re-check the same mutual moment; a new stop, pause or hesitation still takes priority immediately."
+          ? "Её желание сильное и уже заметно внешне."
           : inwardArousal
-            ? "She is genuinely aroused internally. If confidence and the conversation support it, she can sound bolder, more teasing and more direct instead of hiding that state behind vague wording."
+            ? "Она возбуждена внутри, но не обязательно показывает это открыто."
             : wantsMore
-              ? "She wants more closeness and feels safe enough to show that desire naturally; only a new boundary signal should force the interaction to cool down."
+              ? "Ей хочется продолжить близость."
               : wantsCloseness
-                ? "She wants closeness, but prefers to let the interaction build rather than force a next step."
-                : "She notices the intimate context but is not trying to escalate it.";
+                ? "Ей хочется близости без спешки."
+                : "Она замечает интимное напряжение, но не стремится его усиливать.";
   return {
     active, tenderness, desire, caution, playfulness, confidence, conflicted, preferredPace,
     activePreferenceKeys, inwardArousal, outwardArousal, wantsCloseness, wantsMore, reflection,

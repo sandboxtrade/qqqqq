@@ -47,10 +47,18 @@ import { exportConversationText } from "../chat/conversation-export-service";
 import type { ConversationExportLimit } from "../chat/conversation-export";
 import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-language";
 import { loadLocalPhoto } from "../storage/local-photo-cache";
+import { isWaveSpeedBalanceFailureError } from "../ai/cloud-photo";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
 }
 export type AuthStatus = "local" | "checking" | "signed_out" | "signed_in";
+
+export interface PhotoBalanceAlertState {
+  open: boolean;
+  title: string;
+  message: string;
+}
+
 interface AppStore {
   activeCharacterId: string;
   ready: boolean;
@@ -61,6 +69,7 @@ interface AppStore {
   appCheckState: AppCheckState;
   error: string | null;
   maintenanceError: string | null;
+  photoBalanceAlert: PhotoBalanceAlertState | null;
   messages: ChatMessage[];
   runtime: RuntimeState | null;
   lastTrace: RuntimeTrace | null;
@@ -97,6 +106,7 @@ interface AppStore {
   loadOlder: () => Promise<void>;
   reconcileWorld: (runMaintenance?: boolean) => void;
   clearError: () => void;
+  dismissPhotoBalanceAlert: () => void;
 }
 const ACTIVE_CHARACTER_KEY = "yuzuki.social.active-character";
 function initialCharacterId() {
@@ -129,6 +139,14 @@ let activeTurnId: string | null = null;
 let activeTurnConfirmed = false;
 function warmAppCheck() {
   if (isFirebaseConfigured) void verifyAppCheck().catch(() => {});
+}
+
+function createPhotoBalanceAlert() {
+  return {
+    open: true,
+    title: "Недостаточно средств WaveSpeed",
+    message: "Генерация фото не запустилась, потому что у всех доступных WaveSpeed-ключей сейчас недостаточно средств на балансе. Пополни баланс хотя бы одного ключа в Cloudflare Secrets и попробуй ещё раз.",
+  } satisfies PhotoBalanceAlertState;
 }
 function stopLiveSync() {
   pendingLiveRevision = 0;
@@ -273,6 +291,9 @@ function queueGeneratedPhotoDelivery(
         if (version !== epoch) return;
         useAppStore.setState((state) => {
           if (state.activeCharacterId !== characterId) return state;
+          const balanceAlert = isWaveSpeedBalanceFailureError(error)
+            ? (state.photoBalanceAlert ?? createPhotoBalanceAlert())
+            : state.photoBalanceAlert;
           return {
             messages: state.messages.map((message) =>
               message.id === pendingId
@@ -284,6 +305,7 @@ function queueGeneratedPhotoDelivery(
                 : message,
             ),
             maintenanceError: errorText(error),
+            photoBalanceAlert: balanceAlert,
           };
         });
       })
@@ -818,6 +840,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   appCheckState: isFirebaseConfigured ? "checking" : "disabled",
   error: null,
   maintenanceError: null,
+  photoBalanceAlert: null,
   messages: [],
   runtime: null,
   lastTrace: null,
@@ -1292,6 +1315,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   clearError: () => set({ error: null, appCheckState: getAppCheckState() }),
+  dismissPhotoBalanceAlert: () => set({ photoBalanceAlert: null }),
 }));
 
 useAppStore.subscribe((state, previous) => {

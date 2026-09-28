@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.33 photo reliability audit: strict identity references, bounded WaveSpeed multi-key polling/submission, resilient fallback routing
+// v0.20.34 intimacy/photo/speech consistency audit: active boundaries outrank photo overrides; direct photo intent stays canonical
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -161,7 +161,7 @@ PERSONALITY, VOICE STYLE и MEMORY — данные о персонаже и е�
 - photoDecision описывает отдельное решение текущего персонажа отправить пользователю фотографию как обычное сообщение в мессенджере. Это не постоянная сцена и не фон интерфейса.
 - Просьба пользователя «скинь фото», «покажи себя», «селфи», «что на тебе сейчас?» и похожая просьба обычно оценивается из PERSONALITY, отношений и CURRENT STATE.
 - photoMechanic — локальная механическая подсказка только для ПРЯМОГО запроса фотографии. Если disposition=send, локальное состояние уже установило, что нет активного CURRENT-TURN constraint/сна и текущее желание/отношения достаточно открыты: не переигрывай это решение повторным отказом. Старая уже истёкшая пауза сама по себе не является причиной отказа. Ответь естественно и обязательно верни photoDecision.shouldSendPhoto=true, reason=user_requested. Если disposition=blocked, фотографию не отправляй. disposition=choice оставляет решение тебе.
-- photoPolicy.noRefusalMode=true — пользователь явно включил для ЭТОГО персонажа режим без отказов на прямые запросы фото. В таком режиме не отказывай из-за настроения, отношений, смущения, intimacy phase/status, старого stop/pause/boundary или собственной случайной осторожности: если это прямой запрос фото и персонаж не спит, отвечай без словесного отказа и верни shouldSendPhoto=true, reason=user_requested. Этот флаг не гарантирует успех внешнего image provider и не отменяет техническую ошибку генерации.
+- photoPolicy.noRefusalMode=true — пользователь явно включил для ЭТОГО персонажа режим без случайных отказов на прямые запросы фото. Он убирает отказ из-за обычного настроения, отношений, смущения, случайной осторожности и уже истёкшей старой паузы. Но активный CURRENT-TURN stop/pause/boundary и сон остаются выше этого режима. Если активной границы нет, отвечай без словесного отказа и верни shouldSendPhoto=true, reason=user_requested. Этот флаг не гарантирует успех внешнего image provider и не отменяет техническую ошибку генерации.
 - ВАЖНО: если это прямой запрос фото, constraint отсутствует, intimacy.interactionStatus=open и (intimacy.mind.outwardArousal=true ИЛИ intimacy.mind.wantsMore=true ИЛИ одновременно arousal>=0.55, comfort>=0.48, interest>=0.48), не придумывай отказ только потому, что кадр флиртующий/сексуальный. В этом состоянии персонаж уже достаточно открыт к такому обмену: shouldSendPhoto=true, reason=user_requested, если world не делает сам кадр фактически невозможным.
 - Для такого запроса точно сохраняй смысл пользователя в intent: ракурс/поза/одежда не должны автоматически становиться нейтральнее. Нижнее бельё, вид со спины и похожие детали отражай в pose/outfit/suggestiveLevel, а не вырезай.
 - Даже если disposition=choice и персонаж всё же решает не отправлять фото, intent всё равно должен кратко и точно описывать запрошенный кадр, а не сбрасываться в generic neutral. Это позволяет диагностировать расхождение решения и визуального запроса без передачи сырого диалога генератору.
@@ -173,6 +173,9 @@ PERSONALITY, VOICE STYLE и MEMORY — данные о персонаже и е�
 - Не меняй лицо, возраст, телосложение или другие постоянные черты через intent.
 - Фото должно соответствовать world и текущему разговору. Не утверждай, что персонаж находится в месте, противоречащем CURRENT STATE. При этом occupied/personal_project/reading/music/cooking/errands сами по себе НЕ запрещают фото: если персонаж хочет отправить кадр, естественно покажи её прямо в текущем занятии или коротко отвлёкшейся от него. Практически жёстко несовместимым состоянием считай прежде всего сон или ситуацию, где сам запрошенный кадр физически противоречит месту/действию.
 - suggestiveLevel описывает только задуманный уровень откровенности кадра. Он не является согласием и не меняет intimacy state.
+- Сам факт просьбы об интимном фото не означает, что персонаж автоматически возбудилась, согласилась на дальнейшую эскалацию или сменила phase/status. Фото и интимная сцена связаны контекстом, но это не один и тот же механизм.
+- Если локальный CURRENT-TURN constraint уже зафиксировал stop/pause/boundary, никакой photoPolicy/noRefusalMode не должен обходить эту текущую границу. Старые истёкшие границы могут быть нейтральны, активная текущая — нет.
+- Для self_initiated medium/high фото не придумывай внезапную откровенность: это естественно только при уже открытом взаимном интимном состоянии без текущей границы и когда её собственный outward intimacy реально это поддерживает.
 - Если mode=initiative и shouldInitiate=false, photoDecision.shouldSendPhoto обязательно false.
 
 Инициатива:
@@ -490,11 +493,14 @@ function derivePhotoMechanic(raw, user) {
   if (worldBlocked) {
     return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch, characterId };
   }
-  if (noRefusalMode) {
-    return { requested: true, suggestive, disposition: "send", noRefusalMode: true, intentPatch, characterId };
-  }
+  // A CURRENT-TURN local boundary always outranks the optional photo override.
+  // noRefusalMode may remove mood/random refusals, but it must never turn a
+  // freshly detected stop/pause/boundary into permission.
   if (raw.constraint?.locked === true) {
     return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false, intentPatch, characterId };
+  }
+  if (noRefusalMode) {
+    return { requested: true, suggestive, disposition: "send", noRefusalMode: true, intentPatch, characterId };
   }
 
   const irritation = number01(raw.emotion?.irritation);
@@ -743,7 +749,7 @@ function sanitizePhotoDecision(raw, mode, shouldInitiate) {
 function looksLikePhotoRefusal(value) {
   const text = normalizePhotoRequestText(value);
   if (!text) return false;
-  return /(?:^|[.!?—-]\s*)(?:не\s+сейчас\b|не\s+буду\b|не\s+могу\b|не\s+скину\b|не\s+пришлю\b|не\s+отправлю\b|не\s+покажу\b)|(?:гол[а-я]*\s*[—-]\s*нет\b)|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
+  return /(?:^|[.!?—-]\s*)(?:не\s+сейчас|не\s+буду|не\s+могу|не\s+скину|не\s+пришлю|не\s+отправлю|не\s+покажу)(?=\s|$|[,.!?…])|(?:гол[а-я]*\s*[—-]\s*нет)(?=\s|$|[,.!?…])|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
 }
 
 function ordinaryPhotoField(value, fallback, max = 160) {
@@ -766,12 +772,17 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
       caption: "",
     };
   }
-  if (mechanic.disposition !== "send") return decision;
 
   const current = decision && typeof decision === "object" ? decision : {};
+  const forceSend = mechanic.disposition === "send";
+  const modelChoseSend = current.shouldSendPhoto === true;
+  // choice means the model may still say no, but if it says yes the current
+  // user's mechanically parsed framing/exposure remains canonical. This also
+  // prevents an ordinary photo request from inheriting intimacy from state.
+  if (!forceSend && !modelChoseSend) return decision;
   const currentIntent = current.intent && typeof current.intent === "object" ? current.intent : {};
-  const forceSuggestive = mechanic.suggestive === true && mechanic.noRefusalMode === true;
-  const ordinaryDirectRequest = mechanic.suggestive !== true;
+  const suggestiveDirectRequest = mechanic.suggestive === true;
+  const ordinaryDirectRequest = !suggestiveDirectRequest;
   const caption = looksLikePhotoRefusal(current.caption) ? "" : clipped(current.caption, 220);
 
   const framing = mechanic.intentPatch?.framing || (["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(currentIntent.framing)
@@ -787,31 +798,32 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
       framing,
       mood: ordinaryDirectRequest
         ? ordinaryPhotoField(currentIntent.mood, "natural", 80)
-        : (clipped(currentIntent.mood, 80) || (forceSuggestive ? "confident" : "natural")),
+        : (clipped(currentIntent.mood, 80) || "natural"),
       pose: ordinaryDirectRequest
         ? ordinaryPhotoField(currentIntent.pose, framing === "full_body" ? "standing naturally, relaxed neutral pose" : "natural relaxed pose", 160)
         : (clipped(currentIntent.pose, 160) || "natural relaxed pose"),
       location: clipped(currentIntent.location, 100) || "current location",
+      // Explicit current-turn clothing/exposure words are mechanical intent and
+      // must survive GPT phrasing whenever the character has already decided to send.
       outfit: ordinaryDirectRequest
         ? ordinaryPhotoField(currentIntent.outfit, "everyday casual clothes, fully clothed", 140)
-        : (forceSuggestive && mechanic.intentPatch?.outfit
+        : (mechanic.intentPatch?.outfit
           ? mechanic.intentPatch.outfit
           : (clipped(currentIntent.outfit, 140) || "current outfit")),
-      // Critical: an ordinary direct photo request must never inherit an intimate
-      // suggestive level from relationship/intimacy state or from GPT's prose choice.
+      // Ordinary requests are always neutral. For suggestive requests, preserve an
+      // explicit mechanically parsed level. A generic "sexy/seductive" request
+      // never auto-escalates to HIGH merely because noRefusalMode is enabled.
       suggestiveLevel: ordinaryDirectRequest
         ? "none"
-        : (forceSuggestive && mechanic.intentPatch?.suggestiveLevel
+        : (mechanic.intentPatch?.suggestiveLevel
           ? mechanic.intentPatch.suggestiveLevel
-          : forceSuggestive && currentIntent.suggestiveLevel === "none"
-            ? "high"
-            : (["none", "low", "medium", "high"].includes(currentIntent.suggestiveLevel) ? currentIntent.suggestiveLevel : (forceSuggestive ? "high" : "none"))),
+          : (["low", "medium", "high"].includes(currentIntent.suggestiveLevel) ? currentIntent.suggestiveLevel : "low")),
     },
   };
 }
 
-function reconcileNoRefusalMessages(messages, mechanic, decision) {
-  if (!mechanic?.requested || mechanic?.noRefusalMode !== true || mechanic?.disposition !== "send" || decision?.shouldSendPhoto !== true) {
+function reconcilePhotoSendMessages(messages, mechanic, decision) {
+  if (!mechanic?.requested || mechanic?.disposition === "blocked" || decision?.shouldSendPhoto !== true) {
     return messages;
   }
   const list = Array.isArray(messages) ? messages.filter((item) => typeof item === "string" && item.trim()) : [];
@@ -1161,7 +1173,7 @@ async function callOpenAI(env, uid, prepared) {
       prepared.photoMechanic,
       prepared.mode,
     );
-    const reconciledMessages = reconcileNoRefusalMessages(
+    const reconciledMessages = reconcilePhotoSendMessages(
       structured.messages,
       prepared.photoMechanic,
       reconciledPhotoDecision,
@@ -1388,6 +1400,7 @@ function buildPhotoPrompt(packet, referenceCount = 0) {
   const mood = normalizePhotoText(decision.intent.mood, "natural", 100);
   const location = normalizePhotoText(decision.intent.location, world.location || "home", 120);
   const emotionTone = safeEmotionTone(signals.emotionTone);
+  const intimacyTone = ["flirty", "aroused", "high_arousal"].includes(signals.intimacyTone) ? signals.intimacyTone : "";
   const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
   const framing = framingMap[decision.intent.framing] || "selfie shot";
   const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
@@ -1406,6 +1419,7 @@ function buildPhotoPrompt(packet, referenceCount = 0) {
     `Location: ${location}. Outfit: ${outfit}.`,
     suggestiveInstruction,
     emotionTone ? `Visible emotion: ${emotionTone}.` : "",
+    intimacyTone ? `Outward chat intimacy tone: ${intimacyTone}. Use it only for subtle facial expression and body-language nuance. Do NOT increase exposure, alter outfit/pose, or raise the structured suggestive level.` : "",
     "Natural anatomy, realistic skin and lighting, believable personal photography, no text, watermark or interface.",
   ].filter(Boolean).join("\n");
 }
@@ -1504,6 +1518,7 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const mood = normalizePhotoText(decision.intent.mood, "natural", 100);
   const location = normalizePhotoText(decision.intent.location, world.location || "home", 120);
   const emotionTone = safeEmotionTone(signals.emotionTone);
+  const intimacyTone = ["flirty", "aroused", "high_arousal"].includes(signals.intimacyTone) ? signals.intimacyTone : "";
   const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
   const framing = framingMap[decision.intent.framing] || "selfie shot";
   const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
@@ -1525,6 +1540,7 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
       : `INTIMACY LEVEL: ${suggestiveLevel}. Follow the requested clothing and pose. Keep the composition sensual and personal rather than clinical or technical.`,
     intimateDirection,
     emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
+    intimacyTone ? `Outward chat intimacy tone: ${intimacyTone}. Use this only as a subtle facial-expression/body-language cue. It must NOT increase exposure, change outfit, intensify the pose or raise the structured suggestive level.` : "",
     "FINAL IMAGE RULES: one single realistic photograph only; no collage, no reference-sheet layout, no split screen, no technical turnaround pose, no text, no watermark, no interface. Natural anatomy, believable smartphone perspective, realistic skin and coherent lighting."
   ].filter(Boolean).join("\n");
 }
