@@ -1,0 +1,6 @@
+Update these files in the repo:
+- cloudflare/worker.js
+- src/config/version.ts
+- package.json
+- tests/intimacy-photo-speech.mjs
+- RELEASE_v0.20.41.md

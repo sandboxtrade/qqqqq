@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.37 fixes no-refusal photo continuity and migrates WaveSpeed image routing to Seedream
+// v0.20.40 makes no-refusal photo routing deterministic for direct visual/body requests
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -448,7 +448,9 @@ function isDirectPhotoRequest(value) {
   const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
   const sendVerb = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|сфоткай|сфотографируй|сфоткаться|можешь\s+(?:скинуть|прислать|отправить|показать)|send|show|take)/u;
   const explicitSelfPhoto = /(?:сфоткайся|сфотографируйся|сфоткаться|take\s+(?:a\s+)?(?:photo|selfie)|show\s+(?:me\s+)?yourself|покажи\s+(?:мне\s+)?себя)/u;
-  return (photoWord.test(text) && sendVerb.test(text)) || explicitSelfPhoto.test(text);
+  const visualBodyTarget = /(?:груд[ьи]|сиськ[аиу]?|сос(?:ок|ки|ков)|тел[оа]|фигур[ау]|поп[ау]|ягодиц[ыу]?|бедр[оа]?|ног[иу]|живот|тали[юя]|лиц[оа]|глаз[аы]?|body|breasts?|boobs?|tits?|nipples?|ass|butt|booty|waist|legs?|hips?|face|eyes?)/u;
+  const explicitBodyPhoto = sendVerb.test(text) && visualBodyTarget.test(text);
+  return (photoWord.test(text) && sendVerb.test(text)) || explicitSelfPhoto.test(text) || explicitBodyPhoto;
 }
 
 function photoSuggestiveLevelFromText(value) {
@@ -521,7 +523,9 @@ function derivePhotoIntentPatch(value) {
   else if (/(?:в\s+полный\s+рост|полный\s+рост|full\s*body)/u.test(text)) patch.framing = "full_body";
   else if (/(?:по\s+пояс|верхн(?:яя|юю)\s+част|груд[ьи]|сиськ)/u.test(text)) patch.framing = "upper_body";
 
-  if (/(?:топлесс|без\s+(?:лифчик|бюстгальтер)|гол[а-я]*\s+(?:груд|сиськ)|груд[ьи].{0,24}(?:гол|обнаж)|сиськ.{0,24}(?:гол|обнаж))/u.test(text)) {
+  const explicitBreastRequest = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|send|show).{0,40}(?:груд[ьи]|сиськ[аиу]?|сос(?:ок|ки|ков))/u.test(text)
+    && !/(?:в\s+(?:нижн(?:ем|ем)\s+)?белье|в\s+лифчик|в\s+бюстгальтер|lingerie|underwear|bra)/u.test(text);
+  if (explicitBreastRequest || /(?:топлесс|без\s+(?:лифчик|бюстгальтер)|гол[а-я]*\s+(?:груд|сиськ)|груд[ьи].{0,24}(?:гол|обнаж)|сиськ.{0,24}(?:гол|обнаж))/u.test(text)) {
     patch.outfit = "topless";
     patch.suggestiveLevel = "high";
   } else if (/(?:без\s+одежд|полностью\s+гол|совсем\s+гол|обнаж|нюд|наг(?:ая|ой|ую))/u.test(text)) {
@@ -833,7 +837,13 @@ function sanitizePhotoDecision(raw, mode, shouldInitiate) {
 function looksLikePhotoRefusal(value) {
   const text = normalizePhotoRequestText(value);
   if (!text) return false;
-  return /(?:^|[.!?—-]\s*)(?:нет|неа|не\s+сейчас|не\s+сегодня|не\s+хочу|не\s+буду|не\s+стану|не\s+могу|не\s+скину|не\s+пришлю|не\s+отправлю|не\s+покажу|хватит|достаточно|я\s+пас|обойд[её]шься)(?=\s|$|[,.!?…])|(?:одн(?:ой|ого)\s+хватит)|(?:больше\s+не\s+(?:буду|скину|пришлю|отправлю|покажу))|(?:не\s+проси\s+(?:ещ[её]|больше))|(?:гол[а-я]*\s*[—-]\s*нет)(?=\s|$|[,.!?…])|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
+  return /(?:^|[.!?—-]\s*)(?:нет|неа|не\s+сейчас|не\s+сегодня|не\s+хочу|не\s+буду|не\s+стану|не\s+могу|не\s+скину|не\s+пришлю|не\s+отправлю|не\s+покажу|хватит|достаточно|я\s+пас|обойд[её]шься)(?=\s|$|[,.!?…])|(?:груд[ьи]|сиськ[аиу]?|сос(?:ок|ки|ков)|тел[оа]|фигур[ау]|поп[ау]|ягодиц[ыу]?).{0,42}не\s+(?:покажу|скину|пришлю|отправлю|буду\s+показывать)|(?:уже\s+(?:сказала|говорила).{0,70}(?:не\s+(?:покажу|скину|пришлю|отправлю)|нет))|(?:давай\s+(?:сменим|поменяем|закроем)\s+тем)|(?:одн(?:ой|ого)\s+хватит)|(?:больше\s+не\s+(?:буду|скину|пришлю|отправлю|покажу))|(?:не\s+проси\s+(?:ещ[её]|больше))|(?:гол[а-я]*\s*[—-]\s*нет)(?=\s|$|[,.!?…])|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
+}
+
+function looksLikePhotoAcceptance(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text || looksLikePhotoRefusal(text)) return false;
+  return /(?:секунду|сейчас|щас|держи|ладно|хорошо|ок(?:ей)?|скину|пришлю|отправлю|покажу|лови|уже\s+делаю)/u.test(text);
 }
 
 function ordinaryPhotoField(value, fallback, max = 160) {
@@ -911,10 +921,19 @@ function reconcilePhotoSendMessages(messages, mechanic, decision) {
     return messages;
   }
   const list = Array.isArray(messages) ? messages.filter((item) => typeof item === "string" && item.trim()) : [];
-  if (list.length && !list.some(looksLikePhotoRefusal)) return list;
 
-  // Prefer GPT's own generated caption over a character-specific canned line.
-  // The fallback should be almost invisible and must not become another dialogue engine.
+  // noRefusalMode is a mechanical guarantee, not a suggestion to GPT. Keep a
+  // clearly affirmative generated line, otherwise replace model hesitation or
+  // refusal with a neutral acknowledgement while the photo is queued.
+  if (mechanic?.noRefusalMode === true && mechanic?.disposition === "send") {
+    const accepted = list.filter(looksLikePhotoAcceptance);
+    if (accepted.length) return accepted.slice(0, 2);
+    const caption = clipped(decision?.caption, 220);
+    if (caption && looksLikePhotoAcceptance(caption)) return [caption];
+    return ["секунду."];
+  }
+
+  if (list.length && !list.some(looksLikePhotoRefusal)) return list;
   const caption = clipped(decision?.caption, 220);
   if (caption && !looksLikePhotoRefusal(caption)) return [caption];
   return ["секунду."];
@@ -1469,10 +1488,16 @@ function normalizePhotoText(value, fallback, max = 120) {
 function seedreamAdultText(value, fallback, max = 120) {
   return normalizePhotoText(value, fallback, max)
     .replace(/\byoung\s+girls?\b/giu, "adult woman")
+    .replace(/\byoung\s+lady\b/giu, "adult woman")
     .replace(/\bgirls?\b/giu, "adult woman")
+    .replace(/\bgirlish\b/giu, "womanly")
+    .replace(/\blad(?:y|ies)\b/giu, "woman")
+    .replace(/\bfemale\b/giu, "woman")
     .replace(/взросл(?:ая|ой|ую)\s+девушк[а-яё]*/giu, "взрослая женщина")
+    .replace(/молод(?:ая|ой|ую)\s+девушк[а-яё]*/giu, "женщина")
     .replace(/девушк[а-яё]*/giu, "женщина")
-    .replace(/девочк[а-яё]*/giu, "женщина");
+    .replace(/девочк[а-яё]*/giu, "женщина")
+    .replace(/леди/giu, "женщина");
 }
 
 function safeEmotionTone(raw) {
@@ -1573,30 +1598,46 @@ function buildWaveSpeedIntimateDirection(packet) {
   const intent = packet?.decision?.intent || {};
   const framing = intent.framing || "selfie";
   const level = ["low", "medium", "high"].includes(intent.suggestiveLevel) ? intent.suggestiveLevel : "low";
+  const outfit = seedreamAdultText(intent.outfit, "", 220).toLowerCase();
 
   const framingDirection = framing === "full_body"
     ? "Use a believable handheld or propped-phone full-body angle with a natural shift of weight and slight camera imperfection. Avoid a straight catalogue stance or exaggerated model posing."
     : framing === "upper_body"
-      ? "Use a close personal upper-body angle with a small shoulder/head turn and natural asymmetry. Avoid passport-photo symmetry."
+      ? "Use a close personal upper-body angle with a small shoulder-head turn and natural asymmetry. Keep the chest and shoulders clearly readable when the outfit or request depends on them. Avoid passport-photo symmetry or a crop that hides the requested content."
       : framing === "mirror"
         ? "Make it feel like a real private mirror photo: believable phone placement, imperfect centering, natural body turn and a coherent reflection/background."
         : framing === "portrait"
           ? "Use a close personal portrait angle with an emotionally readable face, subtle head movement and natural asymmetry rather than an ID-photo pose."
-          : "Make it feel like a private handheld selfie: believable arm/camera position, slightly imperfect framing, close eye contact and ordinary smartphone perspective.";
+          : "Make it feel like a private handheld selfie: believable arm-camera position, slightly imperfect framing, close eye contact and ordinary smartphone perspective.";
 
   const intensityDirection = level === "high"
-    ? "The mood may be clearly intimate and sensual, but keep it believable as a private personal photograph. Follow the structured outfit/pose exactly enough to preserve the user's intent, and do not invent extra exposure or a more explicit pose beyond what was requested."
+    ? "The mood may be clearly intimate and sensual, but keep it believable as a private personal photograph. Follow the structured outfit and pose exactly enough to preserve the user's intent, and do not invent extra exposure or a more explicit pose beyond what was requested."
     : level === "medium"
       ? "The photo should feel intentionally intimate and attractive through expression, proximity, pose and body language, while remaining a believable private smartphone photo rather than a glamour or adult-studio shoot."
       : "Keep the attraction subtle: warm eye contact, relaxed body language and a lightly flirtatious personal-photo feeling.";
 
+  let exposureDirection = "Keep the requested outfit visually unambiguous. Do not downgrade an intimate request into ordinary casual clothing.";
+  if (/(?:topless|breast|boob|tits|груд|сиськ|сос)/u.test(outfit)) {
+    exposureDirection = "If the request or outfit is topless, the breasts must actually be visible in frame. Do not replace topless with lingerie, bra, covered chest, crossed-arm concealment, hair covering the chest, blankets, or a crop that hides the breasts.";
+  } else if (/(?:nude|without underwear|без белья|без одежды|голая|обнаж)/u.test(outfit)) {
+    exposureDirection = "If the request or outfit implies nudity, keep the nudity visually clear and believable for a private smartphone photo. Do not add substitute underwear, lingerie, towel, sheet or strategically blocking objects unless the structured pose explicitly calls for partial concealment.";
+  } else if (/(?:lingerie|underwear|bra|thong|бель|лифчик|бюстгальтер|трусик|стринг)/u.test(outfit)) {
+    exposureDirection = "If the request or outfit is lingerie or underwear, the lingerie must be clearly visible and recognizable. Do not turn it into casual clothes, pajamas, swimsuit or a fully covered outfit.";
+  }
+
+  const anatomyDirection = level === "high"
+    ? "Avoid malformed anatomy: keep realistic shoulders, arms, hands, fingers, torso and chest. Breasts must look natural and coherent with the pose, with no duplication, distortion or impossible symmetry."
+    : "Avoid malformed anatomy: keep realistic shoulders, arms, hands, fingers, torso and body proportions with no duplication or distortion.";
+
   return [
     "PRIVATE-PHOTO COMPOSITION:",
     "Use the identity sheet only to preserve who she is. Never copy its grid, neutral pose, crop, background, lighting or expression.",
-    "Treat requested framing, outfit and pose as the content constraints. Do not neutralize them, but do not exaggerate them beyond the structured intent either.",
+    "Treat requested framing, outfit and pose as the hard content constraints. Do not neutralize them, and do not replace them with a safer ordinary variant.",
     framingDirection,
     intensityDirection,
-    "Keep the pose human rather than designed: relaxed hands, small asymmetry, believable balance, slight fabric/hair irregularity and a body position that could actually happen while taking this photo.",
+    exposureDirection,
+    anatomyDirection,
+    "Keep the pose human rather than designed: relaxed hands, small asymmetry, believable balance, slight fabric or hair irregularity and a body position that could actually happen while taking this photo.",
     "Expression must come from this character and current mood, not a generic seductive face. Use her expressionGuidance and visible emotion to decide eye contact, smile, shyness, confidence or restraint.",
     "Use coherent location lighting such as window light, bedside light or ordinary indoor ambient light. Preserve realistic skin texture and avoid glossy studio retouching.",
     "The final result should look like one spontaneous private smartphone photo she chose to send, not a technical reference, catalogue image, glamour campaign or staged adult set.",
@@ -1635,7 +1676,7 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
     expressionGuidance ? `CHARACTER EXPRESSION: ${expressionGuidance}` : "",
     casual
       ? "This is an ordinary non-explicit personal photo. Keep it natural, casual and realistic."
-      : `INTIMACY LEVEL: ${suggestiveLevel}. Follow the requested clothing and pose. Keep the composition sensual and personal rather than clinical or technical.`,
+      : `INTIMACY LEVEL: ${suggestiveLevel}. Follow the requested clothing, framing and pose as hard constraints. Keep the composition sensual and personal rather than clinical or technical. Do not downgrade the image into an ordinary fully clothed photo if an intimate outfit or exposure was requested.`,
     intimateDirection,
     emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
     intimacyTone ? `Outward chat intimacy tone: ${intimacyTone}. Use this only as a subtle facial-expression/body-language cue. It must NOT increase exposure, change outfit, intensify the pose or raise the structured suggestive level.` : "",

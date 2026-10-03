@@ -72,6 +72,15 @@ try {
   assert.equal(directSelf.disposition, "send");
   assert.equal(directSelf.continuation, false);
 
+  const directBreast = worker.derivePhotoMechanic(baseRaw, "Скинь грудь");
+  assert.ok(directBreast);
+  assert.equal(directBreast.disposition, "send");
+  assert.equal(directBreast.continuation, false);
+  assert.equal(directBreast.suggestive, true);
+  assert.equal(directBreast.intentPatch.framing, "upper_body");
+  assert.equal(directBreast.intentPatch.outfit, "topless");
+  assert.equal(directBreast.intentPatch.suggestiveLevel, "high");
+
   const continued = worker.derivePhotoMechanic(baseRaw, "ещё одну");
   assert.equal(continued.disposition, "send");
   assert.equal(continued.continuation, true);
@@ -161,6 +170,16 @@ try {
   });
   assert.deepEqual(forcedEnough, ["щас"]);
 
+  const forcedBodyRefusal = worker.reconcilePhotoSendMessages(["Нет. Я уже сказала, что грудь не покажу. Давай сменим тему."], { requested: true, disposition: "send", noRefusalMode: true }, {
+    shouldSendPhoto: true, caption: "", intent: ordinaryChoice.intent,
+  });
+  assert.deepEqual(forcedBodyRefusal, ["секунду."]);
+
+  const forcedBodyAcceptance = worker.reconcilePhotoSendMessages(["ладно, сейчас скину"], { requested: true, disposition: "send", noRefusalMode: true }, {
+    shouldSendPhoto: true, caption: "", intent: ordinaryChoice.intent,
+  });
+  assert.deepEqual(forcedBodyAcceptance, ["ладно, сейчас скину"]);
+
   const prompt = worker.buildWaveSpeedPhotoPrompt({
     character: { name: "Yuzuki", age: 24 },
     visualProfile: { identitySummary: "вымышленная взрослая девушка 24 лет, same adult girl", defaultPhotoStyle: "natural smartphone photo of a girl", expressionGuidance: "эта девушка reserved but expressive", defaultOutfits: ["casual"] },
@@ -174,6 +193,16 @@ try {
   assert.match(prompt, /adult woman/iu);
   assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
+  const toplessPrompt = worker.buildWaveSpeedPhotoPrompt({
+    character: { name: "Yuzuki", age: 24 },
+    visualProfile: { identitySummary: "same adult woman", defaultPhotoStyle: "natural smartphone photo", expressionGuidance: "reserved but expressive", defaultOutfits: ["casual"] },
+    decision: { intent: { framing: "upper_body", mood: "sensual", pose: "reclining naturally", location: "bedroom", outfit: "topless", suggestiveLevel: "high" } },
+    world: { location: "bedroom" },
+    signals: { emotionTone: "desire", intimacyTone: "high_arousal" },
+  }, 1);
+  assert.match(toplessPrompt, /breasts must actually be visible in frame/i);
+  assert.match(toplessPrompt, /Do not replace topless with lingerie, bra, covered chest/i);
+  assert.doesNotMatch(toplessPrompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const lowPrompt = worker.buildPhotoPrompt({
     character: { name: "Yuzuki", age: 24 },
