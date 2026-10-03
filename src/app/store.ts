@@ -19,7 +19,6 @@ import {
 import {
   getAppCheckState,
   initializeFirebaseAppCheck,
-  verifyAppCheck,
   isFirebaseConfigured,
   isLocalRepositoryAllowed,
   type AppCheckState,
@@ -58,7 +57,6 @@ export interface PhotoBalanceAlertState {
   title: string;
   message: string;
 }
-
 interface AppStore {
   activeCharacterId: string;
   ready: boolean;
@@ -137,9 +135,6 @@ let pendingLiveRevision = 0;
 let flushLiveRevision: (() => void) | null = null;
 let activeTurnId: string | null = null;
 let activeTurnConfirmed = false;
-function warmAppCheck() {
-  if (isFirebaseConfigured) void verifyAppCheck().catch(() => {});
-}
 
 function createPhotoBalanceAlert() {
   return {
@@ -148,6 +143,7 @@ function createPhotoBalanceAlert() {
     message: "Генерация фото не запустилась, потому что у всех доступных WaveSpeed-ключей сейчас недостаточно средств на балансе. Пополни баланс хотя бы одного ключа в Cloudflare Secrets и попробуй ещё раз.",
   } satisfies PhotoBalanceAlertState;
 }
+
 function stopLiveSync() {
   pendingLiveRevision = 0;
   flushLiveRevision = null;
@@ -680,7 +676,6 @@ async function sendTurn(message: ChatMessage) {
   liveRefresh = null;
   activeTurnId = message.id;
   activeTurnConfirmed = false;
-  warmAppCheck();
   const version = epoch;
   const controller = new AbortController();
   active = controller;
@@ -867,8 +862,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       assertRuntimeConfiguration();
       watchAuth();
       set({ appCheckState: initializeFirebaseAppCheck() });
-      warmAppCheck();
-      const user = isFirebaseConfigured
+          const user = isFirebaseConfigured
         ? await bounded(
             (async () => {
               await finishRedirect();
@@ -941,8 +935,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       assertRuntimeConfiguration();
       initializeFirebaseAppCheck();
-      warmAppCheck();
-      const user = await bounded(
+          const user = await bounded(
         signInWithGoogle(),
         60000,
         "Вход через Google",

@@ -14,6 +14,7 @@ const appCheckLabels: Record<AppCheckState, string> = {
   missing_site_key: "нужен site key",
   debug: "debug mode",
   active: "защищён",
+  throttled: "403 / временно заблокирован",
   error: "ошибка",
 };
 

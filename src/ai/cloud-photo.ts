@@ -51,6 +51,7 @@ export interface CloudPhotoResult {
   providerTaskId?: string;
   primaryFailure?: string;
   primaryDetail?: string;
+  detail?: string;
   reason?: string;
 }
 
@@ -126,6 +127,39 @@ function parseUsage(raw: WorkerPhotoReply["usage"]) {
 function reasonFrom(data: WorkerPhotoReply, status: number) {
   const fromBody = firstString(data.reason, data.error, data.detail);
   return fromBody || `photo-worker-http-${status}`;
+}
+
+export function isWaveSpeedBalanceFailureText(...values: unknown[]) {
+  const text = values
+    .filter((value) => typeof value === "string" && value.trim())
+    .join(" ")
+    .toLowerCase();
+  const balanceFailure = /top[ -]?up|insufficient (?:balance|credit|credits|funds)|low balance|out of (?:credit|credits)|balance.*required|credit.*required|payment required|billing/;
+  if (!text.includes("wavespeed") && !balanceFailure.test(text)) return false;
+  return balanceFailure.test(text);
+}
+
+export class CloudPhotoGenerationError extends Error {
+  reason?: string;
+  detail?: string;
+  provider?: "openai" | "wavespeed";
+  primaryFailure?: string;
+  primaryDetail?: string;
+  constructor(result: Pick<CloudPhotoResult, "reason" | "detail" | "provider" | "primaryFailure" | "primaryDetail">) {
+    super(result.detail || result.primaryDetail || result.reason || "photo-generation-failed");
+    this.name = "CloudPhotoGenerationError";
+    this.reason = result.reason;
+    this.detail = result.detail;
+    this.provider = result.provider;
+    this.primaryFailure = result.primaryFailure;
+    this.primaryDetail = result.primaryDetail;
+  }
+}
+
+export function isWaveSpeedBalanceFailureError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const maybe = error as Partial<CloudPhotoGenerationError> & { message?: unknown };
+  return isWaveSpeedBalanceFailureText(maybe.reason, maybe.detail, maybe.primaryFailure, maybe.primaryDetail, maybe.message);
 }
 
 function bindAbort(source: AbortSignal | undefined, target: AbortController) {
@@ -348,6 +382,7 @@ async function pollWaveSpeedPhoto(
         providerTaskId: taskId,
         primaryFailure: firstString(pollContext.primaryFailure) || undefined,
         primaryDetail: firstString(pollContext.primaryDetail) || undefined,
+        detail: firstString(data.detail) || undefined,
         reason: terminalReason,
       };
     } catch (error) {
@@ -420,10 +455,26 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
     });
     const data = (await response.json().catch(() => ({}))) as WorkerPhotoReply;
     if (!response.ok) {
-      return { attempted: true, used: false, reason: reasonFrom(data, response.status) };
+      return {
+        attempted: true,
+        used: false,
+        provider: data.provider === "wavespeed" ? "wavespeed" : data.provider === "openai" ? "openai" : undefined,
+        primaryFailure: firstString(data.primaryFailure) || undefined,
+        primaryDetail: firstString(data.primaryDetail) || undefined,
+        detail: firstString(data.detail) || undefined,
+        reason: reasonFrom(data, response.status),
+      };
     }
     if (data.skipped === true || data.ok !== true) {
-      return { attempted: true, used: false, reason: reasonFrom(data, response.status) };
+      return {
+        attempted: true,
+        used: false,
+        provider: data.provider === "wavespeed" ? "wavespeed" : data.provider === "openai" ? "openai" : undefined,
+        primaryFailure: firstString(data.primaryFailure) || undefined,
+        primaryDetail: firstString(data.primaryDetail) || undefined,
+        detail: firstString(data.detail) || undefined,
+        reason: reasonFrom(data, response.status),
+      };
     }
 
     const providerTaskId = firstString(data.providerTaskId);

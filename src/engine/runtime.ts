@@ -33,7 +33,7 @@ import {
   type CloudPhotoIntent,
   type PhotoDecisionReason,
 } from "../ai/cloud-language";
-import { generateCloudPhoto } from "../ai/cloud-photo";
+import { CloudPhotoGenerationError, generateCloudPhoto } from "../ai/cloud-photo";
 import { createDefaultEditableContext, normalizeEditableContext } from "../context/yuzuki-context";
 
 import { currentRomance, initialRomance, type RomanceState } from "../relationship/relationship";
@@ -424,7 +424,7 @@ export async function persistGeneratedPhotoMessage(
   }, signal);
   checkSignal(signal);
   if (!generated.used || !generated.dataUrl) {
-    throw new Error(generated.reason || "photo-generation-failed");
+    throw new CloudPhotoGenerationError(generated);
   }
 
   await saveLocalPhoto({
