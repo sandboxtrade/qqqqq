@@ -22,26 +22,30 @@ try {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), auth: options.headers?.Authorization, body: options.body });
-    if (String(url).includes("/minimax-h3/image-edit")) {
+    if (String(url).includes("/bytedance/seedream-v4.5/edit")) {
       if (options.headers.Authorization === "Bearer route-k1") {
         return new Response(JSON.stringify({ message: "top up required" }), { status: 402, headers: { "content-type": "application/json" } });
       }
       if (options.headers.Authorization === "Bearer route-k2") {
-        return new Response(JSON.stringify({ data: { id: "mini-task-k2" } }), { status: 200, headers: { "content-type": "application/json" } });
+        const payload = JSON.parse(options.body);
+        assert.deepEqual(payload.images, ["https://example.com/id.jpg"]);
+        assert.equal(payload.prompt, "prompt");
+        assert.equal(Object.hasOwn(payload, "output_format"), false);
+        return new Response(JSON.stringify({ data: { id: "seed45-task-k2" } }), { status: 200, headers: { "content-type": "application/json" } });
       }
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const started = await submitWaveSpeedImage(env, "prompt", ["https://example.com/id.jpg"], "wavespeed-ai/minimax-h3/image-edit");
+  const started = await submitWaveSpeedImage(env, "prompt", ["https://example.com/id.jpg"], "bytedance/seedream-v4.5/edit");
   assert.equal(started.ok, true);
-  assert.equal(started.taskId, "mini-task-k2");
+  assert.equal(started.taskId, "seed45-task-k2");
   assert.equal(started.credentialAttempt, 2);
   assert.deepEqual(calls.map((call) => call.auth), ["Bearer route-k1", "Bearer route-k2"]);
 
   calls.length = 0;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), auth: options.headers?.Authorization });
-    if (String(url).includes("/predictions/mini-task-k2/result")) {
+    if (String(url).includes("/predictions/seed45-task-k2/result")) {
       if (options.headers.Authorization !== "Bearer route-k2") {
         return new Response(JSON.stringify({ message: "not found" }), { status: 404, headers: { "content-type": "application/json" } });
       }
@@ -49,7 +53,7 @@ try {
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const pending = await readWaveSpeedImage(env, "mini-task-k2", "wavespeed-ai/minimax-h3/image-edit", { preferredCredentialAttempt: 2 });
+  const pending = await readWaveSpeedImage(env, "seed45-task-k2", "bytedance/seedream-v4.5/edit", { preferredCredentialAttempt: 2 });
   assert.equal(pending.pending, true);
   assert.equal(pending.credentialAttempt, 2);
   assert.equal(calls[0].auth, "Bearer route-k2");
@@ -57,7 +61,7 @@ try {
   calls.length = 0;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), auth: options.headers?.Authorization });
-    if (String(url).includes("/predictions/mini-task-k2/result")) {
+    if (String(url).includes("/predictions/seed45-task-k2/result")) {
       if (options.headers.Authorization === "Bearer route-k2") {
         return new Response(JSON.stringify({ data: { status: "failed", error: "A top-up is required. Please top up your account to continue." } }), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -65,7 +69,7 @@ try {
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const creditFailure = await readWaveSpeedImage(env, "mini-task-k2", "wavespeed-ai/minimax-h3/image-edit", { preferredCredentialAttempt: 2 });
+  const creditFailure = await readWaveSpeedImage(env, "seed45-task-k2", "bytedance/seedream-v4.5/edit", { preferredCredentialAttempt: 2 });
   assert.equal(creditFailure.credentialFailure, true);
   assert.equal(creditFailure.retryWithNextKey, true);
   assert.equal(creditFailure.credentialAttempt, 2);
@@ -73,12 +77,12 @@ try {
   calls.length = 0;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), auth: options.headers?.Authorization, body: options.body });
-    if (String(url).includes("/minimax-h3/image-edit") && options.headers.Authorization === "Bearer route-k3") {
-      return new Response(JSON.stringify({ data: { id: "mini-task-k3" } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (String(url).includes("/bytedance/seedream-v4.5/edit") && options.headers.Authorization === "Bearer route-k3") {
+      return new Response(JSON.stringify({ data: { id: "seed45-task-k3" } }), { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error(`unexpected retry key ${options.headers?.Authorization}`);
   };
-  const nextKey = await submitWaveSpeedImage(env, "prompt", ["https://example.com/id.jpg"], "wavespeed-ai/minimax-h3/image-edit", { startCredentialIndex: 2 });
+  const nextKey = await submitWaveSpeedImage(env, "prompt", ["https://example.com/id.jpg"], "bytedance/seedream-v4.5/edit", { startCredentialIndex: 2 });
   assert.equal(nextKey.ok, true);
   assert.equal(nextKey.credentialAttempt, 3);
   assert.equal(calls[0].auth, "Bearer route-k3");
@@ -86,37 +90,36 @@ try {
   calls.length = 0;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), auth: options.headers?.Authorization, body: options.body });
-    if (String(url).includes("/alibaba/wan-2.6/image-edit")) {
+    if (String(url).includes("/bytedance/seedream-v5.0-lite/edit")) {
       const payload = JSON.parse(options.body);
       assert.deepEqual(payload.images, ["https://example.com/identity-sheet.jpg"]);
-      assert.equal(payload.enable_prompt_expansion, false);
-      return new Response(JSON.stringify({ data: { id: "wan-task" } }), { status: 200, headers: { "content-type": "application/json" } });
+      assert.equal(payload.output_format, "jpeg");
+      return new Response(JSON.stringify({ data: { id: "seed5-task" } }), { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const wan = await submitWaveSpeedImage({ WAVESPEED_API_KEY: "fresh-wan-key" }, "private photo", ["https://example.com/identity-sheet.jpg"], "alibaba/wan-2.6/image-edit");
-  assert.equal(wan.ok, true);
-  assert.equal(wan.model, "alibaba/wan-2.6/image-edit");
+  const seed5 = await submitWaveSpeedImage({ WAVESPEED_API_KEY: "seed5-key" }, "private photo", ["https://example.com/identity-sheet.jpg"], "bytedance/seedream-v5.0-lite/edit");
+  assert.equal(seed5.ok, true);
+  assert.equal(seed5.model, "bytedance/seedream-v5.0-lite/edit");
 
   calls.length = 0;
-  globalThis.fetch = async (url, options = {}) => {
-    calls.push({ url: String(url), auth: options.headers?.Authorization });
+  globalThis.fetch = async (url) => {
     if (String(url).includes("/predictions/done-task/result")) {
-      return new Response(JSON.stringify({ data: { status: "completed", outputs: ["https://cdn.example/result.webp"] } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ data: { status: "completed", outputs: ["https://cdn.example/result.jpeg"] } }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    if (String(url) === "https://cdn.example/result.webp") {
-      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { "content-type": "image/webp", "content-length": "4" } });
+    if (String(url) === "https://cdn.example/result.jpeg") {
+      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { "content-type": "image/jpeg", "content-length": "4" } });
     }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const completed = await readWaveSpeedImage({ WAVESPEED_API_KEY: "result-key" }, "done-task", "alibaba/wan-2.6/image-edit", { preferredCredentialAttempt: 1 });
+  const completed = await readWaveSpeedImage({ WAVESPEED_API_KEY: "result-key" }, "done-task", "bytedance/seedream-v5.0-lite/edit", { preferredCredentialAttempt: 1 });
   assert.equal(completed.ok, true);
-  assert.match(completed.dataUrl, /^data:image\/webp;base64,/);
+  assert.match(completed.dataUrl, /^data:image\/jpeg;base64,/);
 
   globalThis.fetch = async () => new Response("not an image", { status: 200, headers: { "content-type": "text/plain" } });
   assert.equal(await fetchCachedReference("https://example.com/not-image-reference"), null);
 
-  console.log("PASS dynamic photo worker routing, multi-key, result and reference checks");
+  console.log("PASS Seedream photo routing, multi-key, result and reference checks");
 } finally {
   globalThis.fetch = originalFetch;
   rmSync(dir, { recursive: true, force: true });

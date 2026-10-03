@@ -1,4 +1,4 @@
-# Game2 / Virtual Companion — v0.20.32
+# Game2 / Virtual Companion — v0.20.37
 
 Current architecture: GPT-first dialogue + Local-State-first personality/memory/state.
 
@@ -21,11 +21,11 @@ Normal dialogue is cloud-first. The local fallback is intentionally small and te
 
 Ordinary / low-suggestive:
 
-`gpt-image-2 -> MiniMax H3 Image Edit -> WAN 2.6 Image Edit`
+`gpt-image-2 -> Seedream 4.5 Edit on WaveSpeed if OpenAI does not produce the image`
 
 Medium / high intimate intent:
 
-`WAN 2.6 Image Edit directly`
+`Seedream 5.0 Lite Edit on WaveSpeed directly`
 
 WaveSpeed reference policy:
 

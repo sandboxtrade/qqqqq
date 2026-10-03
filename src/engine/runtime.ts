@@ -33,7 +33,7 @@ import {
   type CloudPhotoIntent,
   type PhotoDecisionReason,
 } from "../ai/cloud-language";
-import { CloudPhotoGenerationError, generateCloudPhoto } from "../ai/cloud-photo";
+import { generateCloudPhoto } from "../ai/cloud-photo";
 import { createDefaultEditableContext, normalizeEditableContext } from "../context/yuzuki-context";
 
 import { currentRomance, initialRomance, type RomanceState } from "../relationship/relationship";
@@ -310,7 +310,7 @@ export function selectBalancedRecentHistory(
 function photoContextText(decision: CloudPhotoDecision) {
   const intent = decision.intent;
   if (!intent) return "[Отправила фотографию]";
-  return `[Отправила фотографию: ${intent.framing}; настроение ${intent.mood}; поза ${intent.pose}; место ${intent.location}; одежда ${intent.outfit}]`;
+  return `[Отправила фотографию: ${intent.framing}; настроение ${intent.mood}; поза ${intent.pose}; место ${intent.location}; одежда ${intent.outfit}; уровень ${intent.suggestiveLevel}]`;
 }
 
 function escapeXml(value: string) {
@@ -424,7 +424,7 @@ export async function persistGeneratedPhotoMessage(
   }, signal);
   checkSignal(signal);
   if (!generated.used || !generated.dataUrl) {
-    throw new CloudPhotoGenerationError(generated);
+    throw new Error(generated.reason || "photo-generation-failed");
   }
 
   await saveLocalPhoto({
@@ -879,6 +879,13 @@ function cloudPartsOrFallback(cloud: CloudLanguageResult, kind?: string) {
   // not something Yuzuki should pretend was her own reply.
   if (!cloud.attempted && ["non-browser", "firebase-disabled", "local-route", "test-local"].includes(reason))
     return { parts: [fallbackReply(kind)], usedCloud: false };
+  if (/app-check-(?:throttled|rejected)/iu.test(reason)) {
+    throw new Error(
+      "Firebase App Check отклонил проверку сайта (403). Проверь reCAPTCHA Enterprise: " +
+      "ключ должен быть зарегистрирован для этого Web App, домен sandboxtrade.github.io должен быть разрешён, " +
+      "а reCAPTCHA Enterprise API — включён. После исправления обнови страницу и нажми «Повторить».",
+    );
+  }
   throw new Error(`Не удалось получить ответ персонажа от GPT: ${reason}. Нажми «Повторить».`);
 }
 

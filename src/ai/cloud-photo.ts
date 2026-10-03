@@ -1,7 +1,12 @@
 import { getAuth } from "firebase/auth";
 import { runtimeCloudLanguageEndpoint } from "../config/runtime-config";
 import { bounded } from "../core/async";
-import { getFirebaseApp, getFirebaseAppCheckToken, isFirebaseConfigured } from "../storage/firebase";
+import {
+  getFirebaseApp,
+  getFirebaseAppCheckToken,
+  isAppCheckAttestationError,
+  isFirebaseConfigured,
+} from "../storage/firebase";
 import type { CloudLanguageSignals, CloudPhotoDecision } from "./cloud-language";
 import type { CharacterVisualProfile } from "../character/character-registry";
 
@@ -46,7 +51,6 @@ export interface CloudPhotoResult {
   providerTaskId?: string;
   primaryFailure?: string;
   primaryDetail?: string;
-  detail?: string;
   reason?: string;
 }
 
@@ -84,9 +88,7 @@ const PHOTO_START_TIMEOUT_MS = 235_000;
 const WAVESPEED_POLL_TIMEOUT_MS = 150_000;
 const WAVESPEED_POLL_INTERVAL_MS = 3_000;
 const POLL_REQUEST_TIMEOUT_MS = 32_000;
-const WAVESPEED_FALLBACK_START_TIMEOUT_MS = 35_000;
-const MINIMAX_PENDING_FALLBACK_AFTER_MS = 45_000;
-const WAVESPEED_MINIMAX_MODEL = "wavespeed-ai/minimax-h3/image-edit";
+const WAVESPEED_KEY_RETRY_START_TIMEOUT_MS = 35_000;
 const TOKEN_TIMEOUT_MS = 4_000;
 
 function firstString(...values: unknown[]) {
@@ -126,40 +128,6 @@ function reasonFrom(data: WorkerPhotoReply, status: number) {
   return fromBody || `photo-worker-http-${status}`;
 }
 
-export function isWaveSpeedBalanceFailureText(...values: unknown[]) {
-  const text = values
-    .filter((value) => typeof value === "string" && value.trim())
-    .join(" ")
-    .toLowerCase();
-  if (!text.includes("wavespeed") && !/top[ -]?up|insufficient (?:balance|credit|credits|funds)|low balance|out of (?:credit|credits)|balance.*required|credit.*required|payment required|billing/.test(text)) {
-    return false;
-  }
-  return /top[ -]?up|insufficient (?:balance|credit|credits|funds)|low balance|out of (?:credit|credits)|balance.*required|credit.*required|payment required|billing/.test(text);
-}
-
-export class CloudPhotoGenerationError extends Error {
-  reason?: string;
-  detail?: string;
-  provider?: "openai" | "wavespeed";
-  primaryFailure?: string;
-  primaryDetail?: string;
-  constructor(result: Pick<CloudPhotoResult, "reason" | "detail" | "provider" | "primaryFailure" | "primaryDetail">) {
-    super(result.detail || result.primaryDetail || result.reason || "photo-generation-failed");
-    this.name = "CloudPhotoGenerationError";
-    this.reason = result.reason;
-    this.detail = result.detail;
-    this.provider = result.provider;
-    this.primaryFailure = result.primaryFailure;
-    this.primaryDetail = result.primaryDetail;
-  }
-}
-
-export function isWaveSpeedBalanceFailureError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const maybe = error as Partial<CloudPhotoGenerationError> & { message?: unknown };
-  return isWaveSpeedBalanceFailureText(maybe.reason, maybe.detail, maybe.primaryFailure, maybe.primaryDetail, maybe.message);
-}
-
 function bindAbort(source: AbortSignal | undefined, target: AbortController) {
   if (!source) return () => {};
   const abort = () => target.abort(source.reason);
@@ -181,7 +149,7 @@ async function requestWaveSpeedKeyRetry(
   const detachRetry = bindAbort(signal, retryController);
   const retryTimeout = window.setTimeout(
     () => retryController.abort(new Error("photo-key-retry-start-timeout")),
-    WAVESPEED_FALLBACK_START_TIMEOUT_MS,
+    WAVESPEED_KEY_RETRY_START_TIMEOUT_MS,
   );
   try {
     const retryResponse = await fetch(workerPhotoEndpoint(), {
@@ -218,7 +186,6 @@ async function requestWaveSpeedKeyRetry(
         providerTaskId: firstString(retryData.providerTaskId, taskId),
         primaryFailure: firstString(initial.primaryFailure) || undefined,
         primaryDetail: firstString(initial.primaryDetail) || undefined,
-        detail: firstString(retryData.detail) || undefined,
         prompt: firstString(retryData.prompt, initial.prompt),
         usage: parseUsage(retryData.usage) ?? parseUsage(initial.usage),
       };
@@ -246,118 +213,6 @@ async function requestWaveSpeedKeyRetry(
   } finally {
     window.clearTimeout(retryTimeout);
     detachRetry();
-  }
-}
-
-async function requestWanFallback(
-  taskId: string,
-  activeModel: string,
-  idToken: string,
-  appCheckToken: string,
-  initial: WorkerPhotoReply,
-  input: CloudPhotoInput,
-  elapsedMs: number,
-  signal?: AbortSignal,
-): Promise<CloudPhotoResult | { nextTaskId: string; nextInitial: WorkerPhotoReply } | null> {
-  const fallbackController = new AbortController();
-  const detachFallback = bindAbort(signal, fallbackController);
-  const fallbackTimeout = window.setTimeout(
-    () => fallbackController.abort(new Error("photo-fallback-start-timeout")),
-    WAVESPEED_FALLBACK_START_TIMEOUT_MS,
-  );
-  try {
-    const fallbackResponse = await fetch(workerPhotoEndpoint(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-        "X-Firebase-AppCheck": appCheckToken,
-      },
-      body: JSON.stringify({
-        ...input,
-        decision: normalizedDecision(input.decision),
-        fallbackProvider: "wan",
-        fallbackFromModel: activeModel,
-        fallbackTaskId: taskId,
-        fallbackAllowPending: true,
-        fallbackElapsedMs: elapsedMs,
-        fallbackCredentialAttempt: asNumber(initial.credentialAttempt),
-      }),
-      cache: "no-store",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      signal: fallbackController.signal,
-    });
-    const fallbackData = (await fallbackResponse.json().catch(() => ({}))) as WorkerPhotoReply;
-    if (!fallbackResponse.ok || fallbackData.skipped === true || fallbackData.ok !== true) {
-      return {
-        attempted: true,
-        used: false,
-        provider: "wavespeed",
-        providerTaskId: taskId,
-        primaryFailure: firstString(initial.primaryFailure) || undefined,
-        primaryDetail: firstString(initial.primaryDetail) || undefined,
-        reason: reasonFrom(fallbackData, fallbackResponse.status),
-      };
-    }
-
-    const recoveredDataUrl = firstString(fallbackData.dataUrl);
-    if (recoveredDataUrl) {
-      return {
-        attempted: true,
-        used: true,
-        dataUrl: recoveredDataUrl,
-        mimeType: firstString(fallbackData.mimeType) || "image/webp",
-        model: firstString(fallbackData.model, activeModel),
-        provider: "wavespeed",
-        providerTaskId: firstString(fallbackData.providerTaskId, taskId),
-        primaryFailure: firstString(initial.primaryFailure) || undefined,
-        primaryDetail: firstString(initial.primaryDetail) || undefined,
-        detail: firstString(fallbackData.detail) || undefined,
-        prompt: firstString(fallbackData.prompt, initial.prompt),
-        usage: parseUsage(fallbackData.usage) ?? parseUsage(initial.usage),
-      };
-    }
-
-    const fallbackTaskId = firstString(fallbackData.providerTaskId);
-    if (fallbackData.pending === true && fallbackData.provider === "wavespeed" && fallbackTaskId) {
-      const fallbackModel = firstString(fallbackData.model, activeModel);
-      if (fallbackTaskId === taskId && fallbackModel === activeModel) return null;
-      return {
-        nextTaskId: fallbackTaskId,
-        nextInitial: {
-          ...initial,
-          ...fallbackData,
-          primaryFailure: firstString(initial.primaryFailure, fallbackData.primaryFailure) || undefined,
-          primaryDetail: firstString(initial.primaryDetail, fallbackData.primaryDetail) || undefined,
-          prompt: firstString(fallbackData.prompt, initial.prompt) || undefined,
-        },
-      };
-    }
-
-    return {
-      attempted: true,
-      used: false,
-      provider: "wavespeed",
-      providerTaskId: taskId,
-      primaryFailure: firstString(initial.primaryFailure) || undefined,
-      primaryDetail: firstString(initial.primaryDetail) || undefined,
-      reason: reasonFrom(fallbackData, fallbackResponse.status),
-    };
-  } catch (error) {
-    if (signal?.aborted) throw signal.reason ?? error;
-    return {
-      attempted: true,
-      used: false,
-      provider: "wavespeed",
-      providerTaskId: taskId,
-      primaryFailure: firstString(initial.primaryFailure) || undefined,
-      primaryDetail: firstString(initial.primaryDetail) || undefined,
-      reason: error instanceof Error ? error.message : "photo-fallback-start-failed",
-    };
-  } finally {
-    window.clearTimeout(fallbackTimeout);
-    detachFallback();
   }
 }
 
@@ -450,24 +305,6 @@ async function pollWaveSpeedPhoto(
       }
       if (data.pending === true) {
         lastReason = firstString(data.reason) || "wavespeed-pending";
-        const activePendingModel = firstString(data.model, pollContext.model);
-        const elapsedMs = Date.now() - startedAt;
-        if (activePendingModel === WAVESPEED_MINIMAX_MODEL && elapsedMs >= MINIMAX_PENDING_FALLBACK_AFTER_MS) {
-          const fallback = await requestWanFallback(
-            taskId,
-            activePendingModel,
-            idToken,
-            appCheckToken,
-            pollContext,
-            input,
-            elapsedMs,
-            signal,
-          );
-          if (fallback && "nextTaskId" in fallback) {
-            return pollWaveSpeedPhoto(fallback.nextTaskId, idToken, appCheckToken, fallback.nextInitial, input, signal);
-          }
-          if (fallback) return fallback;
-        }
         continue;
       }
       const dataUrl = firstString(data.dataUrl);
@@ -502,29 +339,6 @@ async function pollWaveSpeedPhoto(
           return pollWaveSpeedPhoto(keyRetry.nextTaskId, idToken, appCheckToken, keyRetry.nextInitial, input, signal);
         }
         if (keyRetry) return keyRetry;
-        if (activeModel !== WAVESPEED_MINIMAX_MODEL) {
-          return {
-            attempted: true, used: false, provider: "wavespeed", providerTaskId: taskId,
-            primaryFailure: firstString(pollContext.primaryFailure) || undefined,
-            primaryDetail: firstString(pollContext.primaryDetail) || undefined, reason: terminalReason,
-          };
-        }
-      }
-      if (activeModel === WAVESPEED_MINIMAX_MODEL) {
-        const fallback = await requestWanFallback(
-          taskId,
-          activeModel,
-          idToken,
-          appCheckToken,
-          pollContext,
-          input,
-          Date.now() - startedAt,
-          signal,
-        );
-        if (fallback && "nextTaskId" in fallback) {
-          return pollWaveSpeedPhoto(fallback.nextTaskId, idToken, appCheckToken, fallback.nextInitial, input, signal);
-        }
-        if (fallback) return fallback;
       }
 
       return {
@@ -534,7 +348,6 @@ async function pollWaveSpeedPhoto(
         providerTaskId: taskId,
         primaryFailure: firstString(pollContext.primaryFailure) || undefined,
         primaryDetail: firstString(pollContext.primaryDetail) || undefined,
-        detail: firstString(data.detail) || undefined,
         reason: terminalReason,
       };
     } catch (error) {
@@ -571,7 +384,17 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
   let appCheckToken = "";
   try {
     [idToken, appCheckToken] = await acquireTokens(auth.currentUser, false, signal);
-  } catch {
+  } catch (error) {
+    // A 403/throttle is an attestation/configuration problem, not an expired
+    // token. Forcing another App Check exchange only repeats the rejection and
+    // can extend noisy retry loops. Let the caller surface the real diagnosis.
+    if (isAppCheckAttestationError(error)) {
+      return {
+        attempted: true,
+        used: false,
+        reason: error instanceof Error ? error.message : "app-check-rejected",
+      };
+    }
     [idToken, appCheckToken] = await acquireTokens(auth.currentUser, true, signal);
   }
 
@@ -597,26 +420,10 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
     });
     const data = (await response.json().catch(() => ({}))) as WorkerPhotoReply;
     if (!response.ok) {
-      return {
-        attempted: true,
-        used: false,
-        provider: data.provider === "wavespeed" ? "wavespeed" : data.provider === "openai" ? "openai" : undefined,
-        primaryFailure: firstString(data.primaryFailure) || undefined,
-        primaryDetail: firstString(data.primaryDetail) || undefined,
-        detail: firstString(data.detail) || undefined,
-        reason: reasonFrom(data, response.status),
-      };
+      return { attempted: true, used: false, reason: reasonFrom(data, response.status) };
     }
     if (data.skipped === true || data.ok !== true) {
-      return {
-        attempted: true,
-        used: false,
-        provider: data.provider === "wavespeed" ? "wavespeed" : data.provider === "openai" ? "openai" : undefined,
-        primaryFailure: firstString(data.primaryFailure) || undefined,
-        primaryDetail: firstString(data.primaryDetail) || undefined,
-        detail: firstString(data.detail) || undefined,
-        reason: reasonFrom(data, response.status),
-      };
+      return { attempted: true, used: false, reason: reasonFrom(data, response.status) };
     }
 
     const providerTaskId = firstString(data.providerTaskId);

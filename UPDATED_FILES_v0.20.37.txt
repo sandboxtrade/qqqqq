@@ -1,0 +1,18 @@
+Game2 v0.20.37 — files to replace on top of full v0.20.36
+
+cloudflare/worker.js
+src/ai/cloud-photo.ts
+src/engine/runtime.ts
+tests/photo-messages.mjs
+tests/photo-routing-worker.mjs
+tests/intimacy-photo-speech.mjs
+src/config/version.ts
+package.json
+README.md
+docs/ARCHITECTURE.md
+RELEASE_v0.20.37.md
+
+IMPORTANT:
+- cloudflare/worker.js must also be deployed to the Cloudflare Worker after replacing it in GitHub/local source.
+- GitHub Pages deployment alone does not deploy cloudflare/worker.js.
+- SCHEMA_VERSION stays 4; no Firebase/Firestore migration is required.

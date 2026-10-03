@@ -66,7 +66,28 @@ try {
     relationship: { trust: 0.8, closeness: 0.8 },
     intimacy: { enabled: true, interactionStatus: "open", arousal: 0.7, comfort: 0.7, interest: 0.7, mind: { outwardArousal: true, wantsMore: true, conflicted: false } },
     photoPolicy: { noRefusalMode: true },
+    recentHistory: [{ role: "character", text: "[Отправила фотографию: full_body; настроение shy; поза standing; место bedroom; одежда lingerie; уровень medium]" }],
   };
+  const directSelf = worker.derivePhotoMechanic(baseRaw, "покажи себя");
+  assert.equal(directSelf.disposition, "send");
+  assert.equal(directSelf.continuation, false);
+
+  const continued = worker.derivePhotoMechanic(baseRaw, "ещё одну");
+  assert.equal(continued.disposition, "send");
+  assert.equal(continued.continuation, true);
+  assert.equal(continued.suggestive, true);
+  assert.equal(continued.intentPatch.framing, "full_body");
+  assert.equal(continued.intentPatch.outfit, "lingerie");
+  assert.equal(continued.intentPatch.suggestiveLevel, "medium");
+
+  const changedFraming = worker.derivePhotoMechanic(baseRaw, "теперь в зеркале");
+  assert.equal(changedFraming.continuation, true);
+  assert.equal(changedFraming.intentPatch.framing, "mirror");
+  assert.equal(changedFraming.intentPatch.suggestiveLevel, "medium");
+
+  const noContext = worker.derivePhotoMechanic({ ...baseRaw, recentHistory: [] }, "теперь со спины");
+  assert.equal(noContext, undefined);
+
   const constrained = worker.derivePhotoMechanic({ ...baseRaw, constraint: { locked: true } }, "скинь сексуальное фото");
   assert.equal(constrained.disposition, "blocked");
 
@@ -108,7 +129,7 @@ try {
 
   const prompt = worker.buildWaveSpeedPhotoPrompt({
     character: { name: "Yuzuki", age: 24 },
-    visualProfile: { identitySummary: "same adult woman", defaultPhotoStyle: "natural smartphone photo", expressionGuidance: "reserved but expressive", defaultOutfits: ["casual"] },
+    visualProfile: { identitySummary: "вымышленная взрослая девушка 24 лет, same adult girl", defaultPhotoStyle: "natural smartphone photo of a girl", expressionGuidance: "эта девушка reserved but expressive", defaultOutfits: ["casual"] },
     decision: { intent: { framing: "selfie", mood: "shy", pose: "natural", location: "bedroom", outfit: "lingerie", suggestiveLevel: "medium" } },
     world: { location: "bedroom" },
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
@@ -116,6 +137,8 @@ try {
   assert.match(prompt, /Outward chat intimacy tone: high_arousal/);
   assert.match(prompt, /must NOT increase exposure/);
   assert.match(prompt, /INTIMACY LEVEL: medium/);
+  assert.match(prompt, /adult woman/iu);
+  assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
 
   const lowPrompt = worker.buildPhotoPrompt({

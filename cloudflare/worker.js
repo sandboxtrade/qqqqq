@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.35 adds Alia as a first-class character with canonical profile references
+// v0.20.37 fixes no-refusal photo continuity and migrates WaveSpeed image routing to Seedream
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -8,12 +8,12 @@ const OPENAI_URL = "https://api.openai.com/v1/responses";
 const IMAGE_MODEL = "gpt-image-2";
 const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
-const WAVESPEED_MINIMAX_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/minimax-h3/image-edit";
-const WAVESPEED_WAN_IMAGE_URL = "https://api.wavespeed.ai/api/v3/alibaba/wan-2.6/image-edit";
+const WAVESPEED_SEEDREAM_45_IMAGE_URL = "https://api.wavespeed.ai/api/v3/bytedance/seedream-v4.5/edit";
+const WAVESPEED_SEEDREAM_5_LITE_IMAGE_URL = "https://api.wavespeed.ai/api/v3/bytedance/seedream-v5.0-lite/edit";
 const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
-const WAVESPEED_MINIMAX_MODEL = "wavespeed-ai/minimax-h3/image-edit";
-const WAVESPEED_WAN_MODEL = "alibaba/wan-2.6/image-edit";
-const WAVESPEED_MODEL = WAVESPEED_MINIMAX_MODEL;
+const WAVESPEED_SEEDREAM_45_MODEL = "bytedance/seedream-v4.5/edit";
+const WAVESPEED_SEEDREAM_5_LITE_MODEL = "bytedance/seedream-v5.0-lite/edit";
+const WAVESPEED_MODEL = WAVESPEED_SEEDREAM_45_MODEL;
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
 const GITHUB_PROFILES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/public/assets/profiles/";
 const GITHUB_PROFILES_CDN_BASE = "https://cdn.jsdelivr.net/gh/sandboxtrade/qqqqq@main/public/assets/profiles/";
@@ -55,7 +55,6 @@ const OPENAI_TIMEOUT_MS = 9_500;
 const OPENAI_IMAGE_TIMEOUT_MS = 55_000;
 const OPENAI_CASUAL_RETRY_DELAY_MS = 600;
 const OPENAI_STANDARD_RETRY_DELAY_MS = 900;
-const MINIMAX_PENDING_FALLBACK_AFTER_MS = 45_000;
 const REFERENCE_FETCH_TIMEOUT_MS = 6_000;
 const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -448,13 +447,60 @@ function isDirectPhotoRequest(value) {
   if (!text) return false;
   const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
   const sendVerb = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|сфоткай|сфотографируй|сфоткаться|можешь\s+(?:скинуть|прислать|отправить|показать)|send|show|take)/u;
-  return photoWord.test(text) && sendVerb.test(text);
+  const explicitSelfPhoto = /(?:сфоткайся|сфотографируйся|сфоткаться|take\s+(?:a\s+)?(?:photo|selfie)|show\s+(?:me\s+)?yourself|покажи\s+(?:мне\s+)?себя)/u;
+  return (photoWord.test(text) && sendVerb.test(text)) || explicitSelfPhoto.test(text);
+}
+
+function photoSuggestiveLevelFromText(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return "none";
+  if (/(?:18\+|nsfw|топлесс|topless|без\s+(?:одежд|белья|трус|лифчик|бюстгальтер)|without\s+underwear|nude|naked|обнаж|нюд|наг(?:ая|ой|ую)|гол(?:ая|ой|ую)|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(text)) return "high";
+  if (/(?:нижн(?:ее|ем|его)\s+бель[её]|бель[её]|lingerie|underwear|лифчик|бюстгальтер|трусик|стринг|thong|bra)/u.test(text)) return "medium";
+  if (/(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|sexy|sensual|erotic|seduct)/u.test(text)) return "low";
+  return "none";
+}
+
+function parseRecentPhotoContext(recentHistory) {
+  if (!Array.isArray(recentHistory)) return null;
+  for (let index = recentHistory.length - 1; index >= Math.max(0, recentHistory.length - 10); index -= 1) {
+    const line = recentHistory[index];
+    const rawText = String(line?.text || "").trim();
+    if (!rawText) continue;
+    const text = normalizePhotoRequestText(rawText);
+    const photoMatch = rawText.match(/^\[Отправила фотографию:\s*([^;\]]+);\s*настроение\s+([^;\]]+);\s*поза\s+([^;\]]+);\s*место\s+([^;\]]+);\s*одежда\s+([^;\]]+)(?:;\s*уровень\s+(none|low|medium|high))?\]$/iu);
+    if (photoMatch) {
+      const [, framing, mood, pose, location, outfit, explicitLevel] = photoMatch;
+      const inferredLevel = explicitLevel || photoSuggestiveLevelFromText(outfit);
+      return {
+        source: "sent_photo",
+        framing: ["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(framing.trim()) ? framing.trim() : undefined,
+        mood: mood.trim(),
+        pose: pose.trim(),
+        location: location.trim(),
+        outfit: outfit.trim(),
+        suggestiveLevel: inferredLevel,
+      };
+    }
+    if (line?.role === "user" && isDirectPhotoRequest(text)) {
+      const patch = derivePhotoIntentPatch(text) || {};
+      const inferredLevel = patch.suggestiveLevel || photoSuggestiveLevelFromText(text);
+      return { source: "user_request", ...patch, suggestiveLevel: inferredLevel };
+    }
+  }
+  return null;
+}
+
+function isPhotoContinuationRequest(value, recentHistory) {
+  if (!parseRecentPhotoContext(recentHistory)) return false;
+  const text = normalizePhotoRequestText(value);
+  if (!text || text.length > 220) return false;
+  return /(?:^(?:а\s+)?(?:теперь|ещ[её](?:\s+одну)?|давай\s+ещ[её]|следующ(?:ую|ая)|друг(?:ую|ой)|такую\s+же)(?=\s|$|[,.!?…])|со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере)|в\s+полный\s+рост|по\s+пояс|в\s+зеркале|друг(?:ая|ую)\s+(?:поза|одежд|образ|ракурс)|поменяй\s+(?:позу|одежду|образ|ракурс)|леж[аё]|л[её]жа|на\s+животе|на\s+спине|сидя|стоя|боком|сверху|снизу|в\s+(?:белье|бельё|топе|юбке|лосинах|платье|шортах|рубашке)|без\s+(?:одежды|белья|трусик|лифчика))/u.test(text);
 }
 
 function isSuggestivePhotoRequest(value) {
   const text = normalizePhotoRequestText(value);
   if (!text) return false;
-  return /(?:пошл|сексуаль|соблазн|эрот|провокац|горяч|интимн|страстн|нижн(?:ее|ем|его)\s+бель[её]|без\s+(?:нижн(?:его|ей)\s+белья|белья|одежд|лифчик|бюстгальтер|трусик)|бель[её]|лифчик|бюстгальтер|трусик|стринг|топлесс|обнаж|наг(?:ая|ой|ие|их|им|ую)|гол(?:ая|ый|ые|ых|ой|ою|ым|ыми|ого|ому|ую)|нюд|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(text);
+  return photoSuggestiveLevelFromText(text) !== "none";
 }
 
 function derivePhotoIntentPatch(value) {
@@ -474,34 +520,55 @@ function derivePhotoIntentPatch(value) {
   } else if (/(?:без\s+(?:нижн(?:его|ей)\s+белья|белья|трусик)|без\s+трус)/u.test(text)) {
     patch.outfit = "without underwear";
     patch.suggestiveLevel = "high";
-  } else if (/(?:в\s+(?:нижн(?:ем|ем)\s+)?белье|в\s+лифчик|в\s+бюстгальтер|в\s+трусик|в\s+стринг)/u.test(text)) {
+  } else if (/(?:в\s+(?:нижн(?:ем|ем)\s+)?белье|в\s+лифчик|в\s+бюстгальтер|в\s+трусик|в\s+стринг|lingerie|underwear|thong|bra)/u.test(text)) {
     patch.outfit = "lingerie";
     patch.suggestiveLevel = "medium";
+  } else {
+    const inferredLevel = photoSuggestiveLevelFromText(text);
+    if (inferredLevel !== "none") patch.suggestiveLevel = inferredLevel;
   }
   return Object.keys(patch).length ? patch : undefined;
 }
 
 function derivePhotoMechanic(raw, user) {
-  if (!isDirectPhotoRequest(user)) return undefined;
+  const direct = isDirectPhotoRequest(user);
+  const continuation = !direct && isPhotoContinuationRequest(user, raw?.recentHistory);
+  if (!direct && !continuation) return undefined;
   const characterId = clipped(raw.character?.id, 64) || "yuzuki_v1";
-  const suggestive = raw.appearanceRequest?.suggestive === true || isSuggestivePhotoRequest(user);
-  // Framing (for example "в полный рост") is mechanical and must be preserved
-  // even for ordinary photos. Sexual/suggestive fields are still derived only
-  // from explicit words in the current user request.
-  const intentPatch = derivePhotoIntentPatch(user);
+  const recentPhoto = continuation ? parseRecentPhotoContext(raw?.recentHistory) : null;
+  const currentPatch = derivePhotoIntentPatch(user) || {};
+  const inheritedLevel = recentPhoto?.suggestiveLevel && recentPhoto.suggestiveLevel !== "none"
+    ? recentPhoto.suggestiveLevel
+    : undefined;
+  const suggestive = raw.appearanceRequest?.suggestive === true
+    || isSuggestivePhotoRequest(user)
+    || Boolean(inheritedLevel);
+  // A short follow-up inside an active photo exchange inherits the previous
+  // generated photo's visual intent, while explicit words in the new message win.
+  const intentPatch = continuation
+    ? {
+        ...(recentPhoto?.framing ? { framing: recentPhoto.framing } : {}),
+        ...(recentPhoto?.mood ? { mood: recentPhoto.mood } : {}),
+        ...(recentPhoto?.pose ? { pose: recentPhoto.pose } : {}),
+        ...(recentPhoto?.location ? { location: recentPhoto.location } : {}),
+        ...(recentPhoto?.outfit ? { outfit: recentPhoto.outfit } : {}),
+        ...(inheritedLevel ? { suggestiveLevel: inheritedLevel } : {}),
+        ...currentPatch,
+      }
+    : (Object.keys(currentPatch).length ? currentPatch : undefined);
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
   const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
   if (worldBlocked) {
-    return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch, characterId };
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch, characterId, continuation };
   }
   // A CURRENT-TURN local boundary always outranks the optional photo override.
   // noRefusalMode may remove mood/random refusals, but it must never turn a
   // freshly detected stop/pause/boundary into permission.
   if (raw.constraint?.locked === true) {
-    return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false, intentPatch, characterId };
+    return { requested: true, suggestive, disposition: "blocked", noRefusalMode: false, intentPatch, characterId, continuation };
   }
   if (noRefusalMode) {
-    return { requested: true, suggestive, disposition: "send", noRefusalMode: true, intentPatch, characterId };
+    return { requested: true, suggestive, disposition: "send", noRefusalMode: true, intentPatch, characterId, continuation };
   }
 
   const irritation = number01(raw.emotion?.irritation);
@@ -514,7 +581,7 @@ function derivePhotoMechanic(raw, user) {
     const ordinaryOpen = emotionallyAvailable && (trust >= 0.28 || closeness >= 0.3);
     // Keep non-sexual framing parsed from the current request (for example
     // "в полный рост" or "в зеркале") instead of asking GPT to infer it twice.
-    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice", intentPatch, characterId };
+    return { requested: true, suggestive: false, disposition: ordinaryOpen ? "send" : "choice", intentPatch, characterId, continuation };
   }
 
   const intimacy = raw.intimacy;
@@ -531,7 +598,7 @@ function derivePhotoMechanic(raw, user) {
       number01(intimacy?.interest) >= 0.48
     )
   );
-  return { requested: true, suggestive: true, disposition: strongOpen ? "send" : "choice", intentPatch, characterId };
+  return { requested: true, suggestive: true, disposition: strongOpen ? "send" : "choice", intentPatch, characterId, continuation };
 }
 
 function sanitizePacket(raw) {
@@ -798,16 +865,16 @@ function reconcilePhotoMechanic(decision, mechanic, mode) {
     intent: {
       framing,
       mood: ordinaryDirectRequest
-        ? ordinaryPhotoField(currentIntent.mood, "natural", 80)
-        : (clipped(currentIntent.mood, 80) || "natural"),
+        ? ordinaryPhotoField(mechanic.intentPatch?.mood || currentIntent.mood, "natural", 80)
+        : (clipped(mechanic.intentPatch?.mood || currentIntent.mood, 80) || "natural"),
       pose: ordinaryDirectRequest
-        ? ordinaryPhotoField(currentIntent.pose, framing === "full_body" ? "standing naturally, relaxed neutral pose" : "natural relaxed pose", 160)
-        : (clipped(currentIntent.pose, 160) || "natural relaxed pose"),
-      location: clipped(currentIntent.location, 100) || "current location",
+        ? ordinaryPhotoField(mechanic.intentPatch?.pose || currentIntent.pose, framing === "full_body" ? "standing naturally, relaxed neutral pose" : "natural relaxed pose", 160)
+        : (clipped(mechanic.intentPatch?.pose || currentIntent.pose, 160) || "natural relaxed pose"),
+      location: clipped(mechanic.intentPatch?.location || currentIntent.location, 100) || "current location",
       // Explicit current-turn clothing/exposure words are mechanical intent and
       // must survive GPT phrasing whenever the character has already decided to send.
       outfit: ordinaryDirectRequest
-        ? ordinaryPhotoField(currentIntent.outfit, "everyday casual clothes, fully clothed", 140)
+        ? ordinaryPhotoField(mechanic.intentPatch?.outfit || currentIntent.outfit, "everyday casual clothes, fully clothed", 140)
         : (mechanic.intentPatch?.outfit
           ? mechanic.intentPatch.outfit
           : (clipped(currentIntent.outfit, 140) || "current outfit")),
@@ -1383,6 +1450,15 @@ function normalizePhotoText(value, fallback, max = 120) {
   return asString(value, fallback, max) || fallback;
 }
 
+function seedreamAdultText(value, fallback, max = 120) {
+  return normalizePhotoText(value, fallback, max)
+    .replace(/\byoung\s+girls?\b/giu, "adult woman")
+    .replace(/\bgirls?\b/giu, "adult woman")
+    .replace(/взросл(?:ая|ой|ую)\s+девушк[а-яё]*/giu, "взрослая женщина")
+    .replace(/девушк[а-яё]*/giu, "женщина")
+    .replace(/девочк[а-яё]*/giu, "женщина");
+}
+
 function safeEmotionTone(raw) {
   const tone = asString(raw, "", 40).toLowerCase();
   const supported = [
@@ -1514,10 +1590,15 @@ function buildWaveSpeedIntimateDirection(packet) {
 function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const { character, visualProfile, decision, world, signals } = packet;
   const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual home clothes";
-  const outfit = normalizePhotoText(decision.intent.outfit, defaultOutfit, 180);
-  const pose = normalizePhotoText(decision.intent.pose, "relaxed natural pose", 180);
-  const mood = normalizePhotoText(decision.intent.mood, "natural", 100);
-  const location = normalizePhotoText(decision.intent.location, world.location || "home", 120);
+  const outfit = seedreamAdultText(decision.intent.outfit, defaultOutfit, 180);
+  const pose = seedreamAdultText(decision.intent.pose, "relaxed natural pose", 180);
+  const mood = seedreamAdultText(decision.intent.mood, "natural", 100);
+  const location = seedreamAdultText(decision.intent.location, world.location || "home", 120);
+  const identitySummary = seedreamAdultText(visualProfile.identitySummary, "same adult woman", 500);
+  const photoStyle = seedreamAdultText(visualProfile.defaultPhotoStyle, "natural smartphone photo", 180);
+  const expressionGuidance = visualProfile.expressionGuidance
+    ? seedreamAdultText(visualProfile.expressionGuidance, "", 620)
+    : "";
   const emotionTone = safeEmotionTone(signals.emotionTone);
   const intimacyTone = ["flirty", "aroused", "high_arousal"].includes(signals.intimacyTone) ? signals.intimacyTone : "";
   const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
@@ -1530,12 +1611,12 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
     `Generate ONE new photorealistic smartphone photo of the same fictional adult woman ${character.name}, age ${character.age}.`,
     referenceCount > 0
       ? "IDENTITY REFERENCE: <Picture 1> is the strict identity reference. It may be a 3x2 multi-view identity sheet. Generate the SAME woman from <Picture 1>. Preserve the same face, eyes, nose, lips, jawline, skin tone, hair, apparent age, body build and proportions. Do NOT imitate the identity-sheet pose, lighting, background, layout or neutral expression. Do NOT output a collage."
-      : `IDENTITY: Preserve the established same person. ${visualProfile.identitySummary}`,
-    `Identity description: ${visualProfile.identitySummary}`,
-    `Photo style: ${visualProfile.defaultPhotoStyle}.`,
+      : `IDENTITY: Preserve the established same adult woman. ${identitySummary}`,
+    `Identity description: ${identitySummary}`,
+    `Photo style: ${photoStyle}.`,
     `Requested framing: ${framing}. Requested mood: ${mood}. Requested pose: ${pose}.`,
     `Location: ${location}. Outfit: ${outfit}.`,
-    visualProfile.expressionGuidance ? `CHARACTER EXPRESSION: ${visualProfile.expressionGuidance}` : "",
+    expressionGuidance ? `CHARACTER EXPRESSION: ${expressionGuidance}` : "",
     casual
       ? "This is an ordinary non-explicit personal photo. Keep it natural, casual and realistic."
       : `INTIMACY LEVEL: ${suggestiveLevel}. Follow the requested clothing and pose. Keep the composition sensual and personal rather than clinical or technical.`,
@@ -1844,11 +1925,15 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
   // This is an edit/reference model. Never substitute another character's face.
   if (!images.length) return { skipped: true, reason: "wavespeed-reference-missing", model };
 
-  const isWan = model === WAVESPEED_WAN_MODEL;
-  const endpoint = isWan ? WAVESPEED_WAN_IMAGE_URL : WAVESPEED_MINIMAX_IMAGE_URL;
-  const payload = isWan
-    ? { prompt, images, enable_prompt_expansion: false }
-    : { prompt, images, aspect_ratio: "2:3", resolution: "1k", output_format: "webp" };
+  const endpoint = model === WAVESPEED_SEEDREAM_5_LITE_MODEL
+    ? WAVESPEED_SEEDREAM_5_LITE_IMAGE_URL
+    : model === WAVESPEED_SEEDREAM_45_MODEL
+      ? WAVESPEED_SEEDREAM_45_IMAGE_URL
+      : "";
+  if (!endpoint) return { skipped: true, reason: "wavespeed-unsupported-model", model };
+  const payload = model === WAVESPEED_SEEDREAM_5_LITE_MODEL
+    ? { prompt, images, output_format: "jpeg" }
+    : { prompt, images };
 
   const startCredentialIndex = Math.max(0, Math.min(credentials.length - 1, Number(options.startCredentialIndex) || 0));
   const submitStartedAt = Date.now();
@@ -2102,19 +2187,12 @@ async function handlePhoto(request, env, origin) {
   if (packet.error) {
     return jsonResponse({ skipped: true, reason: packet.error, model: IMAGE_MODEL }, packet.error === "invalid-input" ? 400 : 200, origin);
   }
-  const fallbackProvider = asString(raw?.fallbackProvider, "", 24).toLowerCase();
-  const fallbackFromModel = asString(raw?.fallbackFromModel, "", 120);
-  const fallbackTaskId = asString(raw?.fallbackTaskId, "", 200);
-  const fallbackAllowPending = raw?.fallbackAllowPending === true;
-  const fallbackElapsedMs = clipNumber(raw?.fallbackElapsedMs, 0, 600_000, 0) || 0;
-  const fallbackCredentialAttempt = Math.round(clipNumber(raw?.fallbackCredentialAttempt, 1, 100, 0) || 0);
-
   const retryWaveSpeedModel = asString(raw?.retryWaveSpeedModel, "", 120);
   const retryWaveSpeedTaskId = asString(raw?.retryWaveSpeedTaskId, "", 200);
   const retryWaveSpeedCredentialAttempt = Math.round(clipNumber(raw?.retryWaveSpeedCredentialAttempt, 1, 100, 0) || 0);
 
   if (retryWaveSpeedModel || retryWaveSpeedTaskId) {
-    if (![WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
+    if (![WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
       return jsonResponse({ skipped: true, reason: "invalid-wavespeed-key-retry", model: retryWaveSpeedModel || WAVESPEED_MODEL }, 400, origin);
     }
     const previous = await readWaveSpeedImage(env, retryWaveSpeedTaskId, retryWaveSpeedModel, {
@@ -2165,91 +2243,23 @@ async function handlePhoto(request, env, origin) {
     }, 200, origin);
   }
 
-  if (fallbackProvider === "wan") {
-    if (fallbackFromModel !== WAVESPEED_MINIMAX_MODEL || !fallbackTaskId) {
-      return jsonResponse({ skipped: true, reason: "invalid-wan-fallback-request", model: WAVESPEED_WAN_MODEL }, 400, origin);
-    }
-
-    // Re-check the MiniMax task before spending on WAN. This keeps the fallback
-    // endpoint from becoming a direct WAN bypass and can recover a late MiniMax
-    // completion/output download without paying for a second generation.
-    const previous = await readWaveSpeedImage(env, fallbackTaskId, WAVESPEED_MINIMAX_MODEL, {
-      preferredCredentialAttempt: fallbackCredentialAttempt,
-    });
-    if (previous.ok === true && previous.pending !== true && previous.dataUrl) {
-      return jsonResponse({
-        ok: true,
-        dataUrl: previous.dataUrl,
-        mimeType: previous.mimeType,
-        provider: "wavespeed",
-        providerTaskId: fallbackTaskId,
-        model: previous.model || WAVESPEED_MINIMAX_MODEL,
-        usage: previous.usage,
-        routingMode: "minimax-recovered-before-wan",
-      }, 200, origin);
-    }
-    const shouldStartWanWhilePending = previous.pending === true
-      && fallbackAllowPending === true
-      && fallbackElapsedMs >= MINIMAX_PENDING_FALLBACK_AFTER_MS;
-
-    if ((previous.pending === true && !shouldStartWanWhilePending) || previous.retryable === true) {
-      return jsonResponse({
-        ok: true,
-        pending: true,
-        reason: previous.reason,
-        provider: "wavespeed",
-        providerTaskId: fallbackTaskId,
-        model: previous.model || WAVESPEED_MINIMAX_MODEL,
-        routingMode: "minimax-still-running",
-      }, 200, origin);
-    }
-
-    const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
-    const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
-    const wanStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_WAN_MODEL);
-    if (wanStart.ok !== true || !wanStart.taskId) {
-      return jsonResponse({
-        skipped: true,
-        reason: wanStart.reason || previous.reason,
-        detail: wanStart.detail || previous.detail,
-        provider: "wavespeed",
-        model: wanStart.model || WAVESPEED_WAN_MODEL,
-        routingMode: shouldStartWanWhilePending ? "minimax-pending-then-wan" : "minimax-result-then-wan",
-        fallbackChain: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
-        referenceDebug: references.debug,
-      }, 200, origin);
-    }
-    return jsonResponse({
-      ok: true,
-      pending: true,
-      provider: "wavespeed",
-      providerTaskId: wanStart.taskId,
-      model: wanStart.model || WAVESPEED_WAN_MODEL,
-      credentialAttempt: wanStart.credentialAttempt,
-      credentialCount: wanStart.credentialCount,
-      routingMode: shouldStartWanWhilePending ? "minimax-pending-then-wan" : "minimax-result-then-wan",
-      fallbackChain: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
-      referenceDebug: references.debug,
-      prompt: wavePrompt,
-    }, 200, origin);
-  }
-
   const directIntimateWaveSpeed = isWaveSpeedIntimateIntent(packet);
 
-  // medium/high intimate photos go directly to WAN 2.6 on WaveSpeed.
-  // Ordinary and low-suggestive photos first try OpenAI, then MiniMax H3, then WAN 2.6.
+  // Medium/high photo intent routes directly to Seedream 5.0 Lite Edit.
+  // None/low intent keeps OpenAI first and falls back to Seedream 4.5 Edit.
   if (directIntimateWaveSpeed) {
     const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
     const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
-    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_WAN_MODEL);
+    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_SEEDREAM_5_LITE_MODEL);
     if (waveStart.ok !== true || !waveStart.taskId) {
       return jsonResponse({
         skipped: true,
         reason: waveStart.reason,
         detail: waveStart.detail,
-        model: waveStart.model || WAVESPEED_WAN_MODEL,
+        model: waveStart.model || WAVESPEED_SEEDREAM_5_LITE_MODEL,
         provider: "wavespeed",
-        routingMode: "direct-intimate-wan",
+        routingMode: "direct-intimate-seedream-5-lite",
+        photoClass: "medium-high",
         referenceDebug: references.debug,
       }, 200, origin);
     }
@@ -2258,10 +2268,11 @@ async function handlePhoto(request, env, origin) {
       pending: true,
       provider: "wavespeed",
       providerTaskId: waveStart.taskId,
-      model: waveStart.model || WAVESPEED_WAN_MODEL,
+      model: waveStart.model || WAVESPEED_SEEDREAM_5_LITE_MODEL,
       credentialAttempt: waveStart.credentialAttempt,
       credentialCount: waveStart.credentialCount,
-      routingMode: "direct-intimate-wan",
+      routingMode: "direct-intimate-seedream-5-lite",
+      photoClass: "medium-high",
       referenceDebug: references.debug,
       prompt: wavePrompt,
     }, 200, origin);
@@ -2314,30 +2325,23 @@ async function handlePhoto(request, env, origin) {
   const waveReferences = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
   const wavePrompt = buildWaveSpeedPhotoPrompt(packet, waveReferences.waveUrls.length);
 
-  let waveStart = await submitWaveSpeedImage(env, wavePrompt, waveReferences.waveUrls, WAVESPEED_MINIMAX_MODEL);
-  const fallbackChain = [waveStart.model || WAVESPEED_MINIMAX_MODEL];
+  const waveStart = await submitWaveSpeedImage(env, wavePrompt, waveReferences.waveUrls, WAVESPEED_SEEDREAM_45_MODEL);
   if (waveStart.ok !== true || !waveStart.taskId) {
-    const wanStart = await submitWaveSpeedImage(env, wavePrompt, waveReferences.waveUrls, WAVESPEED_WAN_MODEL);
-    fallbackChain.push(wanStart.model || WAVESPEED_WAN_MODEL);
-    if (wanStart.ok === true && wanStart.taskId) {
-      waveStart = wanStart;
-    } else {
-      return jsonResponse({
-        skipped: true,
-        reason: wanStart.reason || waveStart.reason,
-        detail: wanStart.detail || waveStart.detail || openaiResult.detail,
-        model: wanStart.model || waveStart.model || WAVESPEED_WAN_MODEL,
-        provider: "wavespeed",
-        primaryFailure: openaiResult.reason,
-        primaryDetail: openaiResult.detail,
-        primaryRequestId: openaiResult.requestId,
-        primaryAttempts: openaiAttempts,
-        primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
-        routingMode: "openai-then-minimax-then-wan",
-        fallbackChain,
-        referenceDebug: waveReferences.debug,
-      }, 200, origin);
-    }
+    return jsonResponse({
+      skipped: true,
+      reason: waveStart.reason,
+      detail: waveStart.detail || openaiResult.detail,
+      model: waveStart.model || WAVESPEED_SEEDREAM_45_MODEL,
+      provider: "wavespeed",
+      primaryFailure: openaiResult.reason,
+      primaryDetail: openaiResult.detail,
+      primaryRequestId: openaiResult.requestId,
+      primaryAttempts: openaiAttempts,
+      primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
+      routingMode: "openai-then-seedream-4.5",
+      photoClass: packet.decision.intent.suggestiveLevel === "low" ? "low" : "ordinary",
+      referenceDebug: waveReferences.debug,
+    }, 200, origin);
   }
 
   return jsonResponse({
@@ -2345,7 +2349,7 @@ async function handlePhoto(request, env, origin) {
     pending: true,
     provider: "wavespeed",
     providerTaskId: waveStart.taskId,
-    model: waveStart.model || WAVESPEED_MINIMAX_MODEL,
+    model: waveStart.model || WAVESPEED_SEEDREAM_45_MODEL,
     credentialAttempt: waveStart.credentialAttempt,
     credentialCount: waveStart.credentialCount,
     primaryFailure: openaiResult.reason,
@@ -2353,12 +2357,11 @@ async function handlePhoto(request, env, origin) {
     primaryRequestId: openaiResult.requestId,
     primaryAttempts: openaiAttempts,
     primaryMode: ordinaryPhoto ? (openaiAttempts > 1 ? "casual-retry" : "casual-reference") : "standard-reference",
-    routingMode: "openai-then-minimax-then-wan",
-    fallbackChain,
+    routingMode: "openai-then-seedream-4.5",
+    photoClass: packet.decision.intent.suggestiveLevel === "low" ? "low" : "ordinary",
     referenceDebug: waveReferences.debug,
     prompt: wavePrompt,
   }, 200, origin);
-
 
 
 }
@@ -2467,7 +2470,7 @@ export default {
           waveSpeedKeyCount: waveSpeedKeyEntries(env).length,
           waveSpeedCoolingDownCount: waveSpeedKeyEntries(env).filter((entry) => waveSpeedCredentialCoolingDown(entry.credentialId)).length,
           waveSpeedModel: WAVESPEED_MODEL,
-          waveSpeedModels: [WAVESPEED_MINIMAX_MODEL, WAVESPEED_WAN_MODEL],
+          waveSpeedModels: [WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL],
         },
         200,
         origin,

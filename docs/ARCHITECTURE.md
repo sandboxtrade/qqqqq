@@ -1,4 +1,4 @@
-# Current Architecture — v0.20.32
+# Current Architecture — v0.20.37
 
 This file describes the active runtime, not historical implementations.
 
@@ -49,12 +49,15 @@ Each character has a `voiceProfile` in `src/character/character-registry.ts`. A 
 ### Ordinary and low-suggestive
 
 1. OpenAI `gpt-image-2`.
-2. If unsuccessful: WaveSpeed MiniMax H3 Image Edit.
-3. If MiniMax cannot start, terminally fails, or remains pending past the fallback threshold: WaveSpeed WAN 2.6 Image Edit.
+2. If OpenAI does not produce the image after its applicable retry path: WaveSpeed `bytedance/seedream-v4.5/edit`.
 
 ### Medium/high intimate
 
-Route directly to WaveSpeed WAN 2.6 Image Edit.
+Route directly to WaveSpeed `bytedance/seedream-v5.0-lite/edit`.
+
+### No-refusal photo continuity
+
+When the per-character `photoNoRefusalMode` is enabled, direct photo requests and short visual follow-ups inside a recent photo exchange are mechanically reconciled to send unless the current turn has a hard stop/pause/boundary or the character is sleeping. Continuations inherit the last sent photo intent (including suggestive level) unless the new request explicitly changes it.
 
 ### References
 
