@@ -85,6 +85,30 @@ try {
   assert.equal(changedFraming.intentPatch.framing, "mirror");
   assert.equal(changedFraming.intentPatch.suggestiveLevel, "medium");
 
+  for (const followUp of [
+    "фотку ещё",
+    "можно ещё?",
+    "ещё раз",
+    "скинь ещё",
+    "покажи такую же",
+    "снова",
+    "другой ракурс",
+    "в лосинах",
+  ]) {
+    const mechanic = worker.derivePhotoMechanic(baseRaw, followUp);
+    assert.ok(mechanic, `follow-up must stay in photo mode: ${followUp}`);
+    assert.equal(mechanic.disposition, "send", followUp);
+    assert.equal(mechanic.continuation, true, followUp);
+  }
+  assert.equal(worker.derivePhotoMechanic(baseRaw, "спасибо, красиво"), undefined);
+
+  const appearanceContinuation = worker.derivePhotoMechanic({
+    ...baseRaw,
+    appearanceRequest: { requestedVibe: "different", outcome: "accepted", suggestive: false },
+  }, "повернись боком");
+  assert.equal(appearanceContinuation.continuation, true);
+  assert.equal(appearanceContinuation.disposition, "send");
+
   const noContext = worker.derivePhotoMechanic({ ...baseRaw, recentHistory: [] }, "теперь со спины");
   assert.equal(noContext, undefined);
 
@@ -126,6 +150,16 @@ try {
     shouldSendPhoto: true, caption: "секунду", intent: ordinaryChoice.intent,
   });
   assert.deepEqual(reconciledSpeech, ["секунду"]);
+
+  const forcedNope = worker.reconcilePhotoSendMessages(["неа, второй раз уже не скину"], { requested: true, disposition: "send", noRefusalMode: true }, {
+    shouldSendPhoto: true, caption: "секунду", intent: ordinaryChoice.intent,
+  });
+  assert.deepEqual(forcedNope, ["секунду"]);
+
+  const forcedEnough = worker.reconcilePhotoSendMessages(["одной хватит"], { requested: true, disposition: "send", noRefusalMode: true }, {
+    shouldSendPhoto: true, caption: "щас", intent: ordinaryChoice.intent,
+  });
+  assert.deepEqual(forcedEnough, ["щас"]);
 
   const prompt = worker.buildWaveSpeedPhotoPrompt({
     character: { name: "Yuzuki", age: 24 },

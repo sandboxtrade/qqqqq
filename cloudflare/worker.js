@@ -493,8 +493,18 @@ function parseRecentPhotoContext(recentHistory) {
 function isPhotoContinuationRequest(value, recentHistory) {
   if (!parseRecentPhotoContext(recentHistory)) return false;
   const text = normalizePhotoRequestText(value);
-  if (!text || text.length > 220) return false;
-  return /(?:^(?:а\s+)?(?:теперь|ещ[её](?:\s+одну)?|давай\s+ещ[её]|следующ(?:ую|ая)|друг(?:ую|ой)|такую\s+же)(?=\s|$|[,.!?…])|со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере)|в\s+полный\s+рост|по\s+пояс|в\s+зеркале|друг(?:ая|ую)\s+(?:поза|одежд|образ|ракурс)|поменяй\s+(?:позу|одежду|образ|ракурс)|леж[аё]|л[её]жа|на\s+животе|на\s+спине|сидя|стоя|боком|сверху|снизу|в\s+(?:белье|бельё|топе|юбке|лосинах|платье|шортах|рубашке)|без\s+(?:одежды|белья|трусик|лифчика))/u.test(text);
+  if (!text || text.length > 280) return false;
+
+  const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
+  const continuationCue = /(?:^|\s)(?:(?:а\s+)?(?:теперь|ещ[её](?:\s+(?:раз|одну|один|фот(?:о|ку)?))?|снова|заново|повтори|повторить|следующ(?:ую|ая)|друг(?:ую|ой)|такую\s+же|похожую)|(?:можно|давай|скинь|пришли|отправь|покажи|сделай|сфоткай)\s+ещ[её])(?=\s|$|[,.!?…])/u;
+  const visualModifier = /(?:со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере)|в\s+полный\s+рост|по\s+пояс|в\s+зеркале|друг(?:ая|ую|ой)\s+(?:поза|одежд|образ|ракурс|кадр)|поменяй\s+(?:позу|одежду|образ|ракурс|кадр)|леж[аё]|л[её]жа|на\s+животе|на\s+спине|сидя|стоя|боком|сверху|снизу|в\s+(?:белье|бельё|топе|юбке|лосинах|платье|шортах|рубашке)|без\s+(?:одежды|белья|трусик|лифчика)|тот\s+же\s+ракурс|так\s+же|по-другому)/u;
+  const brief = text.split(/\s+/u).length <= 14;
+
+  // Inside an active photo exchange, users naturally stop repeating “скинь фото”.
+  // Treat short follow-ups and photo-noun variants as the same mechanical request.
+  return continuationCue.test(text)
+    || visualModifier.test(text)
+    || (photoWord.test(text) && brief);
 }
 
 function isSuggestivePhotoRequest(value) {
@@ -531,11 +541,18 @@ function derivePhotoIntentPatch(value) {
 }
 
 function derivePhotoMechanic(raw, user) {
+  const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
   const direct = isDirectPhotoRequest(user);
-  const continuation = !direct && isPhotoContinuationRequest(user, raw?.recentHistory);
+  const recentPhotoContext = parseRecentPhotoContext(raw?.recentHistory);
+  const continuationByText = !direct && isPhotoContinuationRequest(user, raw?.recentHistory);
+  // Runtime already marks posture/framing requests as appearanceRequest. During
+  // an active photo exchange that is enough to mean “send another photo”, even
+  // when the user omits the words photo/selfie entirely.
+  const continuationByAppearance = !direct && Boolean(recentPhotoContext) && Boolean(raw.appearanceRequest);
+  const continuation = continuationByText || continuationByAppearance;
   if (!direct && !continuation) return undefined;
   const characterId = clipped(raw.character?.id, 64) || "yuzuki_v1";
-  const recentPhoto = continuation ? parseRecentPhotoContext(raw?.recentHistory) : null;
+  const recentPhoto = continuation ? recentPhotoContext : null;
   const currentPatch = derivePhotoIntentPatch(user) || {};
   const inheritedLevel = recentPhoto?.suggestiveLevel && recentPhoto.suggestiveLevel !== "none"
     ? recentPhoto.suggestiveLevel
@@ -557,7 +574,6 @@ function derivePhotoMechanic(raw, user) {
       }
     : (Object.keys(currentPatch).length ? currentPatch : undefined);
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
-  const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
   if (worldBlocked) {
     return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch, characterId, continuation };
   }
@@ -817,7 +833,7 @@ function sanitizePhotoDecision(raw, mode, shouldInitiate) {
 function looksLikePhotoRefusal(value) {
   const text = normalizePhotoRequestText(value);
   if (!text) return false;
-  return /(?:^|[.!?—-]\s*)(?:не\s+сейчас|не\s+буду|не\s+могу|не\s+скину|не\s+пришлю|не\s+отправлю|не\s+покажу)(?=\s|$|[,.!?…])|(?:гол[а-я]*\s*[—-]\s*нет)(?=\s|$|[,.!?…])|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
+  return /(?:^|[.!?—-]\s*)(?:нет|неа|не\s+сейчас|не\s+сегодня|не\s+хочу|не\s+буду|не\s+стану|не\s+могу|не\s+скину|не\s+пришлю|не\s+отправлю|не\s+покажу|хватит|достаточно|я\s+пас|обойд[её]шься)(?=\s|$|[,.!?…])|(?:одн(?:ой|ого)\s+хватит)|(?:больше\s+не\s+(?:буду|скину|пришлю|отправлю|покажу))|(?:не\s+проси\s+(?:ещ[её]|больше))|(?:гол[а-я]*\s*[—-]\s*нет)(?=\s|$|[,.!?…])|(?:^|[.!?]\s*)только\s+(?:обычн|нормальн)[а-я]*(?:\s+фот[а-я]*)?|(?:скину\s+(?:только\s+)?обычн[а-я]*)|(?:могу\s+(?:скинуть|прислать|отправить)\s+(?:только\s+)?обычн[а-я]*)|(?:давай\s+без\s+(?:этого|такого|гол|нюд|интим))/u.test(text);
 }
 
 function ordinaryPhotoField(value, fallback, max = 160) {

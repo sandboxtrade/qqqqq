@@ -1,0 +1,10 @@
+v0.20.39 updated files
+
+cloudflare/worker.js
+tests/intimacy-photo-speech.mjs
+src/config/version.ts
+package.json
+README.md
+docs/ARCHITECTURE.md
+RELEASE_v0.20.39.md
+UPDATED_FILES_v0.20.39.txt
