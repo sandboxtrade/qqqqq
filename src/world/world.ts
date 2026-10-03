@@ -1021,7 +1021,6 @@ export function markUserInteraction(
   if (!engaged) {
     return {
       ...world,
-      currentLocation: homeSafeLocation(world.currentLocation),
       connectionDrive: Math.max(0.04, world.connectionDrive * 0.8),
       lastUserInteractionAt: now,
       updatedAt: now,
@@ -1031,18 +1030,19 @@ export function markUserInteraction(
   if (world.availability === "occupied") {
     return {
       ...world,
-      currentLocation: homeSafeLocation(world.currentLocation),
       connectionDrive: Math.max(0.04, world.connectionDrive * 0.5),
       lastUserInteractionAt: now,
       updatedAt: now,
     };
   }
 
+  const wakingFromSleep = world.availability === "sleeping" || world.currentActivity === "sleeping";
   return {
     ...world,
-    currentLocation: homeSafeLocation(world.currentLocation),
-    currentActivity: "chatting",
-    availability: "free",
+    // A message does not erase the character's real activity or teleport her home.
+    // Only an actual wake-up converts sleeping into a short "chatting" grace state.
+    currentActivity: wakingFromSleep ? "chatting" : world.currentActivity,
+    availability: wakingFromSleep ? "free" : world.availability,
     isAwake: true,
     connectionDrive: Math.max(0.04, world.connectionDrive * 0.35),
     lastUserInteractionAt: now,

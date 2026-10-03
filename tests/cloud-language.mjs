@@ -302,8 +302,19 @@ replySequence = [
 const refreshResult = await renderCloudLanguage({ ...base, userText: base.userText + " снова" });
 assert.equal(refreshResult.used, true);
 assert.deepEqual(idTokenForces.slice(-2), [false, true]);
-assert.deepEqual(appCheckTokenForces.slice(-2), [false, true]);
+assert.deepEqual(appCheckTokenForces.slice(-2), [false, false]);
 assert.equal(fetchCalls.at(-1).options.headers.Authorization, "Bearer firebase-id-token-refresh");
+assert.equal(fetchCalls.at(-1).options.headers["X-Firebase-AppCheck"], "app-check-token");
+
+replySequence = [
+  { status: 401, body: { error: "invalid-app-check" } },
+  { status: 200, body: successfulBody },
+];
+const appCheckRefreshResult = await renderCloudLanguage({ ...base, userText: base.userText + " app-check" });
+assert.equal(appCheckRefreshResult.used, true);
+assert.deepEqual(idTokenForces.slice(-2), [false, false]);
+assert.deepEqual(appCheckTokenForces.slice(-2), [false, true]);
+assert.equal(fetchCalls.at(-1).options.headers.Authorization, "Bearer firebase-id-token");
 assert.equal(fetchCalls.at(-1).options.headers["X-Firebase-AppCheck"], "app-check-token-refresh");
 
 const callsBeforeTransientFailure = fetchCalls.length;
@@ -321,6 +332,10 @@ const workerSource = readFileSync(new URL("../cloudflare/worker.js", import.meta
 assert.match(cloudSource, /mode\?: "reply" \| "initiative"/);
 assert.match(cloudSource, /input\.mode === "initiative"/);
 assert.match(workerSource, /mode === "initiative"/);
+assert.match(cloudSource, /characterProfile\?:/);
+assert.match(workerSource, /characterProfile:/);
+assert.match(cloudSource, /WORKER_REQUEST_TIMEOUT_MS = 40_000/);
+assert.match(workerSource, /OPENAI_TIMEOUT_MS = 25_000/);
 assert.match(workerSource, /\.slice\(-30\)/);
 assert.match(workerSource, /MEMORY — единственная каноническая долговременная память/);
 assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);

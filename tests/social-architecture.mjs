@@ -46,6 +46,7 @@ assert.match(store, /selectCharacter:/);
 assert.match(store, /subscribeCharacterLiveSync\(characterId/);
 assert.match(runtime, /getCompanionRepository\(characterId/);
 assert.match(runtime, /character:\s*\{ id: profile\.id, name: profile\.core\.name, age: profile\.core\.age \}/);
+assert.match(runtime, /characterProfile:\s*\{/);
 assert.match(app, /InboxScreen/);
 assert.match(app, /PeopleScreen/);
 assert.match(app, /openCharacterSettings/);
@@ -58,6 +59,6 @@ assert.match(worker, /raw\.character\?\.name/);
 assert.match(worker, /alia_v1:\s*"alia"/);
 assert.match(worker, /occupied\/personal_project\/reading\/music\/cooking\/errands/);
 assert.match(worker, /reconcilePhotoSendMessages/);
-assert.match(worker, /Prefer GPT\'s own generated caption/);
+assert.match(worker, /caption && !looksLikePhotoRefusal\(caption\)/);
 
 console.log("PASS social architecture foundation");

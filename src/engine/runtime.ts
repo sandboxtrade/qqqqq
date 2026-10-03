@@ -1140,6 +1140,16 @@ export async function handleUserMessage(
     cloudLanguage = await renderCloudLanguage({
       mode: "reply",
       character: { id: profile.id, name: profile.core.name, age: profile.core.age },
+      characterProfile: {
+        headline: profile.headline,
+        occupation: profile.occupation,
+        locationLabel: profile.locationLabel,
+        interests: [...profile.interests],
+        values: [...profile.core.values],
+        preferences: [...profile.core.preferences],
+        dislikes: [...profile.core.dislikes],
+        communicationStyle: { ...profile.core.communicationStyle },
+      },
       userText: input.text,
       personality: editableContext.personality,
       voiceStyle: profile.voiceProfile?.styleGuide,
@@ -1524,6 +1534,16 @@ export async function maintainRuntime(
       const proactiveLanguage = await renderCloudLanguage({
         mode: "initiative",
         character: { id: profile.id, name: profile.core.name, age: profile.core.age },
+        characterProfile: {
+          headline: profile.headline,
+          occupation: profile.occupation,
+          locationLabel: profile.locationLabel,
+          interests: [...profile.interests],
+          values: [...profile.core.values],
+          preferences: [...profile.core.preferences],
+          dislikes: [...profile.core.dislikes],
+          communicationStyle: { ...profile.core.communicationStyle },
+        },
         userText: "",
         personality: proactiveEditableContext.personality,
         voiceStyle: profile.voiceProfile?.styleGuide,

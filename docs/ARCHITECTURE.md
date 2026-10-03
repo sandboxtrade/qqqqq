@@ -1,4 +1,4 @@
-# Current Architecture — v0.20.39
+# Current Architecture — v0.20.44
 
 This file describes the active runtime, not historical implementations.
 
@@ -21,7 +21,7 @@ GPT is responsible for natural language and bounded per-turn reaction suggestion
 ## User-turn flow
 
 1. `src/engine/runtime.ts` loads/simulates current mechanical state.
-2. Runtime builds `CloudLanguageInput`: current character, personality, voice profile, memory, recent conversation, world, emotion, relationship, intimacy and constraints.
+2. Runtime builds `CloudLanguageInput`: current character, immutable character-profile anchors, editable personality, voice profile, memory, recent conversation, world, emotion, relationship, intimacy and constraints.
 3. `src/ai/cloud-language.ts` sends it to `/yuzukiSpeak` with Firebase Auth + App Check.
 4. `cloudflare/worker.js` sanitizes the packet and calls `gpt-6-luna` with the structured response schema.
 5. Worker returns natural-language message(s), bounded reaction deltas and optional `photoDecision`.
@@ -42,7 +42,9 @@ Legacy semantic retrieval/ranking modules are not in the production import graph
 
 ## Dialogue voice
 
-Each character has a `voiceProfile` in `src/character/character-registry.ts`. A voice profile is a distribution of tendencies, not a template or checklist. Global natural-dialogue rules live in the Worker `INSTRUCTIONS` prompt.
+Each character has a `voiceProfile` and immutable profile anchors in `src/character/character-registry.ts`. Occupation, city, interests, values, preferences, dislikes and communication-style baseline are sent on every GPT turn, so an old editable personality saved in Firestore cannot collapse every character back into one generic voice. A voice profile is a distribution of tendencies, not a template or checklist. Global natural-dialogue rules live in the Worker `INSTRUCTIONS` prompt.
+
+A user message does not normally replace the current world activity with `chatting` or move the character home. The current routine/location remains authoritative while she replies; only an actual sleep wake-up uses a temporary chatting grace state.
 
 ## Photo flow
 

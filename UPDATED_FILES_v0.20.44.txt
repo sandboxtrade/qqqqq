@@ -1,0 +1,15 @@
+v0.20.44 is cumulative over the previous photo/Firebase/personality patches. Replace the files from this archive preserving their paths.
+
+New audit/test fixes in 0.20.44:
+- tests/regression.mjs
+- tests/benchmark-local.mjs
+- tests/alia-character.mjs
+- package.json
+- src/config/version.ts
+- README.md
+- docs/ARCHITECTURE.md
+- RELEASE_v0.20.44.md
+- CLEANUP_AUDIT_v0.20.44.md
+- DELETE_THESE_FILES_v0.20.44.txt
+
+The archive also contains the current cumulative runtime files from v0.20.37–v0.20.43 so it can replace earlier update files without mixing revisions.

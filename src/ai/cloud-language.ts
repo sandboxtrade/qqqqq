@@ -16,6 +16,22 @@ export interface CloudLanguageInput {
     name: string;
     age: number;
   };
+  /** Immutable profile anchors from the character registry. These stay current even when editable personality was saved earlier. */
+  characterProfile?: {
+    headline?: string;
+    occupation?: string;
+    locationLabel?: string;
+    interests?: string[];
+    values?: string[];
+    preferences?: string[];
+    dislikes?: string[];
+    communicationStyle?: {
+      verbosity?: "short" | "balanced" | "long";
+      humor?: "dry" | "playful" | "soft" | "direct";
+      directness?: number;
+      warmth?: number;
+    };
+  };
   /** Current user text. Initiative mode intentionally sends an empty string. */
   userText: string;
   /** User-editable stable character description. */
@@ -274,7 +290,7 @@ interface WorkerReply {
 }
 
 const TOKEN_PREP_TIMEOUT_MS = 18_000;
-const WORKER_REQUEST_TIMEOUT_MS = 12_000;
+const WORKER_REQUEST_TIMEOUT_MS = 40_000;
 const TRANSIENT_CIRCUIT_MS = 2_000;
 const NOT_FOUND_CIRCUIT_MS = 10 * 60_000;
 let unavailableUntil = 0;

@@ -1,0 +1,13 @@
+SAFE TO DELETE NOW FROM GITHUB:
+
+src/ai/perception-client.ts
+src/config/state-effects.ts
+src/ui/SecondaryScreens.tsx
+tests/__tmp_regression.mjs
+amused.1.1.PNG
+__external-stubs.d.ts
+tsconfig.socialcheck.json
+
+Also delete any tracked *.tsbuildinfo.
+
+Optional documentation cleanup is listed in CLEANUP_AUDIT_v0.20.44.md.

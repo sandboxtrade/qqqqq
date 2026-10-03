@@ -68,6 +68,8 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === "firebase/firestore")
       return { url: "mock:firestore", shortCircuit: true };
+    if (specifier === "firebase/auth")
+      return { url: "mock:auth", shortCircuit: true };
     if (specifier.startsWith(".") && context.parentURL?.startsWith("file:")) {
       const candidate = new URL(specifier, context.parentURL);
       if (
@@ -82,13 +84,15 @@ registerHooks({
     let source;
     if (url === "mock:firestore")
       source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction,writeBatch}=globalThis.__sdk;`;
+    else if (url === "mock:auth")
+      source = `export const getAuth=()=>({currentUser:{getIdToken:async()=>"test-token"}});`;
     else if (url.endsWith("/storage/repository-factory.ts"))
       source =
         "export const getCompanionRepository=(...a)=>globalThis.__getRepo(...a);";
     else if (url.endsWith("/storage/auth.ts"))
       source = "export const getAuthenticatedUid=()=>globalThis.__uid;";
     else if (url.endsWith("/storage/firebase.ts"))
-      source = "export const getFirebaseDb=()=>({});";
+      source = 'export const getFirebaseDb=()=>({}); export const getFirebaseApp=()=>null; export const getFirebaseAppCheckToken=async()=>""; export const isAppCheckAttestationError=()=>false; export const isFirebaseConfigured=false;';
     else if (url.endsWith("/ai/gemini-client.ts"))
       source =
         'export const generateCharacterReply=(...a)=>globalThis.__generate(...a); export const generateInitiativeMessage=async()=>"Как твои дела?";';

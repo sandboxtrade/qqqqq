@@ -20,7 +20,7 @@ assert.match(registry, /avatarUrl:\s*"\.\/assets\/profiles\/alia\/avatar\.jpg"/)
 assert.match(world, /alia_v1:\s*\{[\s\S]*?personal_project:/);
 assert.match(world, /alia_v1:\s*\[[\s\S]*?activities:\s*\["sleeping"\]/);
 assert.match(worker, /alia_v1:\s*"alia"/);
-assert.match(version, /ENGINE_VERSION = "0\.20\.35"/);
+assert.match(version, /ENGINE_VERSION = "0\.20\.44"/);
 
 for (const name of ["avatar.jpg", "identity-sheet.jpg", "01.jpg", "02.jpg", "03.jpg"]) {
   const file = path.join(root, "public/assets/profiles/alia", name);

@@ -66,6 +66,8 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === "firebase/firestore")
       return { url: "mock:firestore", shortCircuit: true };
+    if (specifier === "firebase/auth")
+      return { url: "mock:auth", shortCircuit: true };
     if (specifier === "zustand")
       return { url: "mock:zustand", shortCircuit: true };
     if (specifier.startsWith(".") && context.parentURL?.startsWith("file:")) {
@@ -82,6 +84,8 @@ registerHooks({
     let source;
     if (url === "mock:firestore")
       source = `export const {collection,doc,documentId,getDoc,getDocs,query,limit,orderBy,startAfter,where,setDoc,runTransaction,writeBatch}=globalThis.__sdk;`;
+    else if (url === "mock:auth")
+      source = `export const getAuth=()=>({currentUser:{getIdToken:async()=>"test-token"}});`;
     else if (url === "mock:zustand")
       source = `export const create=(creator)=>{let state; const listeners=new Set(); const set=(update)=>{const previous=state; const patch=typeof update==='function'?update(state):update; state={...state,...patch}; for(const listener of listeners) listener(state,previous); return state;}; const get=()=>state; state=creator(set,get); const hook=()=>state; hook.getState=get; hook.setState=set; hook.subscribe=(listener)=>{listeners.add(listener); return()=>listeners.delete(listener);}; return hook;};`;
     else if (url.endsWith("/storage/repository-factory.ts"))
@@ -90,7 +94,7 @@ registerHooks({
     else if (url.endsWith("/storage/auth.ts"))
       source = `export const getAuthenticatedUid=()=>globalThis.__uid; export const signInWithGoogle=async()=>null; export const signOutFirebase=async()=>{}; export const waitForInitialAuth=async()=>null; export const observeAuth=()=>()=>{}; export const finishRedirect=async()=>{};`;
     else if (url.endsWith("/storage/firebase.ts"))
-      source = `export const getFirebaseDb=()=>({}); export const getFirebaseApp=()=>null; export const getFirebaseAppCheckToken=async()=>""; export const getAppCheckState=()=>"disabled"; export const initializeFirebaseAppCheck=()=>"disabled"; export const verifyAppCheck=async()=>{}; export const isFirebaseConfigured=false; export const isLocalRepositoryAllowed=true; export const runtimeConfigurationError=null;`;
+      source = `export const getFirebaseDb=()=>({}); export const getFirebaseApp=()=>null; export const getFirebaseAppCheckToken=async()=>""; export const getAppCheckState=()=>"disabled"; export const initializeFirebaseAppCheck=()=>"disabled"; export const verifyAppCheck=async()=>{}; export const isAppCheckAttestationError=()=>false; export const describeAppCheckError=()=>""; export const isFirebaseConfigured=false; export const isLocalRepositoryAllowed=true; export const runtimeConfigurationError=null;`;
     else if (url.endsWith("/storage/live-sync.ts"))
       source = "export const subscribeCharacterLiveSync=()=>()=>{};";
     else if (url.endsWith("/config/runtime-config.ts"))
@@ -4065,10 +4069,10 @@ await test("GPT-first dialogue uses the authenticated Cloudflare proxy and prese
   assert.match(clientSource, /runtimeCloudLanguageEndpoint/);
   assert.match(clientSource, /Authorization:\s*`Bearer \${idToken}`/);
   assert.match(clientSource, /"X-Firebase-AppCheck": appCheckToken/);
-  assert.match(clientSource, /getFirebaseAppCheckToken\(forceRefresh\)/);
-  assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 4_000/);
-  assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 12_000/);
-  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 9_500/);
+  assert.match(clientSource, /getFirebaseAppCheckToken\(options\.forceAppCheck === true\)/);
+  assert.match(clientSource, /TOKEN_PREP_TIMEOUT_MS = 18_000/);
+  assert.match(clientSource, /WORKER_REQUEST_TIMEOUT_MS = 40_000/);
+  assert.match(workerSource, /OPENAI_TIMEOUT_MS = 25_000/);
   assert.match(clientSource, /response\.status === 401 && attempt === 0/);
   assert.match(workerSource, /APP_CHECK_JWKS_URL[\s\S]*signal: controller\.signal/);
   assert.doesNotMatch(clientSource, /api\.openai\.com|OPENAI_API_KEY/);
@@ -4101,7 +4105,7 @@ await test("close adult flirting carries intimacy mind and bond-gated arousal in
   assert.match(runtimeSource, /outwardArousal:\s*intimacyMind\.outwardArousal/);
   assert.match(runtimeSource, /kind:\s*intimacySignal\.kind/);
   assert.match(workerSource, /intimacy доступна только/);
-  assert.match(workerSource, /Stop\/pause\/boundary/);
+  assert.match(workerSource, /stop\/pause\/boundary/i);
   assert.match(workerSource, /raw\.intimacy\?\.mind\?\.inwardArousal/);
   assert.match(workerSource, /raw\.intimacy\?\.mind\?\.outwardArousal/);
   assert.match(workerSource, /raw\.intimacy\?\.signal\?\.kind/);
@@ -4176,8 +4180,8 @@ await test("v0.19.4 full-screen settings, context editors and unobscured photo s
   assert.match(workerSource, /personality: clippedMultiline\(raw\.personality, 9000\)/);
   assert.match(workerSource, /memory: clippedMultiline\(raw\.memory, 18000\)/);
   assert.match(settingsSource, /if \(ok\) setView\("home"\)/);
-  assert.match(workerSource, /Не перезапускай беседу generic-фразами/);
-  assert.match(workerSource, /Эмодзи используй редко/);
+  assert.match(workerSource, /Не перезапускай понятную тему generic-фразами/);
+  assert.match(workerSource, /Эмодзи, сленг, «ахах», скобки и многоточия — редкие инструменты/);
 });
 
 await test("v0.19.8 direct intimacy and ordinary visual sync are wired without weakening hard boundaries", () => {
@@ -4185,7 +4189,7 @@ await test("v0.19.8 direct intimacy and ordinary visual sync are wired without w
   const cloudSource = readFileSync(new URL("../src/ai/cloud-language.ts", import.meta.url), "utf8");
   const avatarSource = readFileSync(new URL("../src/avatar/avatar-model.ts", import.meta.url), "utf8");
   const runtimeSource = readFileSync(new URL("../src/engine/runtime.ts", import.meta.url), "utf8");
-  assert.match(workerSource, /не нужно искусственно смягчать каждую взрослую тему эвфемизмами/);
+  assert.match(workerSource, /не нужно искусственно заменять прямые взрослые слова канцелярскими эвфемизмами/);
   assert.match(workerSource, /intimacyReaction/);
   assert.match(workerSource, /"amused", "bashful", "shy", "surprised", "confused"/);
   assert.match(cloudSource, /CloudIntimacyReaction/);

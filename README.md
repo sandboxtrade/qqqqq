@@ -1,4 +1,4 @@
-# Game2 / Virtual Companion — v0.20.39
+# Game2 / Virtual Companion — v0.20.44
 
 Current architecture: GPT-first dialogue + Local-State-first personality/memory/state.
 
