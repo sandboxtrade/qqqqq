@@ -19,6 +19,7 @@ import {
 import {
   getAppCheckState,
   initializeFirebaseAppCheck,
+  verifyAppCheck,
   isFirebaseConfigured,
   isLocalRepositoryAllowed,
   type AppCheckState,
@@ -862,7 +863,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       assertRuntimeConfiguration();
       watchAuth();
       set({ appCheckState: initializeFirebaseAppCheck() });
-          const user = isFirebaseConfigured
+      const user = isFirebaseConfigured
         ? await bounded(
             (async () => {
               await finishRedirect();
@@ -877,7 +878,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({ initializing: false, authStatus: "signed_out", user: null });
         return;
       }
-      set({ user, authStatus: isFirebaseConfigured ? "signed_in" : "local" });
+      if (isFirebaseConfigured && user) {
+        set({ phase: "Проверяем Firebase…", appCheckState: getAppCheckState() });
+        await verifyAppCheck();
+        if (version !== epoch) return;
+      }
+      set({
+        user,
+        authStatus: isFirebaseConfigured ? "signed_in" : "local",
+        appCheckState: getAppCheckState(),
+        phase: "",
+      });
       await boot(version, user);
     } catch (error) {
       if (version === epoch)
@@ -885,6 +896,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
           initializing: false,
           busy: false,
           ready: false,
+          phase: "",
+          appCheckState: getAppCheckState(),
           error: errorText(error),
         });
     }
@@ -934,18 +947,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ busy: true, error: null });
     try {
       assertRuntimeConfiguration();
-      initializeFirebaseAppCheck();
-          const user = await bounded(
+      set({ appCheckState: initializeFirebaseAppCheck() });
+      const user = await bounded(
         signInWithGoogle(),
         60000,
         "Вход через Google",
       );
       if (version !== epoch) return;
-      set({ user, authStatus: "signed_in", initializing: true });
+      set({
+        user,
+        authStatus: "checking",
+        initializing: true,
+        phase: "Проверяем Firebase…",
+      });
+      await verifyAppCheck();
+      if (version !== epoch) return;
+      set({
+        user,
+        authStatus: "signed_in",
+        appCheckState: getAppCheckState(),
+        phase: "",
+      });
       await boot(version, user);
     } catch (error) {
       if (version === epoch)
-        set({ busy: false, initializing: false, error: errorText(error) });
+        set({
+          busy: false,
+          initializing: false,
+          phase: "",
+          appCheckState: getAppCheckState(),
+          error: errorText(error),
+        });
     } finally {
       authAction = false;
     }

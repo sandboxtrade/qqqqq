@@ -90,7 +90,7 @@ const WAVESPEED_POLL_TIMEOUT_MS = 150_000;
 const WAVESPEED_POLL_INTERVAL_MS = 3_000;
 const POLL_REQUEST_TIMEOUT_MS = 32_000;
 const WAVESPEED_KEY_RETRY_START_TIMEOUT_MS = 35_000;
-const TOKEN_TIMEOUT_MS = 4_000;
+const TOKEN_TIMEOUT_MS = 18_000;
 
 function firstString(...values: unknown[]) {
   for (const value of values) {
@@ -252,12 +252,12 @@ async function requestWaveSpeedKeyRetry(
 
 async function acquireTokens(
   user: { getIdToken: (forceRefresh?: boolean) => Promise<string> },
-  forceRefresh: boolean,
+  options: { forceAuth?: boolean; forceAppCheck?: boolean } = {},
   signal?: AbortSignal,
 ) {
   return Promise.all([
-    bounded(user.getIdToken(forceRefresh), TOKEN_TIMEOUT_MS, "Firebase auth token", signal),
-    bounded(getFirebaseAppCheckToken(forceRefresh), TOKEN_TIMEOUT_MS, "App Check token", signal),
+    bounded(user.getIdToken(options.forceAuth === true), TOKEN_TIMEOUT_MS, "Firebase auth token", signal),
+    bounded(getFirebaseAppCheckToken(options.forceAppCheck === true), TOKEN_TIMEOUT_MS, "App Check token", signal),
   ]);
 }
 
@@ -418,7 +418,7 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
   let idToken = "";
   let appCheckToken = "";
   try {
-    [idToken, appCheckToken] = await acquireTokens(auth.currentUser, false, signal);
+    [idToken, appCheckToken] = await acquireTokens(auth.currentUser, {}, signal);
   } catch (error) {
     // A 403/throttle is an attestation/configuration problem, not an expired
     // token. Forcing another App Check exchange only repeats the rejection and
@@ -430,7 +430,11 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
         reason: error instanceof Error ? error.message : "app-check-rejected",
       };
     }
-    [idToken, appCheckToken] = await acquireTokens(auth.currentUser, true, signal);
+    [idToken, appCheckToken] = await acquireTokens(
+      auth.currentUser,
+      { forceAuth: true },
+      signal,
+    );
   }
 
   const controller = new AbortController();

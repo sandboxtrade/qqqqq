@@ -1,4 +1,4 @@
-# Current Architecture — v0.20.37
+# Current Architecture — v0.20.38
 
 This file describes the active runtime, not historical implementations.
 

@@ -273,7 +273,7 @@ interface WorkerReply {
   };
 }
 
-const TOKEN_PREP_TIMEOUT_MS = 4_000;
+const TOKEN_PREP_TIMEOUT_MS = 18_000;
 const WORKER_REQUEST_TIMEOUT_MS = 12_000;
 const TRANSIENT_CIRCUIT_MS = 2_000;
 const NOT_FOUND_CIRCUIT_MS = 10 * 60_000;
@@ -461,18 +461,18 @@ function circuitDuration(status?: number) {
 
 async function acquireCloudTokens(
   user: { getIdToken: (forceRefresh?: boolean) => Promise<string> },
-  forceRefresh: boolean,
+  options: { forceAuth?: boolean; forceAppCheck?: boolean } = {},
   signal?: AbortSignal,
 ) {
   return Promise.all([
     bounded(
-      user.getIdToken(forceRefresh),
+      user.getIdToken(options.forceAuth === true),
       TOKEN_PREP_TIMEOUT_MS,
       "Firebase auth token",
       signal,
     ),
     bounded(
-      getFirebaseAppCheckToken(forceRefresh),
+      getFirebaseAppCheckToken(options.forceAppCheck === true),
       TOKEN_PREP_TIMEOUT_MS,
       "App Check token",
       signal,
@@ -549,7 +549,7 @@ export async function renderCloudLanguage(
   let idToken: string;
   let appCheckToken: string;
   try {
-    [idToken, appCheckToken] = await acquireCloudTokens(user, false, signal);
+    [idToken, appCheckToken] = await acquireCloudTokens(user, {}, signal);
   } catch (error) {
     if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };
     unavailableUntil = Date.now() + TRANSIENT_CIRCUIT_MS;
@@ -582,11 +582,17 @@ export async function renderCloudLanguage(
       const photoDecision = parsePhotoDecision(data.photoDecision);
       const reason = responseReason(data, response.status);
 
-      // Firebase ID/App Check tokens can expire between acquisition and Worker
-      // verification. Refresh both once before falling back to local dialogue.
+      // Refresh only the token family rejected by the Worker. Forcing both
+      // Firebase Auth and reCAPTCHA/App Check at once can create duplicate
+      // attestations on slow browsers.
       if (response.status === 401 && attempt === 0) {
         try {
-          [idToken, appCheckToken] = await acquireCloudTokens(user, true, signal);
+          const rejectedAppCheck = /app-check/i.test(reason);
+          [idToken, appCheckToken] = await acquireCloudTokens(
+            user,
+            rejectedAppCheck ? { forceAppCheck: true } : { forceAuth: true },
+            signal,
+          );
           continue;
         } catch (error) {
           if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };

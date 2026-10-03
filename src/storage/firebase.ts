@@ -148,24 +148,42 @@ export function getAppCheckState(): AppCheckState {
   return appCheckState;
 }
 
+let pendingAppCheckToken: Promise<string> | null = null;
+const APP_CHECK_READY_TIMEOUT_MS = 18_000;
+
 export async function getFirebaseAppCheckToken(forceRefresh = false): Promise<string> {
   assertRuntimeConfiguration();
   initializeFirebaseAppCheck();
   if (!appCheck)
     throw new Error("App Check не настроен: проверь reCAPTCHA site key.");
+
+  // Coalesce normal token requests. Dialogue, photos and Firestore bootstrap can
+  // otherwise start the same reCAPTCHA Enterprise attestation simultaneously,
+  // which is especially unreliable on slower mobile browsers.
+  if (!forceRefresh && pendingAppCheckToken) return pendingAppCheckToken;
+  const currentAppCheck = appCheck;
+  const request = (async () => {
+    try {
+      const result = await getToken(currentAppCheck, forceRefresh);
+      appCheckState = result.token
+        ? runtimeAppCheckDebugEnabled || runtimeAppCheckDebugToken
+          ? "debug"
+          : "active"
+        : "error";
+      if (!result.token) throw new Error("App Check не вернул токен.");
+      setTokenAutoRefreshEnabled(currentAppCheck, true);
+      return result.token;
+    } catch (error) {
+      appCheckState = isAppCheckThrottleError(error) ? "throttled" : "error";
+      throw new Error(describeAppCheckError(error));
+    }
+  })();
+
+  if (!forceRefresh) pendingAppCheckToken = request;
   try {
-    const result = await getToken(appCheck, forceRefresh);
-    appCheckState = result.token
-      ? runtimeAppCheckDebugEnabled || runtimeAppCheckDebugToken
-        ? "debug"
-        : "active"
-      : "error";
-    if (!result.token) throw new Error("App Check не вернул токен.");
-    setTokenAutoRefreshEnabled(appCheck, true);
-    return result.token;
-  } catch (error) {
-    appCheckState = isAppCheckThrottleError(error) ? "throttled" : "error";
-    throw new Error(describeAppCheckError(error));
+    return await request;
+  } finally {
+    if (pendingAppCheckToken === request) pendingAppCheckToken = null;
   }
 }
 
@@ -179,26 +197,11 @@ export function getFirebaseDb(): Firestore | null {
   return db;
 }
 
-let pendingToken: Promise<void> | null = null;
-
 export async function verifyAppCheck() {
   assertRuntimeConfiguration();
-  initializeFirebaseAppCheck();
-  if (!appCheck)
-    throw new Error("App Check не настроен: проверь reCAPTCHA site key.");
-  if (!pendingToken) {
-    const request = bounded(getToken(appCheck, false), 6000, "App Check")
-      .then(() => {
-        appCheckState = runtimeAppCheckDebugEnabled || runtimeAppCheckDebugToken ? "debug" : "active";
-        if (appCheck) setTokenAutoRefreshEnabled(appCheck, true);
-      })
-      .catch((error) => {
-        appCheckState = isAppCheckThrottleError(error) ? "throttled" : "error";
-        throw new Error(describeAppCheckError(error));
-      });
-    pendingToken = request;
-    void request.then(() => { if (pendingToken === request) pendingToken = null; },
-      () => { if (pendingToken === request) pendingToken = null; });
-  }
-  await pendingToken;
+  await bounded(
+    getFirebaseAppCheckToken(false),
+    APP_CHECK_READY_TIMEOUT_MS,
+    "App Check",
+  );
 }
