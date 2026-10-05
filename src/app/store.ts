@@ -39,7 +39,7 @@ import { maintenanceRetryDelay, nextInitiativeCheckAt } from "./app-utils";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 import { subscribeCharacterLiveSync } from "../storage/live-sync";
 import { defaultCharacter } from "../character/character";
-import { getCharacterProfile, isKnownCharacterId } from "../character/character-registry";
+import { characterProfiles, getCharacterProfile, isKnownCharacterId } from "../character/character-registry";
 import { mergeChatMessages, replyForFailedMessage, replyTargets } from "./app-utils";
 import { loadCharacterEditableContext, updateCharacterEditableContext } from "../context/context-service";
 import { createDefaultEditableContext } from "../context/yuzuki-context";
@@ -48,6 +48,7 @@ import type { ConversationExportLimit } from "../chat/conversation-export";
 import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-language";
 import { loadLocalPhoto } from "../storage/local-photo-cache";
 import { isWaveSpeedBalanceFailureError } from "../ai/cloud-photo";
+import { getCompanionRepository } from "../storage/repository-factory";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
 }
@@ -69,6 +70,7 @@ interface AppStore {
   error: string | null;
   maintenanceError: string | null;
   photoBalanceAlert: PhotoBalanceAlertState | null;
+  inboxCharacterIds: string[];
   messages: ChatMessage[];
   runtime: RuntimeState | null;
   lastTrace: RuntimeTrace | null;
@@ -117,6 +119,37 @@ function defaultContextFor(characterId: string) {
   const profile = getCharacterProfile(characterId);
   return createDefaultEditableContext(0, profile.defaultPersonality, profile.defaultMemory);
 }
+
+function orderCharacterIds(ids: Iterable<string>) {
+  const set = new Set(ids);
+  return characterProfiles.filter((profile) => set.has(profile.id)).map((profile) => profile.id);
+}
+
+function markCharacterHasConversation(characterId: string) {
+  useAppStore.setState((state) => {
+    if (state.inboxCharacterIds.includes(characterId)) return state;
+    return { inboxCharacterIds: orderCharacterIds([...state.inboxCharacterIds, characterId]) };
+  });
+}
+
+async function refreshInboxCharacterIds(version: number, user: AuthProfile | null) {
+  const ids = await Promise.all(
+    characterProfiles.map(async (profile) => {
+      try {
+        const page = await getCompanionRepository(profile.id, user?.uid ?? null).listConversationEvents({ limit: 1 });
+        return page.events.length ? profile.id : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  if (version !== epoch) return;
+  const current = useAppStore.getState();
+  const merged = ids.filter((id): id is string => Boolean(id));
+  if (current.messages.length) merged.push(current.activeCharacterId);
+  useAppStore.setState({ inboxCharacterIds: orderCharacterIds(merged) });
+}
+
 let epoch = 0;
 let active: AbortController | null = null;
 let maintenance: AbortController | null = null;
@@ -397,6 +430,7 @@ function startLiveSync(version: number, user: AuthProfile | null, characterId: s
       const incoming = conversationFrom(events)
         .filter((message) => !message.silent)
         .map((message) => ({ ...message, delivery: "saved" as const }));
+      if (incoming.length) markCharacterHasConversation(characterId);
       useAppStore.setState((state) => {
         const resolvedIds = replyTargets(events);
         const activeResolved = replyForFailedMessage(events, activeTurnId);
@@ -615,6 +649,9 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       phase: "",
       appCheckState: getAppCheckState(),
     });
+    if (result.recentConversation.some((message) => !message.silent))
+      markCharacterHasConversation(characterId);
+    void refreshInboxCharacterIds(version, user);
     startLiveSync(version, user, characterId);
     scheduleMaintenance();
   } finally {
@@ -641,6 +678,7 @@ function watchAuth() {
       initializing: false,
       user: null,
       runtime: null,
+      inboxCharacterIds: [],
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -784,6 +822,7 @@ async function sendTurn(message: ChatMessage) {
             ),
       };
     });
+    markCharacterHasConversation(store.activeCharacterId);
 
     if (result.photoDecision?.shouldSendPhoto) {
       const replyCount = result.replyMessages?.length ?? 1;
@@ -837,6 +876,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   error: null,
   maintenanceError: null,
   photoBalanceAlert: null,
+  inboxCharacterIds: [],
   messages: [],
   runtime: null,
   lastTrace: null,
@@ -916,6 +956,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       initializing: true,
       busy: false,
       runtime: null,
+      inboxCharacterIds: [],
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -990,6 +1031,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       busy: true,
       initializing: false,
       runtime: null,
+      inboxCharacterIds: [],
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -1014,6 +1056,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         busy: false,
         user: null,
+        inboxCharacterIds: [],
         authStatus: isLocalRepositoryAllowed ? "local" : "signed_out",
       });
     } catch (error) {

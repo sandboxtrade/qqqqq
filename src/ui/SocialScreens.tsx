@@ -2,6 +2,13 @@ import { useEffect, useState } from "react";
 import type { SocialCharacterProfile } from "../character/character-registry";
 import { Icon } from "./components";
 
+function mediaStyle(position?: string, fit?: "cover" | "contain") {
+  return {
+    objectPosition: position ?? "center 20%",
+    objectFit: fit ?? "cover",
+  } as const;
+}
+
 function PhotoPlaceholder({ compact = false }: { compact?: boolean }) {
   return (
     <span className={`profile-photo-placeholder ${compact ? "compact" : ""}`} aria-hidden="true">
@@ -23,11 +30,14 @@ export function ProfileAvatar({
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [profile.avatarUrl]);
   const hasPhoto = Boolean(profile.avatarUrl) && !failed;
+  const imageStyle = size === "large"
+    ? mediaStyle(profile.cardObjectPosition ?? profile.avatarObjectPosition, profile.cardObjectFit ?? profile.avatarObjectFit)
+    : mediaStyle(profile.avatarObjectPosition, profile.avatarObjectFit);
 
   return (
     <span className={`social-avatar social-avatar-${profile.avatarTone} avatar-${size} ${hasPhoto ? "has-photo" : "no-photo"}`}>
       {hasPhoto ? (
-        <img src={profile.avatarUrl} alt={profile.core.name} onError={() => setFailed(true)} />
+        <img src={profile.avatarUrl} alt={profile.core.name} style={imageStyle} onError={() => setFailed(true)} />
       ) : (
         <PhotoPlaceholder compact={size === "mini"} />
       )}
@@ -39,10 +49,11 @@ function ProfileHero({ profile }: { profile: SocialCharacterProfile }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [profile.avatarUrl]);
   const hasPhoto = Boolean(profile.avatarUrl) && !failed;
+  const imageStyle = mediaStyle(profile.heroObjectPosition ?? profile.avatarObjectPosition, profile.heroObjectFit ?? profile.avatarObjectFit);
   return (
     <div className={`dating-profile-hero hero-${profile.avatarTone} ${hasPhoto ? "has-photo" : "no-photo"}`}>
       {hasPhoto ? (
-        <img src={profile.avatarUrl} alt={profile.core.name} onError={() => setFailed(true)} />
+        <img src={profile.avatarUrl} alt={profile.core.name} style={imageStyle} onError={() => setFailed(true)} />
       ) : (
         <div className="dating-profile-hero-placeholder">
           <PhotoPlaceholder />
@@ -65,11 +76,12 @@ function GalleryCard({ item, tone }: { item: SocialCharacterProfile["gallery"][n
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [item.imageUrl]);
   const hasPhoto = Boolean(item.imageUrl) && !failed;
+  const imageStyle = mediaStyle(item.objectPosition, item.objectFit);
   return (
     <article className={`profile-gallery-card gallery-${tone} ${hasPhoto ? "has-photo" : "no-photo"}`}>
       <div className="profile-gallery-media">
         {hasPhoto ? (
-          <img src={item.imageUrl} alt={item.caption} loading="lazy" onError={() => setFailed(true)} />
+          <img src={item.imageUrl} alt={item.caption} loading="lazy" style={imageStyle} onError={() => setFailed(true)} />
         ) : (
           <div className="profile-gallery-placeholder">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">

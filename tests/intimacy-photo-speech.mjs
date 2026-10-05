@@ -187,9 +187,9 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(prompt, /Outward chat intimacy tone: high_arousal/);
-  assert.match(prompt, /must NOT increase exposure/);
-  assert.match(prompt, /INTIMACY LEVEL: medium/);
+  assert.match(prompt, /Внешний тон близости в переписке: high_arousal/);
+  assert.match(prompt, /без автоматического усиления откровенности сверх запроса/);
+  assert.match(prompt, /Уровень откровенности: medium/);
   assert.match(prompt, /adult woman/iu);
   assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
@@ -200,8 +200,8 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "desire", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(toplessPrompt, /breasts must actually be visible in frame/i);
-  assert.match(toplessPrompt, /Do not replace topless with lingerie, bra, covered chest/i);
+  assert.match(toplessPrompt, /грудь действительно должна быть видна в кадре/iu);
+  assert.match(toplessPrompt, /Не заменяй это лифчиком, бельём, прикрытой грудью/iu);
   assert.doesNotMatch(toplessPrompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const lowPrompt = worker.buildPhotoPrompt({

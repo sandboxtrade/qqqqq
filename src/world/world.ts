@@ -255,6 +255,28 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "пью холодный кофе и делаю вид, что никуда не опаздываю",
     ],
   },
+  vika_v1: {
+    personal_project: [
+      "разбираю отснятый контент и выбираю, какой кадр оставить самым опасно удачным",
+      "снимаю пару домашних кадров и опять залипла на том, какой взгляд оставить",
+    ],
+    music: [
+      "включила плейлист и собираюсь так, будто вечер обязан получиться горячим",
+      "слушаю музыку и примеряю образ перед выходом",
+    ],
+    cafe_break: [
+      "сижу в ресторане с коктейлем и лениво смотрю, кто сегодня заслужил моё внимание",
+      "засела в красивом месте и просто наслаждаюсь собой и атмосферой",
+    ],
+    walk: [
+      "гуляю по вечернему городу и не спешу заканчивать этот настрой",
+      "вышла пройтись после сборов и ловлю на себе лишние взгляды",
+    ],
+    relaxing: [
+      "валяюсь дома после душа и не хочу резко переключаться из этого настроения",
+      "отдыхаю дома, листаю фото и думаю, насколько дерзкий кадр оставить",
+    ],
+  },
   rin_v1: {
     reading: [
       "читаю рукопись и отмечаю места, где автор слишком сильно пытается объяснить очевидное",
@@ -460,6 +482,33 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "читаю интервью с фотографом и спорю с ним у себя в голове",
     ],
   },
+  anastasia_v1: {
+    personal_project: [
+      "разбираю рабочие заметки и периодически отвлекаюсь на мысли вообще не о работе",
+      "сижу над задачей для клиента, но мысленно уже давно хочу выключить голову и заняться собой",
+      "закрываю пару рабочих вопросов и ловлю себя на том, что мне отчаянно хочется какого-то живого отвлечения",
+    ],
+    cafe_break: [
+      "села в кафе между делами и впервые за день чувствую, что меня никто не дёргает",
+      "сижу с кофе одна и специально тяну эту маленькую паузу для себя",
+    ],
+    errands: [
+      "езжу по семейным и рабочим мелочам и уже устала быть человеком, который держит всё на себе",
+      "закрываю бытовые дела одно за другим и мечтаю, чтобы вечер был только моим",
+    ],
+    relaxing: [
+      "наконец одна дома и просто пытаюсь выдохнуть",
+      "отдыхаю после длинного дня и не хочу сейчас никому ничего объяснять",
+    ],
+    walk: [
+      "вышла пройтись и проветрить голову после слишком правильного дня",
+      "гуляю одна и ловлю редкое ощущение, что время сейчас принадлежит мне",
+    ],
+    music: [
+      "включила музыку и собираю себя обратно после шумного дня",
+      "слушаю спокойный плейлист и пытаюсь вернуть себе нормальное настроение",
+    ],
+  },
   nora_v1: {
     reading: [
       "читаю про один старый архитектурный проект и уже полезла смотреть планы здания",
@@ -638,6 +687,16 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 17, end: 20, activities: ["cooking", "reading"], targetEnergy: .5 },
     { start: 20, end: 24, activities: ["relaxing", "reading", "music"], targetEnergy: .36 },
   ],
+  anastasia_v1: [
+    { start: 0, end: 6, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .85 },
+    { start: 6, end: 7, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .46 },
+    { start: 7, end: 9, activities: ["breakfast", "relaxing"], targetEnergy: .68 },
+    { start: 9, end: 13, activities: ["personal_project", "errands"], targetEnergy: .74 },
+    { start: 13, end: 15, activities: ["cafe_break", "errands"], targetEnergy: .66 },
+    { start: 15, end: 18, activities: ["errands", "walk", "personal_project"], targetEnergy: .62 },
+    { start: 18, end: 21, activities: ["walk", "relaxing", "music"], targetEnergy: .56 },
+    { start: 21, end: 24, activities: ["relaxing", "music", "reading"], targetEnergy: .4 },
+  ],
   nora_v1: [
     { start: 0, end: 6, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .84 },
     { start: 6, end: 7, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .44 },
@@ -656,6 +715,16 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 13, end: 16, activities: ["cafe_break", "music", "errands"], targetEnergy: .72 },
     { start: 16, end: 20, activities: ["errands", "walk", "music"], targetEnergy: .74 },
     { start: 20, end: 24, activities: ["music", "walk", "relaxing", "cafe_break"], targetEnergy: .66 },
+  ],
+  vika_v1: [
+    { start: 0, end: 2, activities: ["music", "relaxing", "walk"], targetEnergy: .6 },
+    { start: 2, end: 10, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 10, end: 11, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .5 },
+    { start: 11, end: 13, activities: ["breakfast", "music"], targetEnergy: .68 },
+    { start: 13, end: 16, activities: ["personal_project", "cafe_break", "relaxing"], availability: "occupied", targetEnergy: .72 },
+    { start: 16, end: 19, activities: ["errands", "walk", "cafe_break"], targetEnergy: .74 },
+    { start: 19, end: 22, activities: ["music", "walk", "cafe_break"], targetEnergy: .78 },
+    { start: 22, end: 24, activities: ["relaxing", "music", "walk"], targetEnergy: .66 },
   ],
 };
 

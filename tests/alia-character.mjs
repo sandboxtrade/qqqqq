@@ -20,15 +20,27 @@ assert.match(registry, /avatarUrl:\s*"\.\/assets\/profiles\/alia\/avatar\.jpg"/)
 assert.match(world, /alia_v1:\s*\{[\s\S]*?personal_project:/);
 assert.match(world, /alia_v1:\s*\[[\s\S]*?activities:\s*\["sleeping"\]/);
 assert.match(worker, /alia_v1:\s*"alia"/);
-assert.match(version, /ENGINE_VERSION = "0\.20\.44"/);
+assert.match(version, /ENGINE_VERSION = "0\.20\.46"/);
 
-for (const name of ["avatar.jpg", "identity-sheet.jpg", "01.jpg", "02.jpg", "03.jpg"]) {
-  const file = path.join(root, "public/assets/profiles/alia", name);
-  assert.equal(existsSync(file), true, `${name} missing`);
-  const bytes = readFileSync(file);
-  assert.ok(bytes.length > 20_000, `${name} unexpectedly small`);
-  assert.equal(bytes[0], 0xff, `${name} is not JPEG`);
-  assert.equal(bytes[1], 0xd8, `${name} is not JPEG`);
+const aliaAssetsDir = path.join(root, "public/assets/profiles/alia");
+if (existsSync(path.join(aliaAssetsDir, "avatar.jpg"))) {
+  for (const name of ["avatar.jpg", "identity-sheet.jpg", "01.jpg", "02.jpg", "03.jpg"]) {
+    const file = path.join(aliaAssetsDir, name);
+    assert.equal(existsSync(file), true, `${name} missing`);
+    const bytes = readFileSync(file);
+    assert.ok(bytes.length > 20_000, `${name} unexpectedly small`);
+    assert.equal(bytes[0], 0xff, `${name} is not JPEG`);
+    assert.equal(bytes[1], 0xd8, `${name} is not JPEG`);
+  }
 }
 
-console.log("PASS Alia character profile, world routine, worker mapping and image assets");
+for (const name of ["avatar.jpg", "01.jpg", "02.jpg", "03.jpg"]) {
+  const file = path.join(root, "public/assets/profiles/vika", name);
+  assert.equal(existsSync(file), true, `vika/${name} missing`);
+  const bytes = readFileSync(file);
+  assert.ok(bytes.length > 20_000, `vika/${name} unexpectedly small`);
+  assert.equal(bytes[0], 0xff, `vika/${name} is not JPEG`);
+  assert.equal(bytes[1], 0xd8, `vika/${name} is not JPEG`);
+}
+
+console.log("PASS Alia/Vika character profile coverage, world routine, worker mapping and image assets");

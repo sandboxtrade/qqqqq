@@ -33,6 +33,7 @@ export default function App() {
     initializing,
     busy,
     messages,
+    inboxCharacterIds,
     lastTrace,
     authStatus,
     user,
@@ -52,7 +53,6 @@ export default function App() {
     setChatDraft,
     phase,
     maintenanceError,
-    photoBalanceAlert,
     reconcileWorld,
     hasOlderMessages,
     loadingOlder,
@@ -68,7 +68,6 @@ export default function App() {
     saveEditableMemory,
     setPhotoNoRefusalMode,
     exportConversation,
-    dismissPhotoBalanceAlert,
   } = useAppStore();
 
   const [view, setView] = useState<SocialView>("inbox");
@@ -81,6 +80,14 @@ export default function App() {
   const profileCharacter = useMemo(
     () => getCharacterProfile(profileCharacterId),
     [profileCharacterId],
+  );
+  const inboxCharacters = useMemo(
+    () => characterProfiles.filter((profile) => inboxCharacterIds.includes(profile.id)),
+    [inboxCharacterIds],
+  );
+  const peopleCharacters = useMemo(
+    () => characterProfiles.filter((profile) => !inboxCharacterIds.includes(profile.id)),
+    [inboxCharacterIds],
   );
 
   useEffect(() => {
@@ -185,7 +192,7 @@ export default function App() {
       <div className={`social-content ${view === "chat" ? "chat-content" : ""}`}>
         {view === "inbox" && (
           <InboxScreen
-            characters={characterProfiles}
+            characters={inboxCharacters}
             activeCharacterId={activeCharacterId}
             onOpenChat={(id) => void openChat(id)}
             onOpenProfile={openProfile}
@@ -194,7 +201,7 @@ export default function App() {
 
         {view === "people" && (
           <PeopleScreen
-            characters={characterProfiles}
+            characters={peopleCharacters}
             onOpenProfile={openProfile}
             onOpenChat={(id) => void openChat(id)}
           />
@@ -255,26 +262,6 @@ export default function App() {
           />
         )}
       </div>
-
-      {photoBalanceAlert?.open && (
-        <div
-          className="photo-balance-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="photo-balance-title"
-          onClick={() => dismissPhotoBalanceAlert()}
-        >
-          <div className="photo-balance-card" onClick={(event) => event.stopPropagation()}>
-            <h3 id="photo-balance-title">{photoBalanceAlert.title}</h3>
-            <p>{photoBalanceAlert.message}</p>
-            <div className="photo-balance-actions">
-              <button type="button" onClick={() => dismissPhotoBalanceAlert()}>
-                Понятно
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showBottomNav && (
         <nav className="social-bottom-nav" aria-label="Навигация">

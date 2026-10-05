@@ -1,0 +1,29 @@
+Yuzuki / Virtual Companion v0.20.45 patch notes
+
+Changes:
+1. Inbox/People split:
+   - Messages now show only characters with an existing conversation.
+   - People now shows only characters without a started conversation.
+   - Once a conversation begins, the character moves from People to Messages.
+
+2. Photo display fixes:
+   - Added per-image crop controls for avatars, profile hero images, and gallery items.
+   - Removed the forced extra-wide first gallery tile to reduce bad crops.
+   - Adjusted default image positioning to keep faces from being cut off.
+
+3. New character added:
+   - Vika (vika_v1)
+   - Distinct adult profile, voice style, personality, world routine, worker mapping.
+   - Added profile avatar + 3 gallery photos under public/assets/profiles/vika/.
+
+4. Personality coverage:
+   - Updated tests to include Vika and the inbox separation behavior.
+   - Kept all existing characters registered and distinct.
+
+Version bump:
+- package.json: 0.20.45
+- src/config/version.ts: ENGINE_VERSION = 0.20.45
+
+Validation:
+- npm test: PASS
+- npm run build: blocked in this environment because Vite type/dependency packages are not installed.

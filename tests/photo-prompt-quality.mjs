@@ -52,7 +52,7 @@ try {
   for (const build of [worker.buildPhotoPrompt, worker.buildOrdinaryPhotoRetryPrompt, worker.buildOpenAICasualPrimaryPrompt]) {
     const prompt = build(base, 1);
     assert.doesNotMatch(prompt, forbidden);
-    assert.match(prompt, /adult woman|женщина/iu);
+    assert.match(prompt, /adult woman|женщин|взросл/iu);
   }
 
 
@@ -68,7 +68,7 @@ try {
     for (const build of [worker.buildPhotoPrompt, worker.buildOrdinaryPhotoRetryPrompt, worker.buildOpenAICasualPrimaryPrompt, worker.buildWaveSpeedPhotoPrompt]) {
       const prompt = build(packet, 1);
       assert.doesNotMatch(prompt, forbidden, `${profile.id}: forbidden person wording leaked into image prompt`);
-      assert.match(prompt, /adult woman|женщина/iu, `${profile.id}: adult-woman wording missing`);
+      assert.match(prompt, /adult woman|женщин|взросл/iu, `${profile.id}: adult-woman wording missing`);
     }
   }
 
@@ -78,13 +78,13 @@ try {
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
   assert.doesNotMatch(intimate, forbidden);
-  assert.match(intimate, /adult woman/iu);
-  assert.match(intimate, /hard content constraints/i);
-  assert.match(intimate, /breasts must actually be visible in frame/i);
-  assert.match(intimate, /contrapposto|three-quarter turn/i);
-  assert.match(intimate, /Avoid T-pose/i);
-  assert.match(intimate, /flattering natural version/i);
-  assert.match(intimate, /not a technical reference|not a technical/i);
+  assert.match(intimate, /женщин|adult woman/iu);
+  assert.match(intimate, /Уровень откровенности/iu);
+  assert.match(intimate, /грудь действительно должна быть видна в кадре/iu);
+  assert.match(intimate, /Избегай Т-позы|Т-позы/iu);
+  assert.match(intimate, /правдоподобный ракурс полного роста/iu);
+  assert.match(intimate, /одно спонтанное личное фото|фото-внутри-фото/iu);
+  assert.doesNotMatch(intimate, /public\/assets\/profiles|avatar\.jpg|identity-sheet\.jpg/iu);
 
   console.log("PASS photo prompt adult wording, intimate intent fidelity and natural pose quality");
 } finally {

@@ -1,0 +1,27 @@
+Yuzuki / Virtual Companion v0.20.46 cumulative patch
+
+This archive INCLUDES the previous v0.20.45 patch plus the current v0.20.46 changes.
+Apply this cumulative patch instead of installing v0.20.45 separately.
+
+Included from v0.20.45:
+- Inbox / People separation.
+- Photo crop and profile display fixes.
+- Vika (vika_v1), profile, personality, routine and assets.
+- Personality / social architecture coverage updates.
+
+Added in v0.20.46:
+- Anastasia (anastasia_v1), age 40, unique personality/voice/routine/profile.
+- Anastasia avatar, 3 gallery photos and identity-sheet.
+- Improved photo follow-up parsing: full body, mirror, back view, pose/location/outfit changes.
+- Improved clothing parsing for common follow-up requests such as leggings, skirt, dress, jeans, shorts, top, T-shirt and home/activewear.
+- WaveSpeed / Seedream prompt cleanup and stronger framing rules.
+- Explicit prevention of collage, split-screen, nested phone-photo and photo-in-photo artifacts.
+- Updated photo tests and Anastasia coverage.
+
+Version:
+- package.json: 0.20.46
+- src/config/version.ts: ENGINE_VERSION = 0.20.46
+
+Validation:
+- npm test: PASS
+- npm run build: blocked in the current container because Vite dev/type packages are absent from the environment.
