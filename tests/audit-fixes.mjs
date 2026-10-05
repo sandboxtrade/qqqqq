@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/ui/ChatScreen.tsx", import.meta.url), 
 const worker = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
 const version = readFileSync(new URL("../src/config/version.ts", import.meta.url), "utf8");
 
-assert.match(version, /ENGINE_VERSION = "0\.20\.49"/);
+assert.match(version, /ENGINE_VERSION = "0\.20\.50"/);
 assert.match(version, /SCHEMA_VERSION = 4/);
 
 // Pending photo work must be a first-class cancellable job, not a detached timer.
@@ -39,4 +39,4 @@ assert.match(worker, /avatar-primary/);
 assert.match(worker, /identity-sheet-fallback/);
 assert.doesNotMatch(worker, /identity-sheet first; avatar only/);
 
-console.log("PASS v0.20.49 audit fixes: cancellable photos, resilient inbox, visible errors and avatar-first references");
+console.log("PASS v0.20.50 audit fixes: cancellable photos, resilient inbox, visible errors and avatar-first references");
