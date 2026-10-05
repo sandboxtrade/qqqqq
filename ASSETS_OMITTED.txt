@@ -1,0 +1,12 @@
+Game2 / Virtual Companion v0.20.49 — image assets may be intentionally omitted
+
+This source/handoff package may omit large historical photo/image assets to keep it lightweight.
+The runtime source, Cloudflare Worker, configs, tests, Firebase files, documentation and current character metadata are included.
+
+When restoring omitted assets, keep the exact paths expected by the character registry and Worker.
+
+Current WaveSpeed reference priority:
+1. avatar.jpg / avatar.jpeg / avatar.png / avatar.webp — primary single-image identity reference;
+2. identity-sheet.* — fallback only when no avatar reference can be loaded.
+
+Do not treat missing historical images in a deliberately lightweight archive as a code/runtime failure.

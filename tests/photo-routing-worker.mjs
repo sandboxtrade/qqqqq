@@ -7,11 +7,11 @@ import { pathToFileURL } from "node:url";
 const dir = mkdtempSync(join(tmpdir(), "yuzuki-photo-worker-"));
 const workerPath = join(dir, "worker-photo-test.mjs");
 const source = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8")
-  + "\nexport { submitWaveSpeedImage, readWaveSpeedImage, isWaveSpeedCreditFailure, fetchCachedReference };\n";
+  + "\nexport { submitWaveSpeedImage, readWaveSpeedImage, isWaveSpeedCreditFailure, fetchCachedReference, loadReferenceBundle };\n";
 writeFileSync(workerPath, source);
 
 const mod = await import(`${pathToFileURL(workerPath).href}?v=${Date.now()}`);
-const { submitWaveSpeedImage, readWaveSpeedImage, isWaveSpeedCreditFailure, fetchCachedReference } = mod;
+const { submitWaveSpeedImage, readWaveSpeedImage, isWaveSpeedCreditFailure, fetchCachedReference, loadReferenceBundle } = mod;
 const originalFetch = globalThis.fetch;
 
 try {
@@ -118,6 +118,23 @@ try {
 
   globalThis.fetch = async () => new Response("not an image", { status: 200, headers: { "content-type": "text/plain" } });
   assert.equal(await fetchCachedReference("https://example.com/not-image-reference"), null);
+
+  const referenceCalls = [];
+  globalThis.fetch = async (url) => {
+    referenceCalls.push(String(url));
+    return new Response(new Uint8Array([1, 2, 3, 4]), {
+      status: 200,
+      headers: { "content-type": "image/jpeg", "content-length": "4" },
+    });
+  };
+  const refs = await loadReferenceBundle({
+    character: { id: "vika_v1", name: "Vika", age: 24 },
+    visualProfile: { referenceAssetIds: ["profile.vika.avatar"] },
+  }, { needOpenAI: false, needWaveSpeed: true });
+  assert.equal(refs.waveUrls.length, 1);
+  assert.match(refs.waveUrls[0], /\/vika\/avatar\.jpg$/u);
+  assert.equal(refs.debug[0]?.kind, "avatar-primary");
+  assert.equal(referenceCalls.some((url) => /identity[-_]sheet/iu.test(url)), false, "identity sheet must not be queried when avatar is available");
 
   console.log("PASS Seedream photo routing, multi-key, result and reference checks");
 } finally {

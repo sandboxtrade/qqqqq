@@ -91,11 +91,11 @@ try {
     ...base,
     decision: { intent: { framing: "full_body", mood: "playful", pose: "rear three-quarter view", location: "bedroom", outfit: "fitted feminine casual", suggestiveLevel: "low" } },
   }, 1);
-  assert.match(directFullBody, /Камера: режим прямого кадра/iu);
+  assert.match(directFullBody, /Камера и ограничения: режим прямого кадра/iu);
   assert.match(directFullBody, /никаких устройств/iu);
   assert.doesNotMatch(directFullBody, /смартфон|телефон|smartphone|\bphone\b/iu);
-  assert.ok(directFullBody.length < 2400, `WaveSpeed prompt should stay compact: ${directFullBody.length}`);
-  assert.ok(directFullBody.split("\n").length >= 8, "prompt should remain structured instead of one giant paragraph");
+  assert.ok(directFullBody.length < 1600, `WaveSpeed prompt should stay compact: ${directFullBody.length}`);
+  assert.ok(directFullBody.split("\n").length >= 6, "prompt should remain structured instead of one giant paragraph");
   assert.doesNotMatch(directFullBody, /public\/assets|referenceAssetIds|identity-sheet\.(?:jpg|png)/iu);
 
   console.log("PASS photo prompt adult wording, intimate intent fidelity and natural pose quality");

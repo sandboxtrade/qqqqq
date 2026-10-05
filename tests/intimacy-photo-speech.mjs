@@ -123,6 +123,15 @@ try {
     "снова",
     "другой ракурс",
     "в лосинах",
+    "на кровати",
+    "в спортзале в серых лосинах",
+    "в черном платье",
+    "топлесс",
+    "в ванной",
+    "в ресторане",
+    "на улице",
+    "в джинсах",
+    "обернись",
   ]) {
     const mechanic = worker.derivePhotoMechanic(baseRaw, followUp);
     assert.ok(mechanic, `follow-up must stay in photo mode: ${followUp}`);
@@ -130,6 +139,23 @@ try {
     assert.equal(mechanic.continuation, true, followUp);
   }
   assert.equal(worker.derivePhotoMechanic(baseRaw, "спасибо, красиво"), undefined);
+  assert.equal(worker.derivePhotoMechanic(baseRaw, "спасибо за фото"), undefined);
+
+  for (const directRequest of [
+    "фотку ещё",
+    "ещё фотку",
+    "ещё одну фотку",
+    "можно фотку?",
+    "давай фото",
+    "сделай фото",
+    "фото в полный рост",
+  ]) {
+    const mechanic = worker.derivePhotoMechanic({ ...baseRaw, recentHistory: [] }, directRequest);
+    assert.ok(mechanic, `direct photo request must be detected without history: ${directRequest}`);
+    assert.equal(mechanic.disposition, "send", directRequest);
+    assert.equal(mechanic.continuation, false, directRequest);
+  }
+  assert.equal(worker.derivePhotoMechanic({ ...baseRaw, recentHistory: [] }, "это фото в полный рост?"), undefined);
 
   const appearanceContinuation = worker.derivePhotoMechanic({
     ...baseRaw,
@@ -208,9 +234,9 @@ try {
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
   assert.match(prompt, /Тон близости в переписке: сильно возбуждённый/);
-  assert.match(prompt, /Поза и одежда из итогового запроса/);
+  assert.match(prompt, /Одежда и степень откровенности из итогового запроса/);
   assert.match(prompt, /Уровень откровенности: умеренно интимный/);
-  assert.match(prompt, /Камера: режим личного селфи|Камера:/iu);
+  assert.match(prompt, /Камера и ограничения: режим личного селфи/iu);
   assert.match(prompt, /без видимого устройства|никаких устройств/iu);
   assert.doesNotMatch(prompt, /смартфон|телефон|smartphone|\bphone\b/iu);
   assert.match(prompt, /adult woman|женщин/iu);

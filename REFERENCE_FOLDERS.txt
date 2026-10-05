@@ -1,8 +1,8 @@
-Готовые папки для референсов персонажей
+Готовые папки референсов персонажей — v0.20.49
 
-В каждую папку можно просто положить:
-- avatar.jpg — основной аватар/портрет
-- identity-sheet.jpg — один multi-view лист 3×2 с шестью ракурсами
+В каждую папку можно положить:
+- avatar.jpg — основной ОДИНОЧНЫЙ портрет/референс личности; именно он приоритетен для WaveSpeed;
+- identity-sheet.jpg — необязательный multi-view лист, используется только как fallback если avatar недоступен.
 
 Папки:
 public/assets/profiles/yuzuki/
@@ -19,6 +19,7 @@ public/assets/profiles/kira/
 public/assets/profiles/valeria/
 public/assets/profiles/mei/
 public/assets/profiles/alina/
+public/assets/profiles/vika/
+public/assets/profiles/anastasia/
 
-Worker автоматически использует identity-sheet.jpg прежде всего для WaveSpeed fallback.
-Если identity-sheet.jpg отсутствует, остаётся fallback на avatar.jpg.
+Для Seedream предпочтителен чистый одиночный avatar-reference. Не делай identity-sheet основным production reference: сетка может заражать композицию generated image.

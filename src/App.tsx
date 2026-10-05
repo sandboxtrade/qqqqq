@@ -48,6 +48,7 @@ export default function App() {
     send,
     clearError,
     retry,
+    retryPhoto,
     dismissFailed,
     streamingText,
     chatDraft,
@@ -69,6 +70,8 @@ export default function App() {
     saveEditableMemory,
     setPhotoNoRefusalMode,
     exportConversation,
+    photoBalanceAlert,
+    dismissPhotoBalanceAlert,
   } = useAppStore();
 
   const [view, setView] = useState<SocialView>("inbox");
@@ -190,6 +193,16 @@ export default function App() {
         </div>
       )}
 
+      {photoBalanceAlert?.open && (
+        <div className="photo-balance-alert" role="alertdialog" aria-modal="true">
+          <div className="photo-balance-alert-card">
+            <strong>{photoBalanceAlert.title}</strong>
+            <p>{photoBalanceAlert.message}</p>
+            <button type="button" onClick={dismissPhotoBalanceAlert}>Понятно</button>
+          </div>
+        </div>
+      )}
+
       <div className={`social-content ${view === "chat" ? "chat-content" : ""}`}>
         {view === "inbox" && (
           <InboxScreen
@@ -230,6 +243,7 @@ export default function App() {
             streamingText={streamingText}
             phase={phase}
             onRetry={retry}
+            onRetryPhoto={retryPhoto}
             onDismissFailed={dismissFailed}
             hasOlderMessages={hasOlderMessages}
             loadingOlder={loadingOlder}

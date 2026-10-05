@@ -1,62 +1,49 @@
-# Game2 / Virtual Companion — v0.20.44
+# Game2 / Virtual Companion — v0.20.49
 
-Current architecture: GPT-first dialogue + Local-State-first personality/memory/state.
+Current architecture: GPT-first dialogue + mechanical local state + Firebase persistence/live-sync.
 
 ## Runtime ownership
 
-- `cloudflare/worker.js` — Cloudflare backend for GPT dialogue and photo provider routing.
-- `src/engine/runtime.ts` — turn orchestration and mechanical state application.
-- `src/character/character-registry.ts` — per-character core, personality defaults, voice profiles and visual guidance.
-- Local state remains authoritative for personality/memory, emotion, relationship, intimacy/boundaries and world/activity.
-- GPT receives that state and writes the natural-language turn; it must not become a second state engine.
-- Firebase remains auth/persistence/live-sync infrastructure. It is not the language model.
+- `cloudflare/worker.js` — GPT dialogue and photo provider routing.
+- `src/engine/runtime.ts` — turn orchestration, mechanical clamps, persistence flow.
+- `src/character/character-registry.ts` — immutable per-character profile/voice/visual anchors.
+- Local runtime remains authoritative for emotion, relationship, intimacy boundaries, world/activity and revisions.
+- Firebase handles Auth, Firestore, App Check, persistence and live-sync.
 
 ## Dialogue path
 
-`user message -> runtime state/context -> /yuzukiSpeak -> gpt-6-luna -> structured reply + bounded state deltas + photoDecision -> local mechanical clamps -> persistence/UI`
-
-Normal dialogue is cloud-first. The local fallback is intentionally small and technical rather than a second template-based conversation engine.
+`user -> runtime/context -> /yuzukiSpeak -> GPT -> structured reply + bounded deltas + photoDecision -> mechanical clamps -> persistence/live-sync -> UI`
 
 ## Photo path
 
-Ordinary / low-suggestive:
+Ordinary / low suggestive:
 
-`gpt-image-2 -> Seedream 4.5 Edit on WaveSpeed if OpenAI does not produce the image`
+`gpt-image-2 -> Seedream 4.5 Edit fallback`
 
-Medium / high intimate intent:
+Medium / high intimate:
 
-`Seedream 5.0 Lite Edit on WaveSpeed directly`
+`Seedream 5.0 Lite Edit directly`
 
-WaveSpeed reference policy:
+Photo intent is mechanically normalized before provider prompting. A recent photo session can inherit framing/outfit/location/pose, while an explicit new modifier overwrites only the requested fields.
 
-1. `public/assets/profiles/<slug>/identity-sheet.jpg` when available;
-2. otherwise `public/assets/profiles/<slug>/avatar.jpg`.
+WaveSpeed reference policy in v0.20.49:
 
-OpenAI ordinary photos use the avatar reference. WaveSpeed jobs are asynchronous and are polled through `/yuzukiPhotoResult`.
+1. single `avatar.*` reference first;
+2. multi-view `identity-sheet.*` only as fallback.
 
-## WaveSpeed keys
+This avoids leaking identity-sheet grid composition into edit-model output.
 
-Secrets live only in Cloudflare Production Secrets:
-
-- `WAVESPEED_API_KEY`
-- `WAVESPEED_API_KEY_2` ... `WAVESPEED_API_KEY_10`
-- optional packed `WAVESPEED_API_KEYS`
-
-Do not put OpenAI or WaveSpeed secrets in GitHub, frontend code or `public/runtime-config.js`.
+Scheduled photo jobs are cancellable. Switching character, reset, sign-out or other runtime invalidation aborts pending timers/provider requests.
 
 ## Protected contracts
 
-Do not change without a specific migration reason:
+Do not change without a real migration reason:
 
-- `firebase.json`
-- `firestore.rules`
-- `firestore.indexes.json`
-- `public/runtime-config.js`
-- `src/storage/firebase.ts`
-- `src/storage/auth.ts`
-- `src/storage/live-sync.ts`
-- Firestore paths/schema/revision
-- `SCHEMA_VERSION=4`
+- Firestore paths/revision contracts;
+- `firebase.json` / rules / indexes;
+- Auth/App Check/live-sync contracts;
+- saved state format;
+- `SCHEMA_VERSION = 4`.
 
 ## Development
 
@@ -65,4 +52,4 @@ npm install
 npm run verify
 ```
 
-Deploy frontend changes through the normal GitHub Pages workflow. `cloudflare/worker.js` must be deployed separately to Worker `shy-unit-ebfb` when it changes.
+`cloudflare/worker.js` must be deployed separately whenever it changes.

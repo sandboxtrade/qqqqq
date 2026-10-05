@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.48 resolves photo intent mechanically, compacts provider prompts and hardens photo composition
+// v0.20.49 audit fix: cancellable photo jobs, resilient inbox state, broader photo intent grammar and avatar-first Seedream references
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -454,11 +454,21 @@ function isDirectPhotoRequest(value) {
   const text = normalizePhotoRequestText(value);
   if (!text) return false;
   const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
-  const sendVerb = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|сфоткай|сфотографируй|сфоткаться|можешь\s+(?:скинуть|прислать|отправить|показать)|send|show|take)/u;
+  const sendVerb = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|сделай|давай|сфоткай|сфотографируй|сфоткаться|можешь\s+(?:скинуть|прислать|отправить|показать|сделать)|можно\s+(?:мне\s+)?|хочу\s+(?:ещ[её]\s+)?(?:увидеть|посмотреть)?|send|show|take|make)/u;
   const explicitSelfPhoto = /(?:сфоткайся|сфотографируйся|сфоткаться|take\s+(?:a\s+)?(?:photo|selfie)|show\s+(?:me\s+)?yourself|покажи\s+(?:мне\s+)?себя)/u;
   const visualBodyTarget = /(?:груд[ьи]|сиськ[аиу]?|сос(?:ок|ки|ков)|тел[оа]|фигур[ау]|поп[ау]|ягодиц[ыу]?|бедр[оа]?|ног[иу]|живот|тали[юя]|лиц[оа]|глаз[аы]?|body|breasts?|boobs?|tits?|nipples?|ass|butt|booty|waist|legs?|hips?|face|eyes?)/u;
   const explicitBodyPhoto = sendVerb.test(text) && visualBodyTarget.test(text);
-  return (photoWord.test(text) && sendVerb.test(text)) || explicitSelfPhoto.test(text) || explicitBodyPhoto;
+  const brief = text.split(/\s+/u).length <= 16;
+  const photoContinuationWords = /(?:^|\s)(?:ещ[её](?:\s+одн[ау])?|снова|ещ[её]\s+раз)(?:\s|$|[,.!?…])/u;
+  const descriptiveQuestion = /^(?:это|эта|этот|на\s+эт(?:ой|ом)|почему\s+на|что\s+на|как\s+тебе|как\s+выглядит)\s+.*(?:фот|селфи|снимок)/u.test(text);
+  const photoWithModifier = photoWord.test(text) && brief && Boolean(derivePhotoIntentPatch(text));
+  const photoWithContinuation = photoWord.test(text) && brief && photoContinuationWords.test(text);
+  if (descriptiveQuestion && !sendVerb.test(text) && !explicitSelfPhoto.test(text)) return false;
+  return (photoWord.test(text) && sendVerb.test(text))
+    || explicitSelfPhoto.test(text)
+    || explicitBodyPhoto
+    || photoWithModifier
+    || photoWithContinuation;
 }
 
 function photoSuggestiveLevelFromText(value) {
@@ -500,21 +510,25 @@ function parseRecentPhotoContext(recentHistory) {
   return null;
 }
 
+function hasPhotoContinuationCue(value) {
+  const text = normalizePhotoRequestText(value);
+  if (!text) return false;
+  return /(?:^|\s)(?:(?:а\s+)?(?:теперь|ещ[её](?:\s+(?:раз|одну|один|фот(?:о|ку)?))?|снова|заново|повтори|повторить|следующ(?:ую|ая)|друг(?:ую|ой)|такую\s+же|похожую)|(?:можно|давай|скинь|пришли|отправь|покажи|сделай|сфоткай)\s+ещ[её])(?=\s|$|[,.!?…])/u.test(text);
+}
+
 function isPhotoContinuationRequest(value, recentHistory) {
   if (!parseRecentPhotoContext(recentHistory)) return false;
   const text = normalizePhotoRequestText(value);
   if (!text || text.length > 280) return false;
 
-  const photoWord = /(?:фот(?:о|ку|очку|ографию)?|селфи|снимок|photo|selfie|picture|pic)/u;
-  const continuationCue = /(?:^|\s)(?:(?:а\s+)?(?:теперь|ещ[её](?:\s+(?:раз|одну|один|фот(?:о|ку)?))?|снова|заново|повтори|повторить|следующ(?:ую|ая)|друг(?:ую|ой)|такую\s+же|похожую)|(?:можно|давай|скинь|пришли|отправь|покажи|сделай|сфоткай)\s+ещ[её])(?=\s|$|[,.!?…])/u;
-  const visualModifier = /(?:со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере)|в\s+полный\s+рост|по\s+пояс|в\s+зеркале|друг(?:ая|ую|ой)\s+(?:поза|одежд|образ|ракурс|кадр)|поменяй\s+(?:позу|одежду|образ|ракурс|кадр)|леж[аё]|л[её]жа|на\s+животе|на\s+спине|сидя|стоя|боком|сверху|снизу|в\s+(?:белье|бельё|топе|юбке|лосинах|платье|шортах|рубашке)|без\s+(?:одежды|белья|трусик|лифчика)|тот\s+же\s+ракурс|так\s+же|по-другому)/u;
-  const brief = text.split(/\s+/u).length <= 14;
+  const parsedModifier = derivePhotoIntentPatch(text);
 
-  // Inside an active photo exchange, users naturally stop repeating “скинь фото”.
-  // Treat short follow-ups and photo-noun variants as the same mechanical request.
-  return continuationCue.test(text)
-    || visualModifier.test(text)
-    || (photoWord.test(text) && brief);
+  // Single source of truth: if the normal intent parser can extract a visual
+  // modification, that modification is enough to continue an active photo
+  // session. Keep a tiny separate grammar only for context-only words such as
+  // “ещё” / “снова”, where there is intentionally no field to patch.
+  return hasPhotoContinuationCue(text)
+    || Boolean(parsedModifier);
 }
 
 function isSuggestivePhotoRequest(value) {
@@ -681,13 +695,14 @@ function resolvePhotoContinuationIntent(previous, currentPatch) {
 
 function derivePhotoMechanic(raw, user) {
   const noRefusalMode = raw.photoPolicy?.noRefusalMode === true;
-  const direct = isDirectPhotoRequest(user);
   const recentPhotoContext = parseRecentPhotoContext(raw?.recentHistory);
-  const continuationByText = !direct && isPhotoContinuationRequest(user, raw?.recentHistory);
+  const direct = isDirectPhotoRequest(user);
+  const continuationCandidate = Boolean(recentPhotoContext) && isPhotoContinuationRequest(user, raw?.recentHistory);
+  const continuationByText = continuationCandidate && (!direct || hasPhotoContinuationCue(user));
   // Runtime already marks posture/framing requests as appearanceRequest. During
   // an active photo exchange that is enough to mean “send another photo”, even
   // when the user omits the words photo/selfie entirely.
-  const continuationByAppearance = !direct && Boolean(recentPhotoContext) && Boolean(raw.appearanceRequest);
+  const continuationByAppearance = Boolean(recentPhotoContext) && Boolean(raw.appearanceRequest);
   const continuation = continuationByText || continuationByAppearance;
   if (!direct && !continuation) return undefined;
   const characterId = clipped(raw.character?.id, 64) || "yuzuki_v1";
@@ -2016,17 +2031,20 @@ function buildWaveSpeedFramingRule(framing) {
 function buildWaveSpeedIntimateDirection(packet) {
   const spec = buildCanonicalPhotoSpec(packet);
   if (spec.suggestiveLevel === "none") return "";
-  const intensity = spec.suggestiveLevel === "high"
-    ? "Интимность может быть явной, но только в пределах прямого запроса."
-    : spec.suggestiveLevel === "medium"
-      ? "Фото намеренно интимное, но остаётся правдоподобным личным кадром без глянцевой постановки."
-      : "";
   return finalizeImagePrompt([
-    intensity,
     spec.exposureRule,
-    "Поза и одежда из итогового запроса — жёсткие условия; не заменяй их более нейтральным вариантом.",
-    "Анатомия естественная: реалистичные руки, пальцы, плечи, грудь, торс, ноги и пропорции; без дублирования, невозможных изгибов, Т-позы и манекенной симметрии."
-  ], 620);
+    "Одежда и степень откровенности из итогового запроса — жёсткие условия; не нейтрализуй и не усиливай их."
+  ], 360);
+}
+
+function waveSpeedCompositionLine(spec) {
+  const pose = normalizePhotoRequestText(spec.pose || "");
+  if (!pose || /^(?:естественн|natural|стоит|standing)/u.test(pose)) return spec.composition;
+  const rear = /(?:со спины|вид сзади|ягодиц|попк)/u.test(pose) && /(?:со спины|ягодиц)/u.test(spec.composition);
+  const reclining = /(?:леж|на животе|на спине)/u.test(pose) && /(?:леж)/u.test(spec.composition);
+  const seated = /(?:сидя|сидит)/u.test(pose) && /(?:сидит)/u.test(spec.composition);
+  if (rear || reclining || seated) return spec.composition;
+  return `${spec.composition}; дополнительное действие: ${spec.pose}`;
 }
 
 function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
@@ -2038,20 +2056,18 @@ function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   return finalizeImagePrompt([
     `Сгенерируй ОДНУ новую фотореалистичную личную фотографию той же вымышленной взрослой женщины ${spec.characterName}, ${spec.age} лет.`,
     referenceCount > 0
-      ? "Референс <Picture 1> используется только для сохранения личности: то же лицо, волосы, возраст, телосложение и пропорции. Не копируй его позу, фон, свет или композицию."
+      ? "<Picture 1> — только референс личности: сохрани лицо, волосы, возраст, телосложение и пропорции; не копируй позу, фон или композицию."
       : `Внешность: ${spec.identity}.`,
-    referenceCount > 0 ? `Ключевые черты внешности: ${spec.identity}.` : "",
-    `Сцена: ${spec.location}. Одежда: ${spec.outfit}. Стиль: ${spec.style}.`,
-    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)}; ${spec.framingRule}.`,
-    `Композиция: ${spec.composition}. Поза из запроса: ${spec.pose}.`,
-    `Выражение: ${spec.mood}; ${spec.expression}${spec.emotion ? `; текущее состояние — ${spec.emotion}` : ""}.`,
+    `Сцена: ${spec.location}; одежда: ${spec.outfit}; ${spec.style}.`,
+    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)} — ${spec.framingRule}.`,
+    `Поза и композиция: ${waveSpeedCompositionLine(spec)}.`,
+    `Мимика: ${spec.mood}; ${spec.expression}${spec.emotion ? `; текущее состояние — ${spec.emotion}` : ""}.`,
     casual
-      ? "Обычное личное фото; не добавляй эротическую подачу или более откровенную одежду."
+      ? "Обычное личное фото; не делай одежду или подачу откровеннее запроса."
       : `Уровень откровенности: ${suggestiveLabel}. ${buildWaveSpeedIntimateDirection(packet)}`,
     intimacyTone && !casual ? `Тон близости в переписке: ${intimacyTone}; используй его только для мимики и языка тела, не повышая откровенность.` : "",
-    `Камера: ${spec.cameraRule}.`,
-    "Финал: один цельный кадр, который полностью заполняет изображение. Без коллажа, разделённого кадра, интерфейса, рамок, текста, водяных знаков и второго изображения внутри кадра. Реалистичная кожа, цельный свет и нормальная анатомия."
-  ], 2400);
+    `Камера и ограничения: ${spec.cameraRule}. Один цельный кадр; без текста и водяных знаков. Реалистичная кожа, цельный свет, правильные руки/пальцы/конечности, без Т-позы, манекенной симметрии и невозможных изгибов.`
+  ], 1550);
 }
 
 function buildProfileAssetUrls(slug, filenames) {
@@ -2162,18 +2178,20 @@ async function loadReferenceBundle(packet, options = {}) {
   }
 
   if (needWaveSpeed) {
-    // WaveSpeed gets exactly ONE character reference:
-    // identity-sheet first; avatar only when identity-sheet is absent.
-    let identityResolved = null;
-    if (slug) identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
-    if (identityResolved) {
-      waveUrls.push(identityResolved.url);
-      debug.push({ kind: "identity-sheet", url: identityResolved.url });
+    // Edit models are very sensitive to the spatial layout of their reference.
+    // A clean single portrait is the production reference. Multi-view identity
+    // sheets are only a fallback because their grid/phone-like layout can leak
+    // into the generated composition even when the prompt explicitly forbids it.
+    const avatar = await resolveAvatar();
+    if (avatar) {
+      waveUrls.push(avatar.url);
+      debug.push({ kind: "avatar-primary", url: avatar.url });
     } else {
-      const avatar = await resolveAvatar();
-      if (avatar) {
-        waveUrls.push(avatar.url);
-        debug.push({ kind: "avatar-fallback", url: avatar.url });
+      let identityResolved = null;
+      if (slug) identityResolved = await resolveFirstReference(candidateIdentitySheetUrls(slug));
+      if (identityResolved) {
+        waveUrls.push(identityResolved.url);
+        debug.push({ kind: "identity-sheet-fallback", url: identityResolved.url });
       }
     }
   }

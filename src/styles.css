@@ -2104,3 +2104,44 @@ body { overscroll-behavior: none; }
   .social-content .bubble { max-width: 89%; }
   .social-content .bubble.character:has(.chat-photo) { width: min(330px, 88vw); max-width: 88vw; }
 }
+
+.photo-retry-button {
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 13px;
+  margin-top: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: #f4efff;
+  background: rgba(140, 82, 255, .28);
+}
+.photo-retry-button:disabled { opacity: .55; }
+.photo-balance-alert {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  background: rgba(5, 4, 10, .72);
+  backdrop-filter: blur(10px);
+}
+.photo-balance-alert-card {
+  width: min(420px, 100%);
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 18px;
+  padding: 18px;
+  background: #17151e;
+  box-shadow: 0 20px 70px rgba(0,0,0,.42);
+}
+.photo-balance-alert-card strong { display: block; margin-bottom: 8px; font-size: 16px; }
+.photo-balance-alert-card p { margin: 0 0 14px; color: rgba(255,255,255,.72); line-height: 1.45; }
+.photo-balance-alert-card button {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 14px;
+  color: #fff;
+  background: #7c4dff;
+  font: inherit;
+}

@@ -1,0 +1,24 @@
+Продолжаем разработку Game2 / Virtual Companion.
+
+Актуальная каноническая база: v0.20.49.
+ENGINE_VERSION = 0.20.49
+SCHEMA_VERSION = 4
+
+Не использовать старые v0.20.36-v0.20.48 как базу поверх этой версии.
+Не менять Firebase/Firestore paths, live-sync/revision contracts, формат сохранений или SCHEMA_VERSION без реальной необходимости.
+
+Ключевые актуальные свойства:
+- GPT-first dialogue;
+- character profile anchors независимы от editable Firestore personality;
+- world/activity не стираются обычной перепиской;
+- ordinary/low photo: gpt-image-2 -> Seedream 4.5 fallback;
+- medium/high: Seedream 5 Lite direct;
+- WaveSpeed reference: avatar first, identity-sheet only fallback;
+- direct/follow-up photo intent механически нормализуется;
+- pending photo jobs cancellable on reset/switch/sign-out;
+- Messages/People разделены по фактическому наличию диалога;
+- partial inbox refresh errors preserve known chats;
+- photo balance errors видны в UI;
+- failed photo can be retried idempotently.
+
+Перед каждым патчем: найти системную причину, прогнать npm test / npm run verify насколько позволяет окружение, поднять ENGINE_VERSION и явно указать необходимость Worker Deploy если менялся cloudflare/worker.js.

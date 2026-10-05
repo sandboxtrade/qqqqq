@@ -1,0 +1,10 @@
+Delete these stale files when applying the v0.20.49 patch over v0.20.48:
+
+CLEANUP_AUDIT_v0.20.44.md
+RELEASE_v0.20.44.md
+START_MESSAGE_NEW_CHAT_v0.20.44.txt
+tsconfig.app.tsbuildinfo
+tsconfig.node.tsbuildinfo
+
+The historical cleanup audit now lives at:
+docs/history/CLEANUP_AUDIT_v0.20.44.md

@@ -1,76 +1,49 @@
-# Current Architecture — v0.20.44
-
-This file describes the active runtime, not historical implementations.
+# Current Architecture — v0.20.49
 
 ## Core principle
 
-Dialogue is GPT-first. Durable and mechanical character state is local-state-first.
+Dialogue is GPT-first. Canonical state is mechanical/local-state-first.
 
-Local state is the source of truth for:
+The engine owns character state, emotion, relationship, intimacy constraints, world/activity, persistence and revisions. GPT owns natural-language generation plus bounded reaction/photo suggestions.
 
-- character/personality;
-- editable long-term memory;
-- current emotions;
-- relationship state;
-- intimacy state and hard boundaries;
-- world/activity/sleep/availability;
-- persistence and revision rules.
+## Character context
 
-GPT is responsible for natural language and bounded per-turn reaction suggestions. It does not own canonical state.
+Every GPT turn receives immutable `CHARACTER PROFILE` anchors from `src/character/character-registry.ts` independently of editable Firestore personality. This keeps old accounts from collapsing characters into one generic voice.
 
-## User-turn flow
+## World
 
-1. `src/engine/runtime.ts` loads/simulates current mechanical state.
-2. Runtime builds `CloudLanguageInput`: current character, immutable character-profile anchors, editable personality, voice profile, memory, recent conversation, world, emotion, relationship, intimacy and constraints.
-3. `src/ai/cloud-language.ts` sends it to `/yuzukiSpeak` with Firebase Auth + App Check.
-4. `cloudflare/worker.js` sanitizes the packet and calls `gpt-6-luna` with the structured response schema.
-5. Worker returns natural-language message(s), bounded reaction deltas and optional `photoDecision`.
-6. Runtime mechanically clamps/applies reactions; hard stop/pause/sleep constraints remain authoritative.
-7. Reply/state/events are persisted through the existing repository/live-sync path.
+Normal chat does not replace the actual current activity/location with `chatting`. Characters can work, walk, read, eat, listen to music or remain outside while replying. Sleep/current-turn hard boundaries remain above optional photo overrides.
 
-The old local NLU/planner/renderer stack is not imported from the production entry graph. It remains only as legacy/test code until deliberately removed together with its legacy regression tests.
+## Photo mechanics
 
-## Memory
+1. Worker mechanically detects direct photo requests and active-session follow-ups.
+2. `derivePhotoIntentPatch()` is the single visual-modifier parser.
+3. Continuations inherit the previous sent-photo intent and overwrite only explicitly changed fields.
+4. Mechanical photo intent outranks GPT-generated visual choices.
+5. Provider-specific prompt builders receive the resolved intent.
 
-The active dialogue path receives:
+Direct/no-refusal handling supports natural phrases such as `скинь фото`, `давай фото`, `можно фотку?`, `фото в полный рост`, `ещё фотку`, plus active-session modifiers such as `в ванной`, `на кровати`, `в серых лосинах`, `топлесс`, `со спины`, `обернись`.
 
-- editable/canonical long-term memory;
-- up to the recent conversation window supplied by runtime;
-- current message separately.
+### Provider routing
 
-Legacy semantic retrieval/ranking modules are not in the production import graph and must not decide current dialogue wording.
+- ordinary / low -> `gpt-image-2`, then Seedream 4.5 Edit fallback;
+- medium / high -> Seedream 5.0 Lite Edit directly;
+- WAN 2.6 / MiniMax H3 are not part of production routing.
 
-## Dialogue voice
+### Seedream references
 
-Each character has a `voiceProfile` and immutable profile anchors in `src/character/character-registry.ts`. Occupation, city, interests, values, preferences, dislikes and communication-style baseline are sent on every GPT turn, so an old editable personality saved in Firestore cannot collapse every character back into one generic voice. A voice profile is a distribution of tendencies, not a template or checklist. Global natural-dialogue rules live in the Worker `INSTRUCTIONS` prompt.
+WaveSpeed receives exactly one character reference. Production order is clean avatar first, identity-sheet fallback only. This reduces collage/frame contamination from multi-view sheets.
 
-A user message does not normally replace the current world activity with `chatting` or move the character home. The current routine/location remains authoritative while she replies; only an actual sleep wake-up uses a temporary chatting grace state.
+### Photo job lifecycle
 
-## Photo flow
+Deferred user-photo jobs are registered in a cancellable job map. Runtime `invalidate()` clears pending timers and aborts active provider requests, preventing old photo work from surviving reset, character switch or sign-out.
 
-### Ordinary and low-suggestive
+## Inbox/UI state
 
-1. OpenAI `gpt-image-2`.
-2. If OpenAI does not produce the image after its applicable retry path: WaveSpeed `bytedance/seedream-v4.5/edit`.
+Messages contains only characters with existing conversation history. Per-character refresh errors preserve known inbox membership/previews instead of being interpreted as an empty conversation. Auth UID changes clear inbox metadata immediately.
 
-### Medium/high intimate
+Generated/proactive messages update inbox previews directly and do not rely solely on live-sync.
 
-Route directly to WaveSpeed `bytedance/seedream-v5.0-lite/edit`.
+## Persistence
 
-### No-refusal photo continuity
-
-When the per-character `photoNoRefusalMode` is enabled, direct photo requests and short visual follow-ups inside a recent photo exchange are mechanically reconciled to send unless the current turn has a hard stop/pause/boundary or the character is sleeping. Continuations inherit the last sent photo intent (including suggestive level) unless the new request explicitly changes it.
-
-### References
-
-- OpenAI ordinary branch: avatar reference.
-- WaveSpeed: identity-sheet first; avatar only if identity-sheet is absent.
-- A reference from one character must never be used for another.
-
-### WaveSpeed multi-key
-
-Submission can fail over across `WAVESPEED_API_KEY`, `_2` ... `_10`. Polling can locate tasks across configured keys. Account-level credit/auth failures are treated as credential failures; bad credentials receive a short process-local cooldown so every new request does not immediately hit the same dead key again.
-
-## Persistence boundaries
-
-`SCHEMA_VERSION=4` remains unchanged. Firebase/Auth/Firestore/App Check/live-sync contracts are intentionally preserved.
+`SCHEMA_VERSION = 4` remains unchanged. Firestore paths, state/world revision pairing, App Check and live-sync contracts are preserved.

@@ -34,6 +34,7 @@ export function ChatScreen({
   streamingText,
   phase,
   onRetry,
+  onRetryPhoto,
   onDismissFailed,
   hasOlderMessages,
   loadingOlder,
@@ -43,6 +44,7 @@ export function ChatScreen({
   streamingText: string;
   phase: string;
   onRetry: (messageId: string) => Promise<void>;
+  onRetryPhoto: (messageId: string) => Promise<void>;
   onDismissFailed: (messageId: string) => Promise<void>;
   hasOlderMessages: boolean;
   loadingOlder: boolean;
@@ -174,7 +176,15 @@ export function ChatScreen({
                   ) : message.imageStatus === "failed" ? (
                     <div className="chat-photo-placeholder photo-failed" role="status">
                       <strong>фото не отправилось</strong>
-                      <small>на следующем этапе сюда подключится повтор генерации</small>
+                      <small>можно повторить без дублирования уже сохранённого результата</small>
+                      <button
+                        className="photo-retry-button"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onRetryPhoto(message.id)}
+                      >
+                        Повторить фото
+                      </button>
                     </div>
                   ) : message.imageUrl ? (
                     <button
