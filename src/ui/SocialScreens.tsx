@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SocialCharacterProfile } from "../character/character-registry";
+import type { InboxConversationPreview } from "../app/store";
 import { Icon } from "./components";
 
 function mediaStyle(position?: string, fit?: "cover" | "contain") {
@@ -7,6 +8,19 @@ function mediaStyle(position?: string, fit?: "cover" | "contain") {
     objectPosition: position ?? "center 20%",
     objectFit: fit ?? "cover",
   } as const;
+}
+
+
+function formatConversationTime(timestamp?: number) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString())
+    return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "вчера";
+  return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
 }
 
 function PhotoPlaceholder({ compact = false }: { compact?: boolean }) {
@@ -103,11 +117,13 @@ function GalleryCard({ item, tone }: { item: SocialCharacterProfile["gallery"][n
 export function InboxScreen({
   characters,
   activeCharacterId,
+  previews,
   onOpenChat,
   onOpenProfile,
 }: {
   characters: readonly SocialCharacterProfile[];
   activeCharacterId: string;
+  previews: Record<string, InboxConversationPreview>;
   onOpenChat: (characterId: string) => void;
   onOpenProfile: (characterId: string) => void;
 }) {
@@ -121,17 +137,29 @@ export function InboxScreen({
         <span className="page-counter">{characters.length}</span>
       </header>
 
+      {characters.length === 0 ? (
+        <div className="social-empty-state">
+          <Icon name="chat" size={24} />
+          <strong>Пока нет диалогов</strong>
+          <span>Открой «Люди» и начни общение — новый чат появится здесь.</span>
+        </div>
+      ) : (
       <div className="conversation-list conversation-list-v2">
-        {characters.map((profile) => (
+        {characters.map((profile) => {
+          const preview = previews[profile.id];
+          return (
           <article key={profile.id} className={`conversation-row ${profile.id === activeCharacterId ? "active" : ""}`}>
             <button className="conversation-open" type="button" onClick={() => onOpenChat(profile.id)}>
               <ProfileAvatar profile={profile} />
               <span className="conversation-copy-v2">
                 <span className="conversation-name-line">
-                  <strong>{profile.core.name}</strong>
-                  <small>{profile.core.age}</small>
+                  <span className="conversation-name-age">
+                    <strong>{profile.core.name}</strong>
+                    <small>{profile.core.age}</small>
+                  </span>
+                  {preview?.timestamp ? <time className="conversation-time">{formatConversationTime(preview.timestamp)}</time> : null}
                 </span>
-                <span className="conversation-preview">{profile.datingLine}</span>
+                <span className="conversation-preview">{preview?.text || profile.datingLine}</span>
               </span>
             </button>
             <button className="conversation-more" type="button" onClick={() => onOpenProfile(profile.id)} aria-label={`Открыть профиль ${profile.core.name}`}>
@@ -141,8 +169,10 @@ export function InboxScreen({
               </svg>
             </button>
           </article>
-        ))}
+          );
+        })}
       </div>
+      )}
     </section>
   );
 }
@@ -166,6 +196,13 @@ export function PeopleScreen({
         </div>
       </header>
 
+      {characters.length === 0 ? (
+        <div className="social-empty-state">
+          <Icon name="together" size={24} />
+          <strong>Все уже в сообщениях</strong>
+          <span>Здесь остаются только персонажи, с которыми диалог ещё не начат.</span>
+        </div>
+      ) : (
       <div className="people-grid people-grid-v2">
         {characters.map((profile) => (
           <article className={`person-card-v2 tone-card-${profile.avatarTone}`} key={profile.id}>
@@ -187,6 +224,7 @@ export function PeopleScreen({
           </article>
         ))}
       </div>
+      )}
     </section>
   );
 }

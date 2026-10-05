@@ -99,7 +99,20 @@ try {
   assert.equal(buttFollowUp.disposition, "send");
   assert.equal(buttFollowUp.intentPatch.framing, "full_body");
   assert.match(buttFollowUp.intentPatch.pose, /со спины|ягодиц/iu);
-  assert.equal(buttFollowUp.intentPatch.suggestiveLevel, "low");
+  assert.equal(buttFollowUp.intentPatch.suggestiveLevel, "medium");
+
+  const clothingReset = worker.derivePhotoMechanic(baseRaw, "теперь в белых лосинах");
+  assert.equal(clothingReset.continuation, true);
+  assert.equal(clothingReset.intentPatch.outfit, "белые лосины");
+  assert.equal(clothingReset.intentPatch.suggestiveLevel, "none", "ordinary clothing must clear inherited lingerie exposure");
+
+  const portraitHistory = {
+    ...baseRaw,
+    recentHistory: [{ role: "character", text: "[Отправила фотографию: portrait; настроение relaxed; поза непринуждённо смотрит в камеру; место кафе; одежда повседневный стильный образ; уровень none]" }],
+  };
+  const fullBodyOverride = worker.derivePhotoMechanic(portraitHistory, "скинь в полный рост");
+  assert.equal(fullBodyOverride.continuation, true);
+  assert.equal(fullBodyOverride.intentPatch.framing, "full_body");
 
   for (const followUp of [
     "фотку ещё",
@@ -195,10 +208,10 @@ try {
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
   assert.match(prompt, /Тон близости в переписке: сильно возбуждённый/);
-  assert.match(prompt, /без автоматического усиления откровенности сверх запроса/);
+  assert.match(prompt, /Поза и одежда из итогового запроса/);
   assert.match(prompt, /Уровень откровенности: умеренно интимный/);
-  assert.match(prompt, /прямой вид камеры|самим кадром камеры/iu);
-  assert.match(prompt, /никаких устройств|no visible device/iu);
+  assert.match(prompt, /Камера: режим личного селфи|Камера:/iu);
+  assert.match(prompt, /без видимого устройства|никаких устройств/iu);
   assert.doesNotMatch(prompt, /смартфон|телефон|smartphone|\bphone\b/iu);
   assert.match(prompt, /adult woman|женщин/iu);
   assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
@@ -210,8 +223,8 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "desire", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(toplessPrompt, /грудь действительно должна быть видна в кадре/iu);
-  assert.match(toplessPrompt, /Не заменяй это лифчиком, бельём, прикрытой грудью/iu);
+  assert.match(toplessPrompt, /топлесс должен читаться явно/iu);
+  assert.match(toplessPrompt, /не заменять лифчиком, бельём/iu);
   assert.doesNotMatch(toplessPrompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const lowPrompt = worker.buildPhotoPrompt({
@@ -221,8 +234,8 @@ try {
     world: { location: "home" },
     signals: { emotionTone: "amused", intimacyTone: "aroused" },
   }, 1);
-  assert.match(lowPrompt, /Outward chat intimacy tone: aroused/);
-  assert.match(lowPrompt, /Do NOT increase exposure/);
+  assert.match(lowPrompt, /Уровень откровенности: лёгкий/);
+  assert.match(lowPrompt, /одежду не делать откровеннее запроса/);
 
   const workerText = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
   assert.match(workerText, /Сам факт просьбы об интимном фото не означает/);

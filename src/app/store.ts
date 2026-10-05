@@ -49,10 +49,18 @@ import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-langu
 import { loadLocalPhoto } from "../storage/local-photo-cache";
 import { isWaveSpeedBalanceFailureError } from "../ai/cloud-photo";
 import { getCompanionRepository } from "../storage/repository-factory";
+import type { CharacterEvent } from "../events/event-types";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
 }
 export type AuthStatus = "local" | "checking" | "signed_out" | "signed_in";
+
+export interface InboxConversationPreview {
+  text: string;
+  timestamp: number;
+  role: "user" | "character";
+  kind: "text" | "image";
+}
 
 export interface PhotoBalanceAlertState {
   open: boolean;
@@ -71,6 +79,7 @@ interface AppStore {
   maintenanceError: string | null;
   photoBalanceAlert: PhotoBalanceAlertState | null;
   inboxCharacterIds: string[];
+  inboxPreviews: Record<string, InboxConversationPreview>;
   messages: ChatMessage[];
   runtime: RuntimeState | null;
   lastTrace: RuntimeTrace | null;
@@ -120,24 +129,72 @@ function defaultContextFor(characterId: string) {
   return createDefaultEditableContext(0, profile.defaultPersonality, profile.defaultMemory);
 }
 
-function orderCharacterIds(ids: Iterable<string>) {
-  const set = new Set(ids);
-  return characterProfiles.filter((profile) => set.has(profile.id)).map((profile) => profile.id);
+function registryOrder(characterId: string) {
+  const index = characterProfiles.findIndex((profile) => profile.id === characterId);
+  return index < 0 ? Number.MAX_SAFE_INTEGER : index;
 }
 
-function markCharacterHasConversation(characterId: string) {
+function orderInboxCharacterIds(
+  ids: Iterable<string>,
+  previews: Record<string, InboxConversationPreview>,
+) {
+  return [...new Set(ids)]
+    .filter(isKnownCharacterId)
+    .sort((left, right) => {
+      const byTime = (previews[right]?.timestamp ?? 0) - (previews[left]?.timestamp ?? 0);
+      return byTime || registryOrder(left) - registryOrder(right);
+    });
+}
+
+function conversationPreviewFromLines(lines: readonly ConversationLine[]): InboxConversationPreview | null {
+  const line = [...lines]
+    .filter((item) => !item.silent && (item.kind === "image" || item.text.trim()))
+    .sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id))[0];
+  if (!line) return null;
+  const isImage = line.kind === "image";
+  const body = isImage
+    ? (line.text.trim() ? `📷 ${line.text.trim()}` : "📷 Фотография")
+    : line.text.trim();
+  return {
+    text: line.role === "user" ? `Вы: ${body}` : body,
+    timestamp: line.timestamp,
+    role: line.role,
+    kind: isImage ? "image" : "text",
+  };
+}
+
+function conversationPreviewFromEvents(events: CharacterEvent[]) {
+  return conversationPreviewFromLines(conversationFrom(events));
+}
+
+function markCharacterHasConversation(
+  characterId: string,
+  preview?: InboxConversationPreview | null,
+) {
   useAppStore.setState((state) => {
-    if (state.inboxCharacterIds.includes(characterId)) return state;
-    return { inboxCharacterIds: orderCharacterIds([...state.inboxCharacterIds, characterId]) };
+    const inboxPreviews = preview
+      ? { ...state.inboxPreviews, [characterId]: preview }
+      : state.inboxPreviews;
+    return {
+      inboxPreviews,
+      inboxCharacterIds: orderInboxCharacterIds(
+        [...state.inboxCharacterIds, characterId],
+        inboxPreviews,
+      ),
+    };
   });
 }
 
 async function refreshInboxCharacterIds(version: number, user: AuthProfile | null) {
-  const ids = await Promise.all(
+  const discovered = await Promise.all(
     characterProfiles.map(async (profile) => {
       try {
         const page = await getCompanionRepository(profile.id, user?.uid ?? null).listConversationEvents({ limit: 1 });
-        return page.events.length ? profile.id : null;
+        if (!page.events.length) return null;
+        return {
+          id: profile.id,
+          preview: conversationPreviewFromEvents(page.events),
+        };
       } catch {
         return null;
       }
@@ -145,9 +202,26 @@ async function refreshInboxCharacterIds(version: number, user: AuthProfile | nul
   );
   if (version !== epoch) return;
   const current = useAppStore.getState();
-  const merged = ids.filter((id): id is string => Boolean(id));
-  if (current.messages.length) merged.push(current.activeCharacterId);
-  useAppStore.setState({ inboxCharacterIds: orderCharacterIds(merged) });
+  const inboxPreviews = { ...current.inboxPreviews };
+  const ids: string[] = [];
+  for (const item of discovered) {
+    if (!item) continue;
+    ids.push(item.id);
+    if (item.preview) inboxPreviews[item.id] = item.preview;
+  }
+  if (current.messages.length) {
+    ids.push(current.activeCharacterId);
+    const activePreview = conversationPreviewFromLines(current.messages);
+    if (activePreview) inboxPreviews[current.activeCharacterId] = activePreview;
+  }
+  const valid = new Set(ids);
+  for (const id of Object.keys(inboxPreviews)) {
+    if (!valid.has(id)) delete inboxPreviews[id];
+  }
+  useAppStore.setState({
+    inboxPreviews,
+    inboxCharacterIds: orderInboxCharacterIds(ids, inboxPreviews),
+  });
 }
 
 let epoch = 0;
@@ -430,7 +504,7 @@ function startLiveSync(version: number, user: AuthProfile | null, characterId: s
       const incoming = conversationFrom(events)
         .filter((message) => !message.silent)
         .map((message) => ({ ...message, delivery: "saved" as const }));
-      if (incoming.length) markCharacterHasConversation(characterId);
+      if (incoming.length) markCharacterHasConversation(characterId, conversationPreviewFromLines(incoming));
       useAppStore.setState((state) => {
         const resolvedIds = replyTargets(events);
         const activeResolved = replyForFailedMessage(events, activeTurnId);
@@ -650,7 +724,7 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       appCheckState: getAppCheckState(),
     });
     if (result.recentConversation.some((message) => !message.silent))
-      markCharacterHasConversation(characterId);
+      markCharacterHasConversation(characterId, conversationPreviewFromLines(result.recentConversation));
     void refreshInboxCharacterIds(version, user);
     startLiveSync(version, user, characterId);
     scheduleMaintenance();
@@ -678,7 +752,6 @@ function watchAuth() {
       initializing: false,
       user: null,
       runtime: null,
-      inboxCharacterIds: [],
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -741,6 +814,7 @@ async function sendTurn(message: ChatMessage) {
           { ...message, delivery: "pending" as const },
         ]),
   }));
+  markCharacterHasConversation(store.activeCharacterId, conversationPreviewFromLines([message]));
   try {
     const baseHistory = store.messages.filter(
       (m) =>
@@ -822,7 +896,10 @@ async function sendTurn(message: ChatMessage) {
             ),
       };
     });
-    markCharacterHasConversation(store.activeCharacterId);
+    markCharacterHasConversation(
+      store.activeCharacterId,
+      conversationPreviewFromLines(useAppStore.getState().messages),
+    );
 
     if (result.photoDecision?.shouldSendPhoto) {
       const replyCount = result.replyMessages?.length ?? 1;
@@ -877,6 +954,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   maintenanceError: null,
   photoBalanceAlert: null,
   inboxCharacterIds: [],
+  inboxPreviews: {},
   messages: [],
   runtime: null,
   lastTrace: null,
@@ -956,7 +1034,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       initializing: true,
       busy: false,
       runtime: null,
-      inboxCharacterIds: [],
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -1032,6 +1109,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       initializing: false,
       runtime: null,
       inboxCharacterIds: [],
+      inboxPreviews: {},
       messages: [],
       lastTrace: null,
       streamingText: "",
@@ -1057,6 +1135,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         busy: false,
         user: null,
         inboxCharacterIds: [],
+        inboxPreviews: {},
         authStatus: isLocalRepositoryAllowed ? "local" : "signed_out",
       });
     } catch (error) {
@@ -1091,16 +1170,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
         controller.signal,
       );
       if (version !== epoch || controller.signal.aborted) return;
-      set({
-        messages: [],
-        lastTrace: null,
-        chatDraft: "",
-        failedMessageIds: [],
-        historyCursor: null,
-        hasOlderMessages: false,
-        loadingOlder: false,
-        editableMemory: "",
-        editableContextUpdatedAt: Date.now(),
+      set((currentState) => {
+        const inboxPreviews = { ...currentState.inboxPreviews };
+        delete inboxPreviews[state.activeCharacterId];
+        return {
+          inboxCharacterIds: currentState.inboxCharacterIds.filter((id) => id !== state.activeCharacterId),
+          inboxPreviews,
+          messages: [],
+          lastTrace: null,
+          chatDraft: "",
+          failedMessageIds: [],
+          historyCursor: null,
+          hasOlderMessages: false,
+          loadingOlder: false,
+          editableMemory: "",
+          editableContextUpdatedAt: Date.now(),
+        };
       });
       await boot(version, user);
       if (version === epoch)

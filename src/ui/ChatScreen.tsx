@@ -55,7 +55,8 @@ export function ChatScreen({
   onDraftChange: (text: string) => void;
 }) {
   const [showNewMessages, setShowNewMessages] = useState(false);
-  const [openedPhoto, setOpenedPhoto] = useState<{ src: string; alt: string } | null>(null);
+  const [openedPhoto, setOpenedPhoto] = useState<{ src: string; alt: string; caption?: string } | null>(null);
+  const [photoScale, setPhotoScale] = useState(1);
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -88,6 +89,7 @@ export function ChatScreen({
 
   useEffect(() => {
     if (!openedPhoto) return;
+    setPhotoScale(1);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -181,6 +183,7 @@ export function ChatScreen({
                       onClick={() => setOpenedPhoto({
                         src: message.imageUrl!,
                         alt: message.imageAlt || `Фото от ${characterName}`,
+                        caption: message.text || undefined,
                       })}
                       aria-label="Открыть фотографию"
                     >
@@ -302,7 +305,21 @@ export function ChatScreen({
             ×
           </button>
           <div className="photo-viewer-stage" onClick={(event) => event.stopPropagation()}>
-            <img src={openedPhoto.src} alt={openedPhoto.alt} />
+            <div className="photo-viewer-media" data-zoomed={photoScale > 1 ? "true" : "false"}>
+              <img
+                src={openedPhoto.src}
+                alt={openedPhoto.alt}
+                style={{ transform: `scale(${photoScale})` }}
+                onDoubleClick={() => setPhotoScale((value) => value > 1 ? 1 : 2)}
+                draggable={false}
+              />
+            </div>
+            <div className="photo-viewer-toolbar">
+              <button type="button" onClick={() => setPhotoScale((value) => Math.max(1, Number((value - .5).toFixed(1))))} disabled={photoScale <= 1} aria-label="Уменьшить фото">−</button>
+              <span>{Math.round(photoScale * 100)}%</span>
+              <button type="button" onClick={() => setPhotoScale((value) => Math.min(3, Number((value + .5).toFixed(1))))} disabled={photoScale >= 3} aria-label="Увеличить фото">+</button>
+            </div>
+            {openedPhoto.caption ? <p className="photo-viewer-caption">{openedPhoto.caption}</p> : null}
           </div>
         </div>
       )}

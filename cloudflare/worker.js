@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.46 adds Anastasia, cleans WaveSpeed prompts and improves photo follow-up parsing
+// v0.20.48 resolves photo intent mechanically, compacts provider prompts and hardens photo composition
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -528,42 +528,58 @@ function derivePhotoIntentPatch(value) {
   if (!text) return undefined;
   const patch = {};
 
-  if (/(?:зеркал|mirror)/u.test(text)) patch.framing = "mirror";
-  else if (/(?:в\s+полный\s+рост|полный\s+рост|full\s*body)/u.test(text)) patch.framing = "full_body";
-  else if (/(?:по\s+пояс|верхн(?:яя|юю)\s+част|груд[ьи]|сиськ)/u.test(text)) patch.framing = "upper_body";
-  else if (/(?:портрет|portrait\b)/u.test(text)) patch.framing = "portrait";
+  // Framing is parsed independently from pose so a request like
+  // "по пояс со спины" stays upper-body instead of being forced to full-body.
+  if (/(?:в\s+зеркал|зеркальн|mirror)/u.test(text)) patch.framing = "mirror";
+  else if (/(?:в\s+полный\s+рост|полный\s+рост|целиком|во\s+весь\s+рост|full\s*body)/u.test(text)) patch.framing = "full_body";
+  else if (/(?:по\s+пояс|до\s+пояса|верхн(?:яя|юю)\s+част|upper\s*body)/u.test(text)) patch.framing = "upper_body";
+  else if (/(?:крупн(?:ый|ым)\s+план|портрет|portrait\b)/u.test(text)) patch.framing = "portrait";
+  else if (/(?:селфи|selfie)/u.test(text)) patch.framing = "selfie";
 
-  if (/(?:со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере|в\s+кадр))/u.test(text)) {
-    patch.pose = "со спины";
+  // A small set of semantic composition families is more stable than asking
+  // the image model to interpret arbitrary pose prose from scratch.
+  if (/(?:со\s+спины|спиной\s+(?:ко\s+мне|к\s+камере|в\s+кадр)|вид\s+сзади|сзади)/u.test(text)) {
+    patch.pose = "вид со спины в естественном трёхчетвертном развороте; плечи и бёдра слегка развернуты; голова может мягко повернуться к камере";
     if (!patch.framing) patch.framing = "full_body";
   } else if (/(?:на\s+животе)/u.test(text)) {
-    patch.pose = "лёжа на животе";
+    patch.pose = "лёжа на животе в естественной расслабленной позе";
   } else if (/(?:на\s+спине)/u.test(text)) {
-    patch.pose = "лёжа на спине";
+    patch.pose = "лёжа на спине в естественной расслабленной позе";
   } else if (/(?:леж[аё]|л[её]жа)/u.test(text)) {
-    patch.pose = "лёжа";
-  } else if (/(?:сидя|сидит)/u.test(text)) {
-    patch.pose = "сидя";
-  } else if (/(?:стоя|стоит)/u.test(text)) {
-    patch.pose = "стоя";
-  } else if (/(?:боком|в\s+пол-?оборота)/u.test(text)) {
-    patch.pose = "в пол-оборота";
+    patch.pose = "лёжа в естественной расслабленной позе";
+  } else if (/(?:сидя|сидит|сядь|сесть)/u.test(text)) {
+    patch.pose = "сидя естественно, с небольшой асимметрией корпуса и расслабленными руками";
+  } else if (/(?:боком|вид\s+сбоку|в\s+профиль)/u.test(text)) {
+    patch.pose = "вид сбоку в лёгком трёхчетвертном развороте";
+  } else if (/(?:через\s+плечо|обернись|оглянись)/u.test(text)) {
+    patch.pose = "корпус слегка отвернут, взгляд естественно через плечо";
+  } else if (/(?:стоя|стоит|встань)/u.test(text)) {
+    patch.pose = "стоя естественно с переносом веса на одну ногу и лёгким разворотом корпуса";
+  } else if (/(?:сверху|вид\s+сверху)/u.test(text)) {
+    patch.pose = "естественная поза, камера немного выше уровня глаз";
+  } else if (/(?:снизу|низк(?:ий|ого)\s+ракурс)/u.test(text)) {
+    patch.pose = "естественная поза, камера немного ниже уровня глаз без сильного широкоугольного искажения";
+  } else if (/(?:друг(?:ой|ого)\s+ракурс|по-другому|друг(?:ая|ую)\s+поз)/u.test(text)) {
+    patch.pose = "другой естественный трёхчетвертный ракурс относительно предыдущего фото";
   }
 
-  // Body-part follow-ups need an explicit visual composition. Without this,
-  // phrases like "ещё попку" only inherit the previous vague pose and the
-  // image model is free to invent a random selfie composition.
+  // Body-focus requests define a composition instead of leaving the model to
+  // invent a random crop. Explicit framing from the same message still wins.
   if (/(?:попк[ауи]?|ягодиц[ауые]?|ass\b|butt\b|booty\b)/u.test(text)) {
-    patch.framing = patch.framing || "full_body";
-    patch.pose = "вид со спины в лёгком развороте, естественный акцент на ягодицах, голова может быть слегка повернута к камере";
+    if (!patch.framing) patch.framing = "full_body";
+    patch.pose = "вид со спины в мягком трёхчетвертном развороте; естественный акцент на ягодицах за счёт ракурса и переноса веса; без неестественного прогиба";
     patch.suggestiveLevel = "low";
+  } else if (/(?:груд[ьи]|декольте)/u.test(text) && !/(?:без\s+(?:лифчик|бюстгальтер)|топлесс|обнаж|гол)/u.test(text)) {
+    if (!patch.framing) patch.framing = "upper_body";
   }
 
   if (/(?:в\s+спортзале|в\s+зале|спортзал|gym)/u.test(text)) patch.location = "спортзал";
   else if (/(?:в\s+кафе|в\s+кофейн|кофе-брейк|cafe)/u.test(text)) patch.location = "кафе";
   else if (/(?:в\s+ресторан|restaurant)/u.test(text)) patch.location = "ресторан";
   else if (/(?:на\s+улице|по\s+улице|снаружи|outside|outdoor)/u.test(text)) patch.location = "улица";
-  else if (/(?:в\s+спальн|на\s+кроват|в\s+кроват)/u.test(text)) patch.location = "спальня";
+  else if (/(?:на\s+кроват|в\s+кроват)/u.test(text)) patch.location = "спальня рядом с кроватью";
+  else if (/(?:в\s+спальн)/u.test(text)) patch.location = "спальня";
+  else if (/(?:в\s+ванн|ванная|bathroom)/u.test(text)) patch.location = "ванная";
   else if (/(?:дома|home)/u.test(text)) patch.location = "дом";
 
   const explicitBreastRequest = /(?:скинь|скинуть|пришли|прислать|отправь|отправить|покажи|показать|send|show).{0,40}(?:груд[ьи]|сиськ[аиу]?|сос(?:ок|ки|ков))/u.test(text)
@@ -571,6 +587,7 @@ function derivePhotoIntentPatch(value) {
   if (explicitBreastRequest || /(?:топлесс|без\s+(?:лифчик|бюстгальтер)|гол[а-я]*\s+(?:груд|сиськ)|груд[ьи].{0,24}(?:гол|обнаж)|сиськ.{0,24}(?:гол|обнаж))/u.test(text)) {
     patch.outfit = "topless";
     patch.suggestiveLevel = "high";
+    if (!patch.framing) patch.framing = "upper_body";
   } else if (/(?:без\s+одежд|полностью\s+гол|совсем\s+гол|обнаж|нюд|наг(?:ая|ой|ую))/u.test(text)) {
     patch.outfit = "nude";
     patch.suggestiveLevel = "high";
@@ -581,49 +598,85 @@ function derivePhotoIntentPatch(value) {
     patch.outfit = "lingerie";
     patch.suggestiveLevel = "medium";
   } else {
-    const colorMap = [
-      [/(?:бел|white)/u, "бел"],
-      [/(?:черн|black)/u, "чёрн"],
-      [/(?:сер|grey|gray)/u, "сер"],
-      [/(?:красн|red)/u, "красн"],
-      [/(?:син|blue)/u, "син"],
-      [/(?:розов|pink)/u, "розов"],
-      [/(?:беж|beige|cream)/u, "беж"],
-      [/(?:коричн|brown)/u, "коричнев"],
-      [/(?:зелен|green)/u, "зелён"],
+    const colors = [
+      [/(?:бел|white)/u, { fem: "белая", neut: "белое", plural: "белые", masc: "белый" }],
+      [/(?:черн|чёрн|black)/u, { fem: "чёрная", neut: "чёрное", plural: "чёрные", masc: "чёрный" }],
+      [/(?:сер|grey|gray)/u, { fem: "серая", neut: "серое", plural: "серые", masc: "серый" }],
+      [/(?:красн|red)/u, { fem: "красная", neut: "красное", plural: "красные", masc: "красный" }],
+      [/(?:син|blue)/u, { fem: "синяя", neut: "синее", plural: "синие", masc: "синий" }],
+      [/(?:розов|pink)/u, { fem: "розовая", neut: "розовое", plural: "розовые", masc: "розовый" }],
+      [/(?:беж|cream|beige)/u, { fem: "бежевая", neut: "бежевое", plural: "бежевые", masc: "бежевый" }],
+      [/(?:коричн|brown)/u, { fem: "коричневая", neut: "коричневое", plural: "коричневые", masc: "коричневый" }],
+      [/(?:зелен|зелён|green)/u, { fem: "зелёная", neut: "зелёное", plural: "зелёные", masc: "зелёный" }],
     ];
-    const colorStem = (colorMap.find(([rx]) => rx.test(text)) || [null, ""])[1];
-    const build = (base) => {
-      if (!colorStem) return base;
-      if (/(?:юбк|майк|футболк|рубашк|пижам|кофт|куртк|толстовк)/u.test(base)) return `${colorStem}ая ${base}`;
-      if (/(?:лосин|джинс|шорт|брюк|брюки|леггинс)/u.test(base)) return `${colorStem}ые ${base}`;
-      return `${colorStem} ${base}`;
-    };
+    const color = (colors.find(([rx]) => rx.test(text)) || [null, null])[1];
+    const paint = (noun, gender) => color ? `${color[gender]} ${noun}` : noun;
+
     if (/(?:лосин|леггинс)/u.test(text)) {
-      patch.outfit = /(спортивн(?:ый|ая)?\s+топ|топик|топ)/u.test(text) ? `${build("лосины")} и спортивный топ` : build("лосины");
+      patch.outfit = /(спортивн(?:ый|ая)?\s+топ|топик|топ)/u.test(text)
+        ? `${paint("лосины", "plural")} и спортивный топ`
+        : paint("лосины", "plural");
     } else if (/(?:юбк)/u.test(text)) {
-      patch.outfit = build("юбка");
+      patch.outfit = paint("юбка", "fem");
     } else if (/(?:плать)/u.test(text)) {
-      patch.outfit = build("платье");
+      patch.outfit = paint("платье", "neut");
     } else if (/(?:джинс)/u.test(text)) {
-      patch.outfit = build("джинсы");
+      patch.outfit = paint("джинсы", "plural");
     } else if (/(?:шорт)/u.test(text)) {
-      patch.outfit = build("шорты");
+      patch.outfit = paint("шорты", "plural");
+    } else if (/(?:брюк|брюки)/u.test(text)) {
+      patch.outfit = paint("брюки", "plural");
     } else if (/(?:топик|топ\b|crop\s*top|кроп-?топ)/u.test(text)) {
-      patch.outfit = build("топ");
+      patch.outfit = paint("топ", "masc");
     } else if (/(?:футболк)/u.test(text)) {
-      patch.outfit = build("футболка");
+      patch.outfit = paint("футболка", "fem");
     } else if (/(?:майк)/u.test(text)) {
-      patch.outfit = build("майка");
+      patch.outfit = paint("майка", "fem");
+    } else if (/(?:рубашк)/u.test(text)) {
+      patch.outfit = paint("рубашка", "fem");
+    } else if (/(?:свитер|джемпер)/u.test(text)) {
+      patch.outfit = paint("свитер", "masc");
     } else if (/(?:пижам|домашн(?:яя|ей)?\s+одежд)/u.test(text)) {
-      patch.outfit = colorStem ? `${colorStem}ая домашняя одежда` : "домашняя одежда";
+      patch.outfit = color ? `${color.fem} домашняя одежда` : "домашняя одежда";
     } else if (/(?:спортивн(?:ая|ый)?\s+форм|activewear)/u.test(text)) {
-      patch.outfit = colorStem ? `${colorStem}ая спортивная форма` : "спортивная форма";
+      patch.outfit = color ? `${color.fem} спортивная форма` : "спортивная форма";
     }
     const inferredLevel = photoSuggestiveLevelFromText(text);
     if (inferredLevel !== "none") patch.suggestiveLevel = inferredLevel;
   }
   return Object.keys(patch).length ? patch : undefined;
+}
+
+function resolvePhotoContinuationIntent(previous, currentPatch) {
+  const prior = previous || {};
+  const patch = currentPatch || {};
+  const explicitOutfit = Object.prototype.hasOwnProperty.call(patch, "outfit");
+  const explicitLevel = Object.prototype.hasOwnProperty.call(patch, "suggestiveLevel");
+  const result = {
+    ...(prior.framing ? { framing: prior.framing } : {}),
+    ...(prior.mood ? { mood: prior.mood } : {}),
+    ...(prior.pose ? { pose: prior.pose } : {}),
+    ...(prior.location ? { location: prior.location } : {}),
+    ...(prior.outfit ? { outfit: prior.outfit } : {}),
+    ...(prior.suggestiveLevel ? { suggestiveLevel: prior.suggestiveLevel } : {}),
+    ...patch,
+  };
+
+  // Explicitly changing clothing owns the exposure level for this turn. This
+  // prevents an old lingerie/topless session from leaking into "теперь в
+  // белых лосинах". Without an outfit change, a weak body-focus follow-up
+  // such as "ещё попку" may increase intimacy but must not silently lower a
+  // stronger already-active photo intent.
+  if (explicitOutfit && !explicitLevel) {
+    const levelFromOutfit = photoSuggestiveLevelFromText(String(patch.outfit || ""));
+    result.suggestiveLevel = levelFromOutfit === "none" ? "none" : levelFromOutfit;
+  } else if (!explicitOutfit && explicitLevel && prior.suggestiveLevel) {
+    const ranks = { none: 0, low: 1, medium: 2, high: 3 };
+    const priorLevel = ranks[prior.suggestiveLevel] == null ? "none" : prior.suggestiveLevel;
+    const currentLevel = ranks[patch.suggestiveLevel] == null ? "none" : patch.suggestiveLevel;
+    result.suggestiveLevel = ranks[priorLevel] >= ranks[currentLevel] ? priorLevel : currentLevel;
+  }
+  return result;
 }
 
 function derivePhotoMechanic(raw, user) {
@@ -640,25 +693,13 @@ function derivePhotoMechanic(raw, user) {
   const characterId = clipped(raw.character?.id, 64) || "yuzuki_v1";
   const recentPhoto = continuation ? recentPhotoContext : null;
   const currentPatch = derivePhotoIntentPatch(user) || {};
-  const inheritedLevel = recentPhoto?.suggestiveLevel && recentPhoto.suggestiveLevel !== "none"
-    ? recentPhoto.suggestiveLevel
-    : undefined;
+  const intentPatch = continuation
+    ? resolvePhotoContinuationIntent(recentPhoto, currentPatch)
+    : (Object.keys(currentPatch).length ? currentPatch : undefined);
+  const resolvedLevel = intentPatch?.suggestiveLevel || "none";
   const suggestive = raw.appearanceRequest?.suggestive === true
     || isSuggestivePhotoRequest(user)
-    || Boolean(inheritedLevel);
-  // A short follow-up inside an active photo exchange inherits the previous
-  // generated photo's visual intent, while explicit words in the new message win.
-  const intentPatch = continuation
-    ? {
-        ...(recentPhoto?.framing ? { framing: recentPhoto.framing } : {}),
-        ...(recentPhoto?.mood ? { mood: recentPhoto.mood } : {}),
-        ...(recentPhoto?.pose ? { pose: recentPhoto.pose } : {}),
-        ...(recentPhoto?.location ? { location: recentPhoto.location } : {}),
-        ...(recentPhoto?.outfit ? { outfit: recentPhoto.outfit } : {}),
-        ...(inheritedLevel ? { suggestiveLevel: inheritedLevel } : {}),
-        ...currentPatch,
-      }
-    : (Object.keys(currentPatch).length ? currentPatch : undefined);
+    || resolvedLevel !== "none";
   const worldBlocked = raw.world?.isAwake === false || raw.world?.availability === "sleeping";
   if (worldBlocked) {
     return { requested: true, suggestive, disposition: "blocked", noRefusalMode, intentPatch, characterId, continuation };
@@ -1623,91 +1664,200 @@ function safeEmotionTone(raw) {
   return supported.includes(tone) ? tone : "";
 }
 
-function buildPhotoPrompt(packet, referenceCount = 0) {
+
+function compactPromptSentences(value, fallback = "", maxSentences = 3, max = 320) {
+  const clean = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(value, fallback, max * 2));
+  const filtered = clean
+    .split(/(?<=[.!?])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !/(?:public\/assets|source of truth|источник истины|каноническ|после загрузки|текстовый fallback|avatar\.|identity[-_ ]sheet|референс всегда важнее|referenceAssetIds)/iu.test(part));
+  const selected = filtered.slice(0, maxSentences).join(" ").replace(/\s+/gu, " ").trim().replace(/[.;:]+$/u, "");
+  return clipped(selected || localizeWaveSpeedPhotoText(seedreamAdultText(fallback, fallback, max)), max);
+}
+
+function photoMoodRu(value) {
+  const raw = localizeWaveSpeedPhotoText(seedreamAdultText(value, "естественное", 90));
+  const map = {
+    neutral: "нейтральное", warm: "тёплое", happy: "счастливое", amused: "весёлое",
+    bashful: "слегка смущённое", shy: "застенчивое", surprised: "удивлённое", confused: "растерянное",
+    thinking: "задумчивое", focused: "сосредоточенное", skeptical: "недоверчивое", bored: "скучающее",
+    comfortable: "расслабленное", annoyed: "недовольное", irritated: "раздражённое", sad: "грустное",
+    sleepy: "сонное", low_energy: "уставшее", anxious: "тревожное", hurt: "задетое", jealous: "ревнивое",
+    welcoming: "открытое", tender: "нежное", curious: "заинтересованное",
+  };
+  return map[String(raw).toLowerCase()] || raw || "естественное";
+}
+
+function inferPhotoCompositionPreset(intent) {
+  const pose = normalizePhotoRequestText(intent?.pose || "");
+  const location = normalizePhotoRequestText(intent?.location || "");
+  const framing = intent?.framing || "selfie";
+  if (/(?:ягодиц|попк|со спины|вид сзади)/u.test(pose)) return "rear_three_quarter";
+  if (/(?:на животе)/u.test(pose)) return "bed_reclining_front";
+  if (/(?:на спине|лёжа|лежа)/u.test(pose)) return "reclining";
+  if (/(?:сидя|сидит)/u.test(pose)) return "seated_casual";
+  if (framing === "mirror") return "mirror_full_body";
+  if (framing === "full_body" && /(?:спортзал|gym)/u.test(location)) return "gym_full_body";
+  if (framing === "full_body") return "standing_full_body";
+  if (framing === "upper_body") return "upper_body";
+  if (framing === "portrait") return "portrait";
+  return "casual_self_capture";
+}
+
+function photoCompositionDirectionRu(intent) {
+  const preset = inferPhotoCompositionPreset(intent);
+  const directions = {
+    rear_three_quarter: "вид со спины в мягком трёхчетвертном развороте; вес естественно перенесён на одну ногу; плечи и бёдра не стоят идеально симметрично; голова может слегка повернуться к камере; руки расслаблены",
+    bed_reclining_front: "лёжа на животе естественно и без неестественного прогиба; плечи расслаблены; руки расположены правдоподобно; кадр выглядит личным, а не постановочным",
+    reclining: "естественная расслабленная поза лёжа; корпус и ноги расположены правдоподобно; никакой манекенной симметрии",
+    seated_casual: "сидит естественно с небольшой асимметрией плеч и бёдер; руки расслаблены; поза похожа на случайный удачный личный кадр",
+    mirror_full_body: "зеркальный кадр в полный рост или почти в полный рост; естественный перенос веса; тело слегка развернуто; устройство не закрывает лицо и ключевые детали образа",
+    gym_full_body: "полный рост в спортзале; естественная спортивная стойка; одна нога слегка свободнее другой; корпус немного развернут; без каталожной фитнес-позы",
+    standing_full_body: "полный рост; естественный перенос веса на одну ногу; лёгкий разворот корпуса; одна нога может быть чуть согнута; руки расположены непринуждённо",
+    upper_body: "кадр по пояс; одна сторона корпуса немного ближе к камере; плечи расслаблены; руки не обрамляют тело механически",
+    portrait: "портретный кадр; мягкий поворот головы и плеч; живой взгляд; никакой паспортной фронтальности",
+    casual_self_capture: "близкий личный кадр с естественной асимметрией; один плечевой пояс немного ближе; без ощущения каталога или документа",
+  };
+  return directions[preset] || directions.casual_self_capture;
+}
+
+function photoFramingRuleRu(framing) {
+  if (framing === "full_body") return "в кадре целиком видны голова, корпус, ноги и ступни; ничего важного не обрезано";
+  if (framing === "upper_body") return "в кадре хорошо видны лицо, плечи и верх корпуса; нижняя граница примерно у талии или бёдер";
+  if (framing === "portrait") return "главный акцент на лице и плечах; кадр не выглядит как паспортная фотография";
+  if (framing === "mirror") return "цельное отражение в зеркале; без второго изображения внутри экрана и без рамки устройства вокруг сцены";
+  return "естественный личный кадр с правдоподобной перспективой";
+}
+
+function photoCameraRuleRu(framing) {
+  if (framing === "mirror") return "режим зеркального фото: устройство может быть видно только как обычный предмет в руке; экран устройства не является отдельной картинкой и не обрамляет сцену";
+  if (framing === "selfie") return "режим личного селфи: итог — сам кадр, без видимого устройства, экрана, рамки, интерфейса камеры или вложенного изображения";
+  return "режим прямого кадра: итоговое изображение полностью заполняет кадр; никаких устройств, экранов, рамок, интерфейса камеры, коллажа или вложенной фотографии";
+}
+
+function photoSuggestiveLabelRu(level) {
+  return ({ none: "обычный", low: "лёгкий", medium: "умеренно интимный", high: "явно интимный" })[level] || "обычный";
+}
+
+function photoExposureRuleRu(intent) {
+  const outfit = normalizePhotoRequestText(intent?.outfit || "");
+  const level = intent?.suggestiveLevel || "none";
+  if (/(?:topless|топлесс|груд|сиськ|сос)/u.test(outfit)) {
+    return "топлесс должен читаться явно: не заменять лифчиком, бельём, волосами, руками, полотенцем или случайным кропом";
+  }
+  if (/(?:nude|обнаж|голая|без одежды|without underwear|без белья)/u.test(outfit)) {
+    return "запрошенная нагота должна читаться ясно и естественно; не подменять её бельём, полотенцем, простынёй или случайным перекрытием";
+  }
+  if (/(?:lingerie|бель|лифчик|бюстгальтер|трусик|стринг|bra|thong)/u.test(outfit)) {
+    return "нижнее бельё должно быть визуально однозначным; не превращать его в повседневную одежду, пижаму или купальник";
+  }
+  if (level === "low") return "лёгкая привлекательность создаётся ракурсом, взглядом и языком тела; одежду не делать откровеннее запроса";
+  return "не усиливать откровенность сверх заданной одежды и позы";
+}
+
+function buildCanonicalPhotoSpec(packet) {
   const { character, visualProfile, decision, world, signals } = packet;
-  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual home clothes";
-  const outfit = seedreamAdultText(decision.intent.outfit, defaultOutfit, 180);
-  const pose = seedreamAdultText(decision.intent.pose, "relaxed natural pose", 180);
-  const mood = seedreamAdultText(decision.intent.mood, "natural", 100);
-  const location = seedreamAdultText(decision.intent.location, world.location || "home", 120);
-  const identitySummary = seedreamAdultText(visualProfile.identitySummary, "same adult woman", 500);
-  const photoStyle = sanitizeWaveSpeedPromptText(visualProfile.defaultPhotoStyle, "natural personal photo", 180);
-  const expressionGuidance = visualProfile.expressionGuidance
-    ? seedreamAdultText(visualProfile.expressionGuidance, "", 620)
-    : "";
-  const emotionTone = safeEmotionTone(signals.emotionTone);
-  const intimacyTone = ["flirty", "aroused", "high_arousal"].includes(signals.intimacyTone) ? signals.intimacyTone : "";
-  const framingMap = { selfie: "selfie shot", mirror: "mirror selfie", portrait: "portrait shot", upper_body: "upper body portrait", full_body: "full body portrait" };
-  const framing = framingMap[decision.intent.framing] || "selfie shot";
-  const suggestiveLevel = ["none", "low", "medium", "high"].includes(decision.intent.suggestiveLevel) ? decision.intent.suggestiveLevel : "none";
-  const suggestiveInstruction = suggestiveLevel === "none"
-    ? ""
-    : suggestiveLevel === "low"
-      ? "Keep the photo lightly flirtatious but non-explicit; follow only the stated pose/outfit details."
-      : `Photo-intent suggestiveness: ${suggestiveLevel}. Follow only the explicit pose/outfit details supplied in this structured photo intent; do not add anything beyond them.`;
-  return [
-    `Generate one photorealistic personal photo of the same fictional adult woman ${character.name}, age ${character.age}. The final image is the direct camera view, with no device or display framing the scene.`,
-    `Preserve the recurring character identity: ${identitySummary}`,
-    referenceCount > 0 ? `The attached reference image${referenceCount > 1 ? "s" : ""} are the source of truth for her identity. Preserve the same face, hair, apparent age and overall appearance.` : "Keep the established identity stable.",
-    `Photo style: ${photoStyle}.`,
-    expressionGuidance ? `Character-specific expression and body-language direction: ${expressionGuidance}` : "",
-    `Framing: ${framing}. Mood: ${mood}. Pose: ${pose}.`,
-    `Location: ${location}. Outfit: ${outfit}.`,
-    suggestiveInstruction,
-    emotionTone ? `Visible emotion: ${emotionTone}.` : "",
-    intimacyTone ? `Outward chat intimacy tone: ${intimacyTone}. Use it only for subtle facial expression and body-language nuance. Do NOT increase exposure, alter outfit/pose, or raise the structured suggestive level.` : "",
-    decision.intent.framing === "mirror"
-      ? "Natural anatomy, realistic skin and lighting. A phone may appear naturally in her hand only because this is a mirror selfie; never render a giant phone screen, device frame, camera UI, nested photo or photo-within-photo."
-      : "Natural anatomy, realistic skin and lighting. No visible device, display, device frame, camera UI, viewfinder, nested photo or photo-within-photo; the final output is the camera image itself.",
-  ].filter(Boolean).join("\n");
+  const intent = decision?.intent || {};
+  const defaultOutfit = Array.isArray(visualProfile?.defaultOutfits) && visualProfile.defaultOutfits.length
+    ? visualProfile.defaultOutfits.join(", ")
+    : "повседневная одежда";
+  const framing = ["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(intent.framing) ? intent.framing : "selfie";
+  const identity = compactPromptSentences(visualProfile?.identitySummary, "та же взрослая женщина", 2, 230);
+  const style = compactPromptSentences(visualProfile?.defaultPhotoStyle, "реалистичное личное фото", 1, 150);
+  const expression = compactPromptSentences(visualProfile?.expressionGuidance, "естественное выражение лица", 1, 210);
+  const outfit = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(intent.outfit, defaultOutfit, 160));
+  const pose = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(intent.pose, "естественная поза", 170));
+  const location = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(intent.location, world?.location || "дом", 100));
+  const mood = photoMoodRu(intent.mood || "natural");
+  const emotion = photoMoodRu(safeEmotionTone(signals?.emotionTone) || "");
+  const suggestiveLevel = ["none", "low", "medium", "high"].includes(intent.suggestiveLevel) ? intent.suggestiveLevel : "none";
+  return {
+    characterName: seedreamAdultText(character?.name, "", 80),
+    age: Number(character?.age) || 21,
+    framing,
+    identity,
+    style,
+    expression,
+    outfit,
+    pose,
+    location,
+    mood,
+    emotion,
+    suggestiveLevel,
+    composition: photoCompositionDirectionRu({ ...intent, framing, pose, location }),
+    framingRule: photoFramingRuleRu(framing),
+    cameraRule: photoCameraRuleRu(framing),
+    exposureRule: photoExposureRuleRu({ ...intent, framing, outfit, suggestiveLevel }),
+  };
+}
+
+function finalizeImagePrompt(lines, max = 2300) {
+  const seen = new Set();
+  const normalized = [];
+  for (const line of lines) {
+    const clean = String(line || "").replace(/[ \t]+/gu, " ").trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(clean);
+  }
+  return clippedMultiline(normalized.join("\n"), max);
+}
+
+function buildPhotoPrompt(packet, referenceCount = 0) {
+  const spec = buildCanonicalPhotoSpec(packet);
+  const intimate = spec.suggestiveLevel !== "none";
+  return finalizeImagePrompt([
+    `Создай ОДНУ фотореалистичную личную фотографию той же вымышленной взрослой женщины ${spec.characterName}, ${spec.age} лет.`,
+    referenceCount > 0
+      ? "Референс используется только для личности: сохрани то же лицо, волосы, возраст, телосложение и пропорции; не копируй позу, фон или композицию референса."
+      : `Внешность: ${spec.identity}.`,
+    referenceCount > 0 ? `Ключевые черты внешности: ${spec.identity}.` : "",
+    `Сцена: ${spec.location}. Одежда: ${spec.outfit}.`,
+    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)}; ${spec.framingRule}.`,
+    `Композиция: ${spec.composition}. Дополнительная поза из запроса: ${spec.pose}.`,
+    `Настроение и мимика: ${spec.mood}; ${spec.expression}${spec.emotion ? `; текущее состояние — ${spec.emotion}` : ""}.`,
+    `Стиль: ${spec.style}.`,
+    intimate ? `Уровень откровенности: ${photoSuggestiveLabelRu(spec.suggestiveLevel)}. ${spec.exposureRule}.` : "Обычное личное фото без дополнительного усиления откровенности.",
+    `Камера: ${spec.cameraRule}.`,
+    "Анатомия реалистичная: правильные руки, пальцы, плечи, ноги и пропорции; без дублированных конечностей, невозможных изгибов, Т-позы, манекенной симметрии и каталожной стойки.",
+    "Одна фотография, без текста и водяных знаков."
+  ]);
 }
 
 function buildOrdinaryPhotoRetryPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision, world, signals } = packet;
-  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
-  const framingMap = { selfie: "selfie", mirror: "mirror photo", portrait: "portrait", upper_body: "upper-body photo", full_body: "full-body photo" };
-  const framing = framingMap[decision.intent.framing] || "selfie";
-  const emotionTone = safeEmotionTone(signals.emotionTone);
-  const identitySummary = seedreamAdultText(visualProfile.identitySummary, "same adult woman", 500);
-  const expressionGuidance = visualProfile.expressionGuidance ? seedreamAdultText(visualProfile.expressionGuidance, "", 620) : "";
-  return [
-    `Create a realistic everyday ${framing} of the same fictional adult woman ${character.name}, age ${character.age}. The final output is the direct camera image itself.`,
-    `Keep her identity consistent: ${identitySummary}`,
-    referenceCount > 0 ? "Use the attached reference only to preserve identity; do not copy its pose, crop or expression." : "Keep the established identity stable.",
-    expressionGuidance ? `Expression/body language: ${expressionGuidance}` : "",
-    `She is at ${seedreamAdultText(decision.intent.location, world.location || "home", 100)}.`,
-    `Clothing: ${seedreamAdultText(decision.intent.outfit, defaultOutfit, 140)}.`,
-    `Pose: ${seedreamAdultText(decision.intent.pose, "natural relaxed pose", 140)}.`,
-    `Mood: ${seedreamAdultText(decision.intent.mood, "natural", 80)}.`,
-    emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
-    decision.intent.framing === "mirror"
-      ? "Everyday fully clothed personal photo. A phone may be visible naturally only in the mirror; never make the device, its screen or camera interface the frame of the image. No nested photo, text or watermark."
-      : "Everyday fully clothed personal photo. No visible device, display, camera interface, viewfinder or nested photo. Keep natural body language, realistic lighting and anatomy; no text or watermark.",
-  ].filter(Boolean).join("\n");
+  const spec = buildCanonicalPhotoSpec(packet);
+  return finalizeImagePrompt([
+    `Повтори генерацию ОДНОЙ реалистичной личной фотографии той же вымышленной взрослой женщины ${spec.characterName}, ${spec.age} лет.`,
+    referenceCount > 0
+      ? "Референс нужен только для сохранения личности; не копируй его позу, фон, кадрирование или выражение."
+      : `Сохрани внешность: ${spec.identity}.`,
+    `Сцена: ${spec.location}; одежда: ${spec.outfit}.`,
+    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)}; ${spec.framingRule}.`,
+    `Композиция: ${spec.composition}. Поза: ${spec.pose}.`,
+    `Выражение: ${spec.mood}; ${spec.expression}.`,
+    `Камера: ${spec.cameraRule}.`,
+    "Полностью реалистичная анатомия и кожа. Никаких устройств или экранов в кадре, кроме естественного устройства в руке при настоящем зеркальном фото. Без текста и водяных знаков."
+  ], 1700);
 }
 
 function buildOpenAICasualPrimaryPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision, world, signals } = packet;
-  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "casual everyday clothes";
-  const framingMap = { selfie: "selfie", mirror: "mirror selfie", portrait: "portrait", upper_body: "upper-body portrait", full_body: "full-body portrait" };
-  const framing = framingMap[decision.intent.framing] || "selfie";
-  const emotionTone = safeEmotionTone(signals.emotionTone);
-  const identitySummary = seedreamAdultText(visualProfile.identitySummary, "same adult woman", 500);
-  const expressionGuidance = visualProfile.expressionGuidance ? seedreamAdultText(visualProfile.expressionGuidance, "", 620) : "";
-  return [
-    `Generate one photorealistic casual ${framing} of the same fictional adult woman ${character.name}, age ${character.age}. The final output is the direct camera image itself.`,
-    `Preserve her identity: ${identitySummary}`,
-    referenceCount > 0 ? "Use the attached avatar reference only for identity; do not copy its pose, crop, lighting or expression." : "Keep the established identity stable.",
-    `Location: ${seedreamAdultText(decision.intent.location, world.location || "home", 90)}.`,
-    `Outfit: ${seedreamAdultText(decision.intent.outfit, defaultOutfit, 120)}.`,
-    `Pose: ${seedreamAdultText(decision.intent.pose, "natural relaxed pose", 120)}.`,
-    `Mood: ${seedreamAdultText(decision.intent.mood, "natural", 80)}.`,
-    expressionGuidance ? `Character expression/body language: ${expressionGuidance}` : "",
-    emotionTone ? `Current visible emotion: ${emotionTone}.` : "",
-    decision.intent.framing === "mirror"
-      ? "Everyday fully clothed personal photo. The phone may appear naturally in the mirror only; never create a giant phone screen, device border, camera UI or photo-within-photo. Natural asymmetry, realistic skin and lighting; no text or watermark."
-      : "Everyday fully clothed personal photo. No visible device, display, device border, camera UI, viewfinder or photo-within-photo. Natural asymmetry and handheld personal-photo perspective, realistic skin and lighting; no text or watermark.",
-  ].filter(Boolean).join("\n");
+  const spec = buildCanonicalPhotoSpec(packet);
+  return finalizeImagePrompt([
+    `Создай ОДНУ естественную фотореалистичную личную фотографию той же вымышленной взрослой женщины ${spec.characterName}, ${spec.age} лет.`,
+    referenceCount > 0
+      ? "Используй приложенный референс только для сохранения личности: лицо, волосы, возраст, телосложение и пропорции должны остаться теми же."
+      : `Внешность: ${spec.identity}.`,
+    `Сцена: ${spec.location}; одежда: ${spec.outfit}; настроение: ${spec.mood}.`,
+    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)}; ${spec.framingRule}.`,
+    `Композиция: ${spec.composition}. Поза: ${spec.pose}.`,
+    `Выражение и язык тела: ${spec.expression}.`,
+    `Стиль: ${spec.style}.`,
+    `Камера: ${spec.cameraRule}.`,
+    "Обычная повседневная фотография. Естественная асимметрия, реалистичная кожа, свет и анатомия; без текста, водяных знаков, коллажа или вложенного изображения."
+  ], 1800);
 }
 
 function isCasualPhotoIntent(packet) {
@@ -1735,8 +1885,9 @@ function sanitizeWaveSpeedPromptText(value, fallback = "", max = 320) {
     .replace(/референс\s+всегда\s+важнее\s+описани[яе]\.?/giu, "")
     .replace(/(?:фото|снимок)\s+со\s+смартфон[а-я]*/giu, "личное фото")
     .replace(/(?:фото|снимок)\s+на\s+смартфон[а-я]*/giu, "личное фото")
-    .replace(/smartphone\s+(?:photo|photograph|photography)/giu, "personal photo")
-    .replace(/phone\s+(?:photo|photograph|photography)/giu, "personal photo")
+    .replace(/smartphone(?:-|\s)+(?:photo|photograph|photography|фото)/giu, "личное фото")
+    .replace(/phone(?:-|\s)+(?:photo|photograph|photography)/giu, "личное фото")
+    .replace(/(?:фото|снимок)\s+с\s+телефон[а-я]*/giu, "личное фото")
     .replace(/\s+/gu, " ")
     .trim();
   return clipped(text || fallback, max);
@@ -1755,6 +1906,10 @@ function localizeWaveSpeedPhotoText(value) {
     .replace(/\breserved but expressive\b/giu, "сдержанное, но выразительное")
     .replace(/\bof a\b/giu, "")
     .replace(/\bstanding naturally\b/giu, "естественно стоит")
+    .replace(/\brear three-quarter view\b/giu, "вид со спины в трёхчетвертном развороте")
+    .replace(/\bthree-quarter view\b/giu, "трёхчетвертный ракурс")
+    .replace(/\breclining naturally\b/giu, "естественно лежит")
+    .replace(/\bsoft feminine casual\b/giu, "мягкий женственный повседневный образ")
     .replace(/\bstanding\b/giu, "стоит")
     .replace(/\bnatural relaxed pose\b/giu, "естественная расслабленная поза")
     .replace(/\bnatural\b/giu, "естественное")
@@ -1776,6 +1931,67 @@ function localizeWaveSpeedPhotoText(value) {
     .replace(/\blingerie\b/giu, "нижнее бельё")
     .replace(/\btopless\b/giu, "топлесс")
     .replace(/\bnude\b/giu, "обнажённая")
+    .replace(/\bcasual home clothes\b/giu, "повседневная домашняя одежда")
+    .replace(/\beveryday casual\b/giu, "повседневный образ")
+    .replace(/\bcasual streetwear\b/giu, "повседневный городской образ")
+    .replace(/\bstreetwear\b/giu, "городской стиль")
+    .replace(/\bhome clothes\b/giu, "домашняя одежда")
+    .replace(/\bminimal casual\b/giu, "минималистичный повседневный образ")
+    .replace(/\bbold casual\b/giu, "смелый повседневный образ")
+    .replace(/\bnight-out casual\b/giu, "вечерний образ")
+    .replace(/\blingerie-inspired evening top\b/giu, "вечерний топ в бельевом стиле")
+    .replace(/\bbody-hugging dress\b/giu, "облегающее платье")
+    .replace(/\bsoft loungewear\b/giu, "мягкая домашняя одежда")
+    .replace(/\bsoft casual\b/giu, "мягкий повседневный образ")
+    .replace(/\bsimple feminine casual\b/giu, "простой женственный повседневный образ")
+    .replace(/\bmodern casual\b/giu, "современный повседневный образ")
+    .replace(/\bcollege casual\b/giu, "повседневный студенческий образ")
+    .replace(/\bcreative casual\b/giu, "творческий повседневный образ")
+    .replace(/\bsoft knitwear\b/giu, "мягкий трикотаж")
+    .replace(/\bminimal alternative\b/giu, "минималистичный альтернативный образ")
+    .replace(/\bluxury casual\b/giu, "дорогой повседневный образ")
+    .replace(/\belegant evening\b/giu, "элегантный вечерний образ")
+    .replace(/\bminimal designer\b/giu, "минималистичный дизайнерский образ")
+    .replace(/\bcozy home clothes\b/giu, "уютная домашняя одежда")
+    .replace(/\bdark alternative casual\b/giu, "тёмный альтернативный повседневный образ")
+    .replace(/\bgrunge knitwear\b/giu, "гранжевый трикотаж")
+    .replace(/\bminimal goth\b/giu, "минималистичный готический образ")
+    .replace(/\boversized casual\b/giu, "свободный повседневный образ")
+    .replace(/\bsmart casual\b/giu, "элегантный повседневный образ")
+    .replace(/\bminimal elegant\b/giu, "минималистичный элегантный образ")
+    .replace(/\bfeminine minimal casual\b/giu, "женственный минималистичный повседневный образ")
+    .replace(/\belegant black\b/giu, "элегантный чёрный образ")
+    .replace(/\brelaxed casual\b/giu, "расслабленный повседневный образ")
+    .replace(/\bminimal classic\b/giu, "минималистичная классика")
+    .replace(/\bactivewear\b/giu, "спортивная одежда")
+    .replace(/\belegant dress\b/giu, "элегантное платье")
+    .replace(/\bwhite leggings\b/giu, "белые лосины")
+    .replace(/\bblack leggings\b/giu, "чёрные лосины")
+    .replace(/\bgray leggings\b|\bgrey leggings\b/giu, "серые лосины")
+    .replace(/\bwhite dress\b/giu, "белое платье")
+    .replace(/\bblack dress\b/giu, "чёрное платье")
+    .replace(/\bwhite skirt\b/giu, "белая юбка")
+    .replace(/\bblack skirt\b/giu, "чёрная юбка")
+    .replace(/\bmodern luxury\b/giu, "современная премиальная эстетика")
+    .replace(/\bquiet_cafe\b/giu, "тихое кафе")
+    .replace(/\bliving_room\b/giu, "гостиная")
+    .replace(/\bapartment\b/giu, "квартира")
+    .replace(/\bhotel\b/giu, "отель")
+    .replace(/\bstudio\b/giu, "студия")
+    .replace(/\bcampus\b/giu, "кампус")
+    .replace(/\bstreet\b/giu, "улица")
+    .replace(/\bconcert\b/giu, "концерт")
+    .replace(/\boffice\b/giu, "офис")
+    .replace(/\bnature\b/giu, "природа")
+    .replace(/\btheatre\b/giu, "театр")
+    .replace(/\btravel\b/giu, "путешествие")
+    .replace(/\bmodern luxury\b/giu, "современная премиальная эстетика")
+    .replace(/Luxury должен/giu, "Премиальность должна")
+    .replace(/\bluxury\b/giu, "премиальная эстетика")
+    .replace(/\bsuggestiveLevel\b/giu, "уровень откровенности")
+    .replace(/\bsuggestive\b/giu, "флиртующий")
+    .replace(/\bmood\b/giu, "настроение")
+    .replace(/\bprofile\.[a-z0-9_.-]+\b/giu, "референс")
     .replace(/та же взрослая\s+взрослая женщина/giu, "та же взрослая женщина")
     .replace(/\s+/gu, " ")
     .trim();
@@ -1798,117 +2014,44 @@ function buildWaveSpeedFramingRule(framing) {
 }
 
 function buildWaveSpeedIntimateDirection(packet) {
-  const intent = packet?.decision?.intent || {};
-  const level = ["none", "low", "medium", "high"].includes(intent.suggestiveLevel) ? intent.suggestiveLevel : "none";
-  const framing = ["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(intent.framing) ? intent.framing : "selfie";
-  const outfit = sanitizeWaveSpeedPromptText(intent.outfit, "", 220).toLowerCase();
-
-  const framingDirection = framing === "full_body"
-    ? "Используй правдоподобный ракурс полного роста: естественный перенос веса, небольшая бытовая неровность кадра, никаких каталожных поз или манекенной симметрии. Финальное изображение — сам прямой кадр камеры, без устройств и экранов в композиции."
-    : framing === "upper_body"
-      ? "Сделай личный ракурс по пояс: небольшая развёртка плеч, живая асимметрия, хорошо читаемая грудь и плечи, если это важно для запроса. Не обрезай важную часть тела и не превращай кадр в документальное фото."
-      : framing === "mirror"
-        ? "Сделай это похожим на реальное личное фото в зеркале: правдоподобное положение телефона, естественный разворот тела, цельное отражение и фон без лишней искусственной идеальности."
-        : framing === "portrait"
-          ? "Используй близкий портретный ракурс с читаемой эмоцией на лице, мягким поворотом головы и естественной асимметрией вместо жёсткой фронтальной позы."
-          : "Это должно ощущаться как живое личное селфи, но финальное изображение является самим кадром камеры. Никаких устройств или экранов в кадре; допускается естественный вытянутый ракурс руки, если он нужен композиции.";
-
-  const aestheticPoseDirection = framing === "full_body"
-    ? "Поза должна быть привлекательной, но реальной: спокойный перенос веса, лёгкий разворот корпуса, одна нога может быть слегка согнута, руки лежат естественно — на бедре, волосах, одежде или рядом стоящей мебели. Избегай Т-позы, жёсткой фронтальной стойки и ощущения манекена."
-    : framing === "upper_body"
-      ? "Используй привлекательную композицию верхней части тела: мягкий поворот торса, одна сторона чуть ближе к камере, расслабленная шея и естественное положение рук. Не делай плоский фронтальный торс или механическое обрамление тела руками."
-      : framing === "mirror"
-        ? "Дай телу естественный разворот, мягкий сдвиг бёдер и правдоподобное положение телефона. Телефон не должен бессмысленно закрывать лицо или запрошенную одежду/часть тела."
-        : framing === "portrait"
-          ? "Используй мягкий ракурс головы и плеч с небольшой асимметрией, расслабленной челюстью и ощущением случайно удачного момента, а не технической постановки."
-      : "Поза должна ощущаться как личное селфи: один плечевой пояс чуть ближе, естественное положение руки, живой угол корпуса и приятная неидеальность кадра. Никаких устройств или экранов в кадре. Избегай оцепенелой фронтальной позы.";
-
-  const intensityDirection = level === "high"
-    ? "Интимность может быть явной, но фото всё равно должно выглядеть как личный правдоподобный кадр. Соблюдай заданные позу и одежду и не усиливай откровенность сверх прямого запроса."
-    : level === "medium"
-      ? "Фото должно ощущаться намеренно интимным и привлекательным через выражение лица, близость, позу и язык тела, но оставаться личной бытовой фотографией, а не гламурной или студийной постановкой."
-      : "Притяжение должно быть лёгким и естественным: тёплый взгляд, расслабленный язык тела и личное фото-ощущение без грубой демонстративности.";
-
-  let exposureDirection = "Сделай одежду визуально однозначной. Не подменяй запрошенный образ более безопасной случайной одеждой.";
-  if (/(?:topless|breast|boob|tits|груд|сиськ|сос)/u.test(outfit)) {
-    exposureDirection = "Если запрос подразумевает топлесс, грудь действительно должна быть видна в кадре. Не заменяй это лифчиком, бельём, прикрытой грудью, волосами, перекрещёнными руками, одеялом или кропом, который скрывает смысл запроса.";
-  } else if (/(?:nude|without underwear|без белья|без одежды|голая|обнаж)/u.test(outfit)) {
-    exposureDirection = "Если запрос подразумевает наготу, нагота должна читаться ясно и правдоподобно для личной фото-сцены. Не добавляй заменяющее бельё, полотенце, простыню или случайные перекрывающие предметы, если это не следует из самой позы.";
-  } else if (/(?:lingerie|underwear|bra|thong|бель|лифчик|бюстгальтер|трусик|стринг)/u.test(outfit)) {
-    exposureDirection = "Если запрос про бельё, оно должно быть чётко видно и узнаваемо. Не превращай его в повседневную одежду, пижаму или купальник.";
-  }
-
-  const anatomyDirection = level === "high"
-    ? "Избегай сломанной анатомии: реалистичные плечи, руки, пальцы, торс и грудь. Формы должны оставаться естественными, без дублирования, искажений и невозможной симметрии."
-    : "Избегай сломанной анатомии: реалистичные плечи, руки, пальцы, торс и пропорции тела, без дублирования и искажений.";
-
-  return [
-    "КОМПОЗИЦИЯ ЛИЧНОГО ФОТО:",
-    "Используй референс только для сохранения личности. Не копируй его сетку, позу, фон, свет, кадрирование или выражение лица.",
-    "Запрошенные кадрирование, одежда и поза — жёсткие ограничения. Не нейтрализуй их и не подменяй более безопасным обычным вариантом.",
-    framingDirection,
-    aestheticPoseDirection,
-    intensityDirection,
-    exposureDirection,
-    anatomyDirection,
-    "Поза должна оставаться человеческой и визуально привлекательной: расслабленные кисти, небольшая асимметрия, правдоподобный баланс, естественные линии от позы, а не от неестественного выкручивания тела. Если пользователь дал конкретную позу, сохрани её смысл, но доведи до живого, приятного кадра вместо клинической демонстрации.",
-    "Выражение лица должно исходить из характера и текущего настроения персонажа, а не быть универсально-соблазнительным шаблоном. Используй её expressionGuidance и видимую эмоцию.",
-    "Свет должен быть цельным и правдоподобным для локации: оконный, комнатный, прикроватный, уличный или другой обычный бытовой свет. Сохраняй реалистичную текстуру кожи и избегай глянцевой студийной ретуши.",
-    "Финальный результат должен выглядеть как одно спонтанное личное фото, которое она сама решила отправить. Это конечный прямой кадр камеры: без устройства перед объективом, без экрана, рамки, видоискателя, интерфейса камеры и без вложенного изображения.",
-  ].join("\n");
+  const spec = buildCanonicalPhotoSpec(packet);
+  if (spec.suggestiveLevel === "none") return "";
+  const intensity = spec.suggestiveLevel === "high"
+    ? "Интимность может быть явной, но только в пределах прямого запроса."
+    : spec.suggestiveLevel === "medium"
+      ? "Фото намеренно интимное, но остаётся правдоподобным личным кадром без глянцевой постановки."
+      : "";
+  return finalizeImagePrompt([
+    intensity,
+    spec.exposureRule,
+    "Поза и одежда из итогового запроса — жёсткие условия; не заменяй их более нейтральным вариантом.",
+    "Анатомия естественная: реалистичные руки, пальцы, плечи, грудь, торс, ноги и пропорции; без дублирования, невозможных изгибов, Т-позы и манекенной симметрии."
+  ], 620);
 }
 
 function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
-  const { character, visualProfile, decision, world, signals } = packet;
-  const defaultOutfit = visualProfile.defaultOutfits.join(", ") || "повседневная одежда";
-  const outfit = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(decision.intent.outfit, defaultOutfit, 180));
-  const pose = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(decision.intent.pose, "естественная живая поза", 180))
-    .replace(/^естественное$/u, "естественная расслабленная поза");
-  const mood = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(decision.intent.mood, "естественное настроение", 100));
-  const location = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(decision.intent.location, world.location || "дом", 120));
-  const identitySummary = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(visualProfile.identitySummary, "та же взрослая женщина", 440));
-  const photoStyle = localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(visualProfile.defaultPhotoStyle, "реалистичное личное фото", 180));
-  const expressionGuidance = visualProfile.expressionGuidance
-    ? localizeWaveSpeedPhotoText(sanitizeWaveSpeedPromptText(visualProfile.expressionGuidance, "", 480))
-    : "";
-  const emotionToneMap = {
-    neutral: "нейтральное", warm: "тёплое", happy: "счастливое", amused: "весёлое",
-    bashful: "слегка смущённое", shy: "застенчивое", surprised: "удивлённое", confused: "растерянное",
-    thinking: "задумчивое", focused: "сосредоточенное", skeptical: "недоверчивое", bored: "скучающее",
-    comfortable: "расслабленное", annoyed: "недовольное", irritated: "раздражённое", sad: "грустное",
-    sleepy: "сонное", low_energy: "уставшее", anxious: "тревожное", hurt: "задетое", jealous: "ревнивое",
-    welcoming: "открытое", tender: "нежное", curious: "заинтересованное",
-  };
-  const emotionTone = emotionToneMap[safeEmotionTone(signals.emotionTone)] || "";
+  const spec = buildCanonicalPhotoSpec(packet);
+  const casual = spec.suggestiveLevel === "none";
+  const suggestiveLabel = photoSuggestiveLabelRu(spec.suggestiveLevel);
   const intimacyToneMap = { flirty: "флиртующий", aroused: "возбуждённый", high_arousal: "сильно возбуждённый" };
-  const intimacyTone = intimacyToneMap[signals.intimacyTone] || "";
-  const framing = buildWaveSpeedFramingLabel(decision.intent.framing);
-  const framingRule = buildWaveSpeedFramingRule(decision.intent.framing);
-  const suggestiveLevelMap = { none: "обычный", low: "лёгкий", medium: "умеренно интимный", high: "явно интимный" };
-  const suggestiveLevel = suggestiveLevelMap[decision.intent.suggestiveLevel] || "обычный";
-  const casual = isCasualPhotoIntent(packet);
-  const intimateDirection = casual ? "" : buildWaveSpeedIntimateDirection(packet);
-
-  return [
-    `Сгенерируй ОДНУ новую фотореалистичную личную фотографию той же вымышленной взрослой женщины ${character.name}, ${character.age} лет. Финальное изображение должно быть самим кадром камеры.`,
+  const intimacyTone = intimacyToneMap[packet?.signals?.intimacyTone] || "";
+  return finalizeImagePrompt([
+    `Сгенерируй ОДНУ новую фотореалистичную личную фотографию той же вымышленной взрослой женщины ${spec.characterName}, ${spec.age} лет.`,
     referenceCount > 0
-      ? "РЕФЕРЕНС ВНЕШНОСТИ: <Picture 1> нужен только для сохранения личности. Сохрани лицо, волосы, возраст, телосложение и пропорции. Не копируй его позу, фон, свет или композицию."
-      : `ЛИЧНОСТЬ: сохрани ту же взрослую женщину. ${identitySummary}`,
-    identitySummary ? `Ключевые черты внешности: ${identitySummary}.` : "",
-    photoStyle ? `Стиль фото: ${photoStyle}.` : "",
-    `Кадрирование: ${framing}. ${framingRule}`,
-    `Настроение кадра: ${mood}. Поза: ${pose}. Локация: ${location}. Одежда: ${outfit}.`,
-    expressionGuidance ? `Подача и выражение лица: ${expressionGuidance}` : "",
+      ? "Референс <Picture 1> используется только для сохранения личности: то же лицо, волосы, возраст, телосложение и пропорции. Не копируй его позу, фон, свет или композицию."
+      : `Внешность: ${spec.identity}.`,
+    referenceCount > 0 ? `Ключевые черты внешности: ${spec.identity}.` : "",
+    `Сцена: ${spec.location}. Одежда: ${spec.outfit}. Стиль: ${spec.style}.`,
+    `Кадрирование: ${buildWaveSpeedFramingLabel(spec.framing)}; ${spec.framingRule}.`,
+    `Композиция: ${spec.composition}. Поза из запроса: ${spec.pose}.`,
+    `Выражение: ${spec.mood}; ${spec.expression}${spec.emotion ? `; текущее состояние — ${spec.emotion}` : ""}.`,
     casual
-      ? "Это обычное неэротическое личное фото. Сделай его естественным, повседневным и реалистичным."
-      : `Уровень откровенности: ${suggestiveLevel}. Соблюдай запрошенные одежду, кадрирование и позу как жёсткие условия. Сохраняй интимность личной и правдоподобной, без студийной постановки и без автоматического усиления откровенности сверх запроса.`,
-    intimateDirection,
-    emotionTone ? `Текущее заметное настроение на лице: ${emotionTone}.` : "",
-    intimacyTone ? `Тон близости в переписке: ${intimacyTone}. Используй это только как тонкий ориентир для мимики и языка тела. Это не должно усиливать откровенность, менять одежду или позу.` : "",
-    decision.intent.framing === "mirror"
-      ? "ФИНАЛЬНЫЕ ПРАВИЛА: одна фотография. Допускается обычный телефон в руке как часть зеркального селфи, но не увеличенный экран, не рамка устройства вокруг сцены, не интерфейс и не отдельная фотография внутри дисплея. Реалистичная анатомия, цельный свет, естественная кожа."
-      : "ФИНАЛЬНЫЕ ПРАВИЛА: одна фотография. Финальный кадр — прямой вид камеры. Никаких устройств, экранов, рамок, интерфейса камеры, видоискателя, коллажа, разделённого экрана, текста, водяных знаков или второго изображения внутри кадра. Реалистичная анатомия, цельный свет, естественная кожа."
-  ].filter(Boolean).join("\n");
+      ? "Обычное личное фото; не добавляй эротическую подачу или более откровенную одежду."
+      : `Уровень откровенности: ${suggestiveLabel}. ${buildWaveSpeedIntimateDirection(packet)}`,
+    intimacyTone && !casual ? `Тон близости в переписке: ${intimacyTone}; используй его только для мимики и языка тела, не повышая откровенность.` : "",
+    `Камера: ${spec.cameraRule}.`,
+    "Финал: один цельный кадр, который полностью заполняет изображение. Без коллажа, разделённого кадра, интерфейса, рамок, текста, водяных знаков и второго изображения внутри кадра. Реалистичная кожа, цельный свет и нормальная анатомия."
+  ], 2400);
 }
 
 function buildProfileAssetUrls(slug, filenames) {

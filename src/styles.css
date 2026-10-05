@@ -1904,51 +1904,6 @@ body { overscroll-behavior: none; }
   border-radius: 16px;
   box-shadow: 0 18px 70px rgba(0, 0, 0, .55);
 }
-.photo-balance-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 5100;
-  display: grid;
-  place-items: center;
-  padding: max(18px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
-  background: rgba(6, 5, 10, .74);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-.photo-balance-card {
-  width: min(92vw, 420px);
-  border-radius: 24px;
-  padding: 20px 18px 16px;
-  background: rgba(24, 20, 30, .96);
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .32);
-}
-.photo-balance-card h3 {
-  margin: 0 0 10px;
-  font-size: 1.05rem;
-}
-.photo-balance-card p {
-  margin: 0;
-  color: rgba(255,255,255,.82);
-  line-height: 1.45;
-}
-.photo-balance-actions {
-  margin-top: 16px;
-  display: flex;
-  justify-content: flex-end;
-}
-.photo-balance-actions button {
-  min-width: 110px;
-  border: 0;
-  border-radius: 999px;
-  padding: 10px 16px;
-  background: rgba(209, 176, 255, .95);
-  color: #20152d;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .photo-viewer-close {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));
@@ -1966,4 +1921,186 @@ body { overscroll-behavior: none; }
   line-height: 1;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* v0.20.48 — comfort pass for chat and photo viewing */
+.social-content .chat-scroll {
+  padding: 14px 14px 12px;
+  gap: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.social-content .message-row { max-width: 100%; }
+.social-content .bubble {
+  max-width: min(86%, 390px);
+  padding: 10px 12px 8px;
+  border-radius: 18px;
+}
+.social-content .bubble p {
+  font-size: 15px;
+  line-height: 1.43;
+}
+.social-content .bubble time {
+  margin-top: 5px;
+  font-size: 10px;
+}
+.social-content .bubble.character:has(.chat-photo) {
+  width: min(344px, 84vw);
+  max-width: 84vw;
+  padding: 5px;
+}
+.chat-photo {
+  width: 100%;
+  gap: 8px;
+}
+.chat-photo-open {
+  width: 100%;
+  max-width: 100%;
+}
+.chat-photo img {
+  width: 100%;
+  height: auto;
+  max-height: 54dvh;
+  aspect-ratio: auto;
+  object-fit: contain;
+  object-position: center;
+  border-radius: 14px;
+  background: #0b0a0e;
+}
+.chat-photo figcaption {
+  padding: 1px 5px 0;
+  color: #ede8f1;
+  font-size: 13px;
+  line-height: 1.38;
+}
+.chat-photo-placeholder {
+  width: 100%;
+  min-height: 250px;
+  aspect-ratio: 4 / 5;
+}
+.social-content .composer {
+  grid-template-columns: minmax(0,1fr) 48px;
+  gap: 8px;
+  padding: 9px 10px max(9px, env(safe-area-inset-bottom));
+  background: rgba(8,7,11,.96);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+.social-content .composer-field {
+  min-height: 48px;
+  padding: 11px 12px;
+  border-radius: 18px;
+  align-items: center;
+}
+.social-content .composer-field textarea {
+  line-height: 1.35;
+}
+.social-content .send-button {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 17px;
+}
+.send-phase {
+  align-self: flex-start;
+  margin: -2px 0 2px 5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.035);
+  color: #8f8699;
+  font-size: 10px;
+}
+.new-messages-button {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  z-index: 3;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid rgba(178,131,242,.22);
+  border-radius: 999px;
+  background: rgba(26,22,33,.94);
+  color: #e0d4ed;
+  box-shadow: 0 8px 28px rgba(0,0,0,.28);
+}
+.photo-viewer {
+  padding:
+    max(14px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(14px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  background: rgba(2,2,4,.97);
+}
+.photo-viewer-stage {
+  grid-template-rows: minmax(0,1fr) auto auto;
+  gap: 10px;
+  overflow: hidden;
+}
+.photo-viewer-media {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y pinch-zoom;
+  -webkit-overflow-scrolling: touch;
+}
+.photo-viewer-media img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 14px;
+  transform-origin: center center;
+  transition: transform .16s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.photo-viewer-media[data-zoomed="true"] img { cursor: zoom-out; }
+.photo-viewer-toolbar {
+  display: inline-grid;
+  grid-template-columns: 40px 56px 40px;
+  align-items: center;
+  justify-self: center;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 999px;
+  background: rgba(20,18,24,.88);
+}
+.photo-viewer-toolbar button {
+  width: 40px;
+  height: 38px;
+  border: 0;
+  color: #f7f3f9;
+  background: transparent;
+  font-size: 22px;
+}
+.photo-viewer-toolbar button:disabled { opacity: .35; }
+.photo-viewer-toolbar span {
+  color: #9d95a4;
+  font-size: 10px;
+  text-align: center;
+}
+.photo-viewer-caption {
+  max-width: min(88vw, 520px);
+  margin: 0 auto;
+  color: #c9c2ce;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+.photo-viewer-close {
+  width: 44px;
+  height: 44px;
+  font-size: 26px;
+}
+
+@media (max-width: 390px) {
+  .social-content .chat-scroll { padding-left: 11px; padding-right: 11px; }
+  .social-content .bubble { max-width: 89%; }
+  .social-content .bubble.character:has(.chat-photo) { width: min(330px, 88vw); max-width: 88vw; }
 }

@@ -9,6 +9,7 @@ const runtime = read("src/engine/runtime.ts");
 const app = read("src/App.tsx");
 const chat = read("src/ui/ChatScreen.tsx");
 const worker = read("cloudflare/worker.js");
+const social = read("src/ui/SocialScreens.tsx");
 
 assert.match(registry, /characterProfiles/);
 assert.match(registry, /mika_v1/);
@@ -47,6 +48,9 @@ for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Vika", "Hina", "Саша",
   assert.match(registry, new RegExp(`expressionGuidance: "${name}`));
 assert.match(store, /activeCharacterId/);
 assert.match(store, /inboxCharacterIds/);
+assert.match(store, /inboxPreviews/);
+assert.match(store, /conversationPreviewFromLines/);
+assert.match(store, /orderInboxCharacterIds/);
 assert.match(store, /refreshInboxCharacterIds/);
 assert.match(store, /selectCharacter:/);
 assert.match(store, /subscribeCharacterLiveSync\(characterId/);
@@ -55,12 +59,16 @@ assert.match(runtime, /character:\s*\{ id: profile\.id, name: profile\.core\.nam
 assert.match(runtime, /characterProfile:\s*\{/);
 assert.match(app, /InboxScreen/);
 assert.match(app, /inboxCharacters/);
+assert.match(app, /inboxPreviews/);
 assert.match(app, /PeopleScreen/);
+assert.match(social, /social-empty-state/);
 assert.match(app, /openCharacterSettings/);
 assert.match(app, /onSettings=/);
 assert.doesNotMatch(app, /<span>Настройки<\/span>/);
 assert.doesNotMatch(app, /CharacterStage/);
 assert.match(chat, /message\.kind === "image"/);
+assert.match(chat, /photo-viewer-toolbar/);
+assert.match(chat, /photoScale/);
 assert.match(worker, /CURRENT CHARACTER/);
 assert.match(worker, /raw\.character\?\.name/);
 assert.match(worker, /alia_v1:\s*"alia"/);

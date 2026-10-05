@@ -80,10 +80,10 @@ try {
   assert.doesNotMatch(intimate, forbidden);
   assert.match(intimate, /женщин|adult woman/iu);
   assert.match(intimate, /Уровень откровенности/iu);
-  assert.match(intimate, /грудь действительно должна быть видна в кадре/iu);
+  assert.match(intimate, /топлесс должен читаться явно/iu);
   assert.match(intimate, /Избегай Т-позы|Т-позы/iu);
-  assert.match(intimate, /правдоподобный ракурс полного роста/iu);
-  assert.match(intimate, /одно спонтанное личное фото|фото-внутри-фото/iu);
+  assert.match(intimate, /полный рост|в кадре целиком видны/iu);
+  assert.match(intimate, /один цельный кадр|второго изображения внутри кадра/iu);
   assert.doesNotMatch(intimate, /public\/assets\/profiles|avatar\.jpg|identity-sheet\.jpg/iu);
   assert.doesNotMatch(intimate, /смартфон|телефон|smartphone|\bphone\b/iu);
 
@@ -91,9 +91,12 @@ try {
     ...base,
     decision: { intent: { framing: "full_body", mood: "playful", pose: "rear three-quarter view", location: "bedroom", outfit: "fitted feminine casual", suggestiveLevel: "low" } },
   }, 1);
-  assert.match(directFullBody, /прямой вид камеры|самим кадром камеры/iu);
-  assert.match(directFullBody, /Никаких устройств/iu);
+  assert.match(directFullBody, /Камера: режим прямого кадра/iu);
+  assert.match(directFullBody, /никаких устройств/iu);
   assert.doesNotMatch(directFullBody, /смартфон|телефон|smartphone|\bphone\b/iu);
+  assert.ok(directFullBody.length < 2400, `WaveSpeed prompt should stay compact: ${directFullBody.length}`);
+  assert.ok(directFullBody.split("\n").length >= 8, "prompt should remain structured instead of one giant paragraph");
+  assert.doesNotMatch(directFullBody, /public\/assets|referenceAssetIds|identity-sheet\.(?:jpg|png)/iu);
 
   console.log("PASS photo prompt adult wording, intimate intent fidelity and natural pose quality");
 } finally {

@@ -34,6 +34,7 @@ export default function App() {
     busy,
     messages,
     inboxCharacterIds,
+    inboxPreviews,
     lastTrace,
     authStatus,
     user,
@@ -82,7 +83,7 @@ export default function App() {
     [profileCharacterId],
   );
   const inboxCharacters = useMemo(
-    () => characterProfiles.filter((profile) => inboxCharacterIds.includes(profile.id)),
+    () => inboxCharacterIds.map((id) => getCharacterProfile(id)),
     [inboxCharacterIds],
   );
   const peopleCharacters = useMemo(
@@ -194,6 +195,7 @@ export default function App() {
           <InboxScreen
             characters={inboxCharacters}
             activeCharacterId={activeCharacterId}
+            previews={inboxPreviews}
             onOpenChat={(id) => void openChat(id)}
             onOpenProfile={openProfile}
           />
