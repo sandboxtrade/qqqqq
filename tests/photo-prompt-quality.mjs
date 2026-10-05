@@ -85,6 +85,15 @@ try {
   assert.match(intimate, /правдоподобный ракурс полного роста/iu);
   assert.match(intimate, /одно спонтанное личное фото|фото-внутри-фото/iu);
   assert.doesNotMatch(intimate, /public\/assets\/profiles|avatar\.jpg|identity-sheet\.jpg/iu);
+  assert.doesNotMatch(intimate, /смартфон|телефон|smartphone|\bphone\b/iu);
+
+  const directFullBody = worker.buildWaveSpeedPhotoPrompt({
+    ...base,
+    decision: { intent: { framing: "full_body", mood: "playful", pose: "rear three-quarter view", location: "bedroom", outfit: "fitted feminine casual", suggestiveLevel: "low" } },
+  }, 1);
+  assert.match(directFullBody, /прямой вид камеры|самим кадром камеры/iu);
+  assert.match(directFullBody, /Никаких устройств/iu);
+  assert.doesNotMatch(directFullBody, /смартфон|телефон|smartphone|\bphone\b/iu);
 
   console.log("PASS photo prompt adult wording, intimate intent fidelity and natural pose quality");
 } finally {

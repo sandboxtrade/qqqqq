@@ -94,6 +94,13 @@ try {
   assert.equal(changedFraming.intentPatch.framing, "mirror");
   assert.equal(changedFraming.intentPatch.suggestiveLevel, "medium");
 
+  const buttFollowUp = worker.derivePhotoMechanic(baseRaw, "давай ещё попку");
+  assert.equal(buttFollowUp.continuation, true);
+  assert.equal(buttFollowUp.disposition, "send");
+  assert.equal(buttFollowUp.intentPatch.framing, "full_body");
+  assert.match(buttFollowUp.intentPatch.pose, /со спины|ягодиц/iu);
+  assert.equal(buttFollowUp.intentPatch.suggestiveLevel, "low");
+
   for (const followUp of [
     "фотку ещё",
     "можно ещё?",
@@ -187,10 +194,13 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(prompt, /Внешний тон близости в переписке: high_arousal/);
+  assert.match(prompt, /Тон близости в переписке: сильно возбуждённый/);
   assert.match(prompt, /без автоматического усиления откровенности сверх запроса/);
-  assert.match(prompt, /Уровень откровенности: medium/);
-  assert.match(prompt, /adult woman/iu);
+  assert.match(prompt, /Уровень откровенности: умеренно интимный/);
+  assert.match(prompt, /прямой вид камеры|самим кадром камеры/iu);
+  assert.match(prompt, /никаких устройств|no visible device/iu);
+  assert.doesNotMatch(prompt, /смартфон|телефон|smartphone|\bphone\b/iu);
+  assert.match(prompt, /adult woman|женщин/iu);
   assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const toplessPrompt = worker.buildWaveSpeedPhotoPrompt({
