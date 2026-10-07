@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.52 adds Diana: distinct character profile, world routine and photo references
+// v0.20.55 routes medium/high intimate still photos through Qwen Image Edit for better identity retention.
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -10,9 +10,11 @@ const OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations";
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
 const WAVESPEED_SEEDREAM_45_IMAGE_URL = "https://api.wavespeed.ai/api/v3/bytedance/seedream-v4.5/edit";
 const WAVESPEED_SEEDREAM_5_LITE_IMAGE_URL = "https://api.wavespeed.ai/api/v3/bytedance/seedream-v5.0-lite/edit";
+const WAVESPEED_QWEN_IMAGE_URL = "https://api.wavespeed.ai/api/v3/wavespeed-ai/qwen-image/edit-2511";
 const WAVESPEED_RESULT_BASE = "https://api.wavespeed.ai/api/v3/predictions";
 const WAVESPEED_SEEDREAM_45_MODEL = "bytedance/seedream-v4.5/edit";
 const WAVESPEED_SEEDREAM_5_LITE_MODEL = "bytedance/seedream-v5.0-lite/edit";
+const WAVESPEED_QWEN_IMAGE_MODEL = "wavespeed-ai/qwen-image/edit-2511";
 const WAVESPEED_MODEL = WAVESPEED_SEEDREAM_45_MODEL;
 const MASTER_REFERENCE_URL = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/docs/master-character-reference.jpeg";
 const GITHUB_PROFILES_RAW_BASE = "https://raw.githubusercontent.com/sandboxtrade/qqqqq/main/public/assets/profiles/";
@@ -2373,13 +2375,17 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
 
   const endpoint = model === WAVESPEED_SEEDREAM_5_LITE_MODEL
     ? WAVESPEED_SEEDREAM_5_LITE_IMAGE_URL
+    : model === WAVESPEED_QWEN_IMAGE_MODEL
+      ? WAVESPEED_QWEN_IMAGE_URL
     : model === WAVESPEED_SEEDREAM_45_MODEL
       ? WAVESPEED_SEEDREAM_45_IMAGE_URL
       : "";
   if (!endpoint) return { skipped: true, reason: "wavespeed-unsupported-model", model };
   const payload = model === WAVESPEED_SEEDREAM_5_LITE_MODEL
     ? { prompt, images, output_format: "jpeg" }
-    : { prompt, images };
+    : model === WAVESPEED_QWEN_IMAGE_MODEL
+      ? { prompt, images, seed: -1, output_format: "jpeg", enable_base64_output: false, enable_sync_mode: false }
+      : { prompt, images };
 
   const startCredentialIndex = Math.max(0, Math.min(credentials.length - 1, Number(options.startCredentialIndex) || 0));
   const submitStartedAt = Date.now();
@@ -2638,7 +2644,7 @@ async function handlePhoto(request, env, origin) {
   const retryWaveSpeedCredentialAttempt = Math.round(clipNumber(raw?.retryWaveSpeedCredentialAttempt, 1, 100, 0) || 0);
 
   if (retryWaveSpeedModel || retryWaveSpeedTaskId) {
-    if (![WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
+    if (![WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL, WAVESPEED_QWEN_IMAGE_MODEL].includes(retryWaveSpeedModel) || !retryWaveSpeedTaskId) {
       return jsonResponse({ skipped: true, reason: "invalid-wavespeed-key-retry", model: retryWaveSpeedModel || WAVESPEED_MODEL }, 400, origin);
     }
     const previous = await readWaveSpeedImage(env, retryWaveSpeedTaskId, retryWaveSpeedModel, {
@@ -2691,20 +2697,20 @@ async function handlePhoto(request, env, origin) {
 
   const directIntimateWaveSpeed = isWaveSpeedIntimateIntent(packet);
 
-  // Medium/high photo intent routes directly to Seedream 5.0 Lite Edit.
+  // Medium/high photo intent now routes directly to Qwen Image Edit.
   // None/low intent keeps OpenAI first and falls back to Seedream 4.5 Edit.
   if (directIntimateWaveSpeed) {
     const references = await loadReferenceBundle(packet, { needOpenAI: false, needWaveSpeed: true });
     const wavePrompt = buildWaveSpeedPhotoPrompt(packet, references.waveUrls.length);
-    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_SEEDREAM_5_LITE_MODEL);
+    const waveStart = await submitWaveSpeedImage(env, wavePrompt, references.waveUrls, WAVESPEED_QWEN_IMAGE_MODEL);
     if (waveStart.ok !== true || !waveStart.taskId) {
       return jsonResponse({
         skipped: true,
         reason: waveStart.reason,
         detail: waveStart.detail,
-        model: waveStart.model || WAVESPEED_SEEDREAM_5_LITE_MODEL,
+        model: waveStart.model || WAVESPEED_QWEN_IMAGE_MODEL,
         provider: "wavespeed",
-        routingMode: "direct-intimate-seedream-5-lite",
+        routingMode: "direct-intimate-qwen-image",
         photoClass: "medium-high",
         referenceDebug: references.debug,
       }, 200, origin);
@@ -2714,10 +2720,10 @@ async function handlePhoto(request, env, origin) {
       pending: true,
       provider: "wavespeed",
       providerTaskId: waveStart.taskId,
-      model: waveStart.model || WAVESPEED_SEEDREAM_5_LITE_MODEL,
+      model: waveStart.model || WAVESPEED_QWEN_IMAGE_MODEL,
       credentialAttempt: waveStart.credentialAttempt,
       credentialCount: waveStart.credentialCount,
-      routingMode: "direct-intimate-seedream-5-lite",
+      routingMode: "direct-intimate-qwen-image",
       photoClass: "medium-high",
       referenceDebug: references.debug,
       prompt: wavePrompt,
@@ -2916,7 +2922,7 @@ export default {
           waveSpeedKeyCount: waveSpeedKeyEntries(env).length,
           waveSpeedCoolingDownCount: waveSpeedKeyEntries(env).filter((entry) => waveSpeedCredentialCoolingDown(entry.credentialId)).length,
           waveSpeedModel: WAVESPEED_MODEL,
-          waveSpeedModels: [WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL],
+          waveSpeedModels: [WAVESPEED_SEEDREAM_45_MODEL, WAVESPEED_SEEDREAM_5_LITE_MODEL, WAVESPEED_QWEN_IMAGE_MODEL],
         },
         200,
         origin,

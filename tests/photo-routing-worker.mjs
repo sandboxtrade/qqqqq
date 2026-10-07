@@ -103,6 +103,26 @@ try {
   assert.equal(seed5.model, "bytedance/seedream-v5.0-lite/edit");
 
   calls.length = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), auth: options.headers?.Authorization, body: options.body });
+    if (String(url).includes("/wavespeed-ai/qwen-image/edit-2511")) {
+      const payload = JSON.parse(options.body);
+      assert.deepEqual(payload.images, ["https://example.com/avatar.jpg"]);
+      assert.equal(payload.prompt, "intimate private photo");
+      assert.equal(payload.seed, -1);
+      assert.equal(payload.output_format, "jpeg");
+      assert.equal(payload.enable_base64_output, false);
+      assert.equal(payload.enable_sync_mode, false);
+      return new Response(JSON.stringify({ data: { id: "qwen-task" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const qwen = await submitWaveSpeedImage({ WAVESPEED_API_KEY: "qwen-key" }, "intimate private photo", ["https://example.com/avatar.jpg"], "wavespeed-ai/qwen-image/edit-2511");
+  assert.equal(qwen.ok, true);
+  assert.equal(qwen.taskId, "qwen-task");
+  assert.equal(qwen.model, "wavespeed-ai/qwen-image/edit-2511");
+
+  calls.length = 0;
   globalThis.fetch = async (url) => {
     if (String(url).includes("/predictions/done-task/result")) {
       return new Response(JSON.stringify({ data: { status: "completed", outputs: ["https://cdn.example/result.jpeg"] } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -136,7 +156,7 @@ try {
   assert.equal(refs.debug[0]?.kind, "avatar-primary");
   assert.equal(referenceCalls.some((url) => /identity[-_]sheet/iu.test(url)), false, "identity sheet must not be queried when avatar is available");
 
-  console.log("PASS Seedream photo routing, multi-key, result and reference checks");
+  console.log("PASS WaveSpeed image routing, Qwen Image, multi-key, result and reference checks");
 } finally {
   globalThis.fetch = originalFetch;
   rmSync(dir, { recursive: true, force: true });
