@@ -233,13 +233,12 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(prompt, /Тон близости в переписке: сильно возбуждённый/);
-  assert.match(prompt, /Одежда и степень откровенности из итогового запроса/);
-  assert.match(prompt, /Уровень откровенности: умеренно интимный/);
-  assert.match(prompt, /Камера и ограничения: режим личного селфи/iu);
-  assert.match(prompt, /без видимого устройства|никаких устройств/iu);
+  assert.match(prompt, /same adult woman/iu);
+  assert.match(prompt, /clearly visible lingerie, with bra and panties/iu);
+  assert.match(prompt, /natural self-portrait framing/iu);
+  assert.match(prompt, /one direct photograph only/iu);
+  assert.doesNotMatch(prompt, /[А-Яа-яЁё]/u);
   assert.doesNotMatch(prompt, /смартфон|телефон|smartphone|\bphone\b/iu);
-  assert.match(prompt, /adult woman|женщин/iu);
   assert.doesNotMatch(prompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const toplessPrompt = worker.buildWaveSpeedPhotoPrompt({
@@ -249,8 +248,10 @@ try {
     world: { location: "bedroom" },
     signals: { emotionTone: "desire", intimacyTone: "high_arousal" },
   }, 1);
-  assert.match(toplessPrompt, /топлесс должен читаться явно/iu);
-  assert.match(toplessPrompt, /не заменять лифчиком, бельём/iu);
+  assert.match(toplessPrompt, /breasts are completely bare and fully visible, including nipples/iu);
+  assert.match(toplessPrompt, /No bra, no top/iu);
+  assert.doesNotMatch(toplessPrompt, /\btopless\b|\bnude\b|\bnaked\b/iu);
+  assert.doesNotMatch(toplessPrompt, /[А-Яа-яЁё]/u);
   assert.doesNotMatch(toplessPrompt, /\bgirl(?:s)?\b|девушк|девочк/iu);
 
   const lowPrompt = worker.buildPhotoPrompt({

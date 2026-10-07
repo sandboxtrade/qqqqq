@@ -2050,8 +2050,127 @@ function waveSpeedCompositionLine(spec) {
   return `${spec.composition}; дополнительное действие: ${spec.pose}`;
 }
 
+
+function explicitPhotoExposureMode(intent) {
+  const outfit = normalizePhotoRequestText(intent?.outfit || "");
+  if (/(?:topless|топлесс|груд[ьи]|сиськ|сос(?:ок|ки|ков))/u.test(outfit)) return "bare_breasts";
+  if (/(?:nude|naked|без\s+одежд|полностью\s+гол|совсем\s+гол|обнаж|нюд)/u.test(outfit)) return "fully_unclothed";
+  if (/(?:without\s+underwear|без\s+(?:нижн(?:его|ей)\s+белья|белья|трусик)|без\s+трус)/u.test(outfit)) return "no_underwear";
+  if (/(?:lingerie|underwear|bra|thong|бель|лифчик|бюстгальтер|трусик|стринг)/u.test(outfit)) return "lingerie";
+  return "requested_intimate";
+}
+
+function explicitPhotoLocationEn(value) {
+  const text = normalizePhotoRequestText(value || "");
+  if (/(?:спальн|bedroom|кроват)/u.test(text)) return "bedroom, near the bed";
+  if (/(?:ванн|bathroom|shower)/u.test(text)) return "bathroom";
+  if (/(?:спортзал|в\s+зале|gym)/u.test(text)) return "gym";
+  if (/(?:ресторан|restaurant)/u.test(text)) return "restaurant";
+  if (/(?:кафе|кофейн|cafe)/u.test(text)) return "cafe";
+  if (/(?:улиц|street|outdoor|outside|город)/u.test(text)) return "outdoors on a city street";
+  if (/(?:гостин|living_room|living room)/u.test(text)) return "living room";
+  if (/(?:отел|hotel)/u.test(text)) return "hotel room";
+  if (/(?:офис|office)/u.test(text)) return "office";
+  if (/(?:кухн|kitchen)/u.test(text)) return "kitchen";
+  if (/(?:пляж|beach)/u.test(text)) return "beach";
+  if (/(?:дом|home|apartment|квартир)/u.test(text)) return "home interior";
+  return "private indoor setting";
+}
+
+function explicitPhotoFramingEn(framing) {
+  if (framing === "full_body") return "full-body framing, head to feet visible, no important body part cropped";
+  if (framing === "upper_body") return "waist-up framing, with face, shoulders, chest and upper torso clearly visible";
+  if (framing === "portrait") return "close portrait framing, face and shoulders clearly visible";
+  if (framing === "mirror") return "mirror photo with a natural reflection; the phone may appear only as a normal object in her hand";
+  return "natural self-portrait framing, with the requested body area clearly visible";
+}
+
+function explicitPhotoPoseEn(value, framing) {
+  const text = normalizePhotoRequestText(value || "");
+  if (/(?:со\s+спины|вид\s+сзади|rear|back\s+view|ягодиц|попк|butt|booty)/u.test(text)) return "rear three-quarter view, hips naturally angled, looking back toward the camera";
+  if (/(?:на\s+животе|on\s+(?:her\s+)?stomach)/u.test(text)) return "lying naturally on her stomach";
+  if (/(?:на\s+спине|on\s+(?:her\s+)?back)/u.test(text)) return "lying naturally on her back";
+  if (/(?:леж|reclin)/u.test(text)) return "reclining naturally";
+  if (/(?:сид|seated|sitting)/u.test(text)) return "seated naturally with relaxed shoulders";
+  if (/(?:боком|пол-?оборот|three-quarter|side\s+view)/u.test(text)) return "natural three-quarter side view";
+  if (framing === "full_body") return "standing naturally with weight shifted to one leg and a slight body angle";
+  return "relaxed natural pose with a slight body angle and relaxed shoulders";
+}
+
+function explicitPhotoMoodEn(value, emotionTone, intimacyTone) {
+  const text = normalizePhotoRequestText(`${value || ""} ${emotionTone || ""} ${intimacyTone || ""}`);
+  if (/(?:shy|застен|смущ)/u.test(text)) return "soft, slightly shy eye contact";
+  if (/(?:playful|игрив|amused|весел)/u.test(text)) return "playful, provocative eye contact";
+  if (/(?:cold|холод|irrit|раздраж|angry|зл)/u.test(text)) return "cool, controlled, direct eye contact";
+  if (/(?:sensual|desire|aroused|high_arousal|возбуж|чувствен|flirty|флирт)/u.test(text)) return "confident, provocative direct eye contact";
+  if (/(?:confident|увер)/u.test(text)) return "confident direct eye contact";
+  if (/(?:relaxed|расслаб)/u.test(text)) return "relaxed, intimate eye contact";
+  return "confident, natural direct eye contact";
+}
+
+function explicitPhotoOutfitEn(value) {
+  const text = normalizePhotoRequestText(value || "");
+  const color = /(?:white|бел)/u.test(text) ? "white" : /(?:black|черн)/u.test(text) ? "black" : /(?:gray|grey|сер)/u.test(text) ? "gray" : /(?:red|красн)/u.test(text) ? "red" : /(?:pink|розов)/u.test(text) ? "pink" : /(?:beige|cream|беж)/u.test(text) ? "beige" : "";
+  const withColor = (item) => `${color ? `${color} ` : ""}${item}`;
+  if (/(?:лосин|леггинс|leggings)/u.test(text)) return withColor("leggings");
+  if (/(?:плать|dress)/u.test(text)) return withColor("dress");
+  if (/(?:юбк|skirt)/u.test(text)) return withColor("skirt");
+  if (/(?:джинс|jeans)/u.test(text)) return withColor("jeans");
+  if (/(?:шорт|shorts)/u.test(text)) return withColor("shorts");
+  if (/(?:топик|crop\s*top|\btop\b)/u.test(text)) return withColor("top");
+  if (/(?:activewear|спортивн)/u.test(text)) return withColor("fitted activewear");
+  if (/(?:casual|повседнев)/u.test(text)) return "fitted casual clothing";
+  return "the requested clothing";
+}
+
+function explicitPhotoExposureRuleEn(intent) {
+  const mode = explicitPhotoExposureMode(intent);
+  if (mode === "bare_breasts") {
+    return "EXPOSURE: her breasts are completely bare and fully visible, including nipples. No bra, no top, and no garment covers the chest. Nothing may cover or obscure the breasts: no hair, hands, arms, towel, sheet, or crop. Keep the lower body covered unless the request explicitly asks for more exposure.";
+  }
+  if (mode === "fully_unclothed") {
+    return "EXPOSURE: she is completely unclothed. No bra, no top, no underwear, no bottoms, no dress, no robe, no towel, and no sheet covering the body. Keep the requested body areas clearly visible within the framing.";
+  }
+  if (mode === "no_underwear") {
+    const outer = explicitPhotoOutfitEn(intent?.outfit || "");
+    return `OUTFIT: ${outer}. She is wearing no underwear underneath. Do not add panties or other underwear that was not requested.`;
+  }
+  if (mode === "lingerie") {
+    return "OUTFIT: clearly visible lingerie, with bra and panties. Do not replace it with casual clothing, pajamas, or swimwear.";
+  }
+  return "EXPOSURE: follow the requested intimate clothing and body exposure exactly. Do not make the image more covered than requested and do not add extra clothing.";
+}
+
+function buildWaveSpeedExplicitPhotoPrompt(packet, referenceCount = 0) {
+  const intent = packet?.decision?.intent || {};
+  const framing = ["selfie", "mirror", "portrait", "upper_body", "full_body"].includes(intent.framing) ? intent.framing : "upper_body";
+  const location = explicitPhotoLocationEn(intent.location || packet?.world?.location || "");
+  const pose = explicitPhotoPoseEn(intent.pose || "", framing);
+  const expression = explicitPhotoMoodEn(intent.mood, packet?.signals?.emotionTone, packet?.signals?.intimacyTone);
+  const exposure = explicitPhotoExposureRuleEn(intent);
+  const mirrorRule = framing === "mirror"
+    ? "OUTPUT: one direct mirror photograph only. No screen-within-screen, camera UI, collage, split image, text, or watermark."
+    : "OUTPUT: one direct photograph only. No device, screen, camera UI, frame, collage, split image, text, watermark, or picture-in-picture.";
+  return finalizeImagePrompt([
+    "Create ONE photorealistic private photo of the same adult woman from the reference image.",
+    referenceCount > 0
+      ? "IDENTITY: preserve the exact face, hair, skin tone, age, body build, breast size, waist, hips and proportions from the reference. Do not redesign her face or body."
+      : "IDENTITY: keep the same adult woman and body proportions.",
+    `SCENE: ${location}.`,
+    `FRAMING: ${explicitPhotoFramingEn(framing)}.`,
+    `POSE: ${pose}.`,
+    exposure,
+    `EXPRESSION: ${expression}.`,
+    "REALISM: natural skin, realistic anatomy and hands, coherent lighting, no extra limbs or distorted joints.",
+    mirrorRule,
+  ], 1250);
+}
+
 function buildWaveSpeedPhotoPrompt(packet, referenceCount = 0) {
   const spec = buildCanonicalPhotoSpec(packet);
+  if (["medium", "high"].includes(spec.suggestiveLevel)) {
+    return buildWaveSpeedExplicitPhotoPrompt(packet, referenceCount);
+  }
   const casual = spec.suggestiveLevel === "none";
   const suggestiveLabel = photoSuggestiveLabelRu(spec.suggestiveLevel);
   const intimacyToneMap = { flirty: "флиртующий", aroused: "возбуждённый", high_arousal: "сильно возбуждённый" };

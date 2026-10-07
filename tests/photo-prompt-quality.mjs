@@ -78,14 +78,16 @@ try {
     signals: { emotionTone: "shy", intimacyTone: "high_arousal" },
   }, 1);
   assert.doesNotMatch(intimate, forbidden);
-  assert.match(intimate, /женщин|adult woman/iu);
-  assert.match(intimate, /Уровень откровенности/iu);
-  assert.match(intimate, /топлесс должен читаться явно/iu);
-  assert.match(intimate, /Избегай Т-позы|Т-позы/iu);
-  assert.match(intimate, /полный рост|в кадре целиком видны/iu);
-  assert.match(intimate, /один цельный кадр|второго изображения внутри кадра/iu);
+  assert.match(intimate, /same adult woman/iu);
+  assert.match(intimate, /breasts are completely bare and fully visible, including nipples/iu);
+  assert.match(intimate, /No bra, no top/iu);
+  assert.match(intimate, /full-body framing, head to feet visible/iu);
+  assert.match(intimate, /one direct photograph only/iu);
+  assert.doesNotMatch(intimate, /\btopless\b|\bnude\b|\bnaked\b/iu);
+  assert.doesNotMatch(intimate, /[А-Яа-яЁё]/u, "medium/high WaveSpeed prompts must be English only");
   assert.doesNotMatch(intimate, /public\/assets\/profiles|avatar\.jpg|identity-sheet\.jpg/iu);
   assert.doesNotMatch(intimate, /смартфон|телефон|smartphone|\bphone\b/iu);
+  assert.ok(intimate.length < 1250, `explicit WaveSpeed prompt should stay compact: ${intimate.length}`);
 
   const directFullBody = worker.buildWaveSpeedPhotoPrompt({
     ...base,
@@ -98,7 +100,23 @@ try {
   assert.ok(directFullBody.split("\n").length >= 6, "prompt should remain structured instead of one giant paragraph");
   assert.doesNotMatch(directFullBody, /public\/assets|referenceAssetIds|identity-sheet\.(?:jpg|png)/iu);
 
-  console.log("PASS photo prompt adult wording, intimate intent fidelity and natural pose quality");
+  const fullyUnclothed = worker.buildWaveSpeedPhotoPrompt({
+    ...base,
+    decision: { intent: { framing: "full_body", mood: "confident", pose: "standing", location: "bedroom", outfit: "nude", suggestiveLevel: "high" } },
+  }, 1);
+  assert.match(fullyUnclothed, /completely unclothed/iu);
+  assert.match(fullyUnclothed, /No bra, no top, no underwear/iu);
+  assert.doesNotMatch(fullyUnclothed, /\bnude\b|\bnaked\b|\btopless\b/iu);
+  assert.doesNotMatch(fullyUnclothed, /[А-Яа-яЁё]/u);
+
+  const lingerie = worker.buildWaveSpeedPhotoPrompt({
+    ...base,
+    decision: { intent: { framing: "full_body", mood: "playful", pose: "standing", location: "bedroom", outfit: "lingerie", suggestiveLevel: "medium" } },
+  }, 1);
+  assert.match(lingerie, /clearly visible lingerie, with bra and panties/iu);
+  assert.doesNotMatch(lingerie, /[А-Яа-яЁё]/u);
+
+  console.log("PASS photo prompt adult wording, explicit English fidelity and natural pose quality");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
