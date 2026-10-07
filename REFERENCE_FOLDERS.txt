@@ -1,4 +1,4 @@
-Готовые папки референсов персонажей — v0.20.49
+Готовые папки референсов персонажей — v0.20.52
 
 В каждую папку можно положить:
 - avatar.jpg — основной ОДИНОЧНЫЙ портрет/референс личности; именно он приоритетен для WaveSpeed;
@@ -21,5 +21,6 @@ public/assets/profiles/mei/
 public/assets/profiles/alina/
 public/assets/profiles/vika/
 public/assets/profiles/anastasia/
+public/assets/profiles/diana/
 
 Для Seedream предпочтителен чистый одиночный avatar-reference. Не делай identity-sheet основным production reference: сетка может заражать композицию generated image.

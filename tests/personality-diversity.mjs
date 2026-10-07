@@ -26,7 +26,7 @@ registerHooks({
 const { characterProfiles } = await import("../src/character/character-registry.ts");
 const { createInitialWorldState, describeWorldActivityDetail, markUserInteraction } = await import("../src/world/world.ts");
 
-assert.ok(characterProfiles.length >= 17, "all social characters must remain registered");
+assert.ok(characterProfiles.length >= 18, "all social characters must remain registered");
 
 const personalityTexts = [];
 const voiceTexts = [];

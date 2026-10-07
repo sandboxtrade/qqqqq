@@ -28,6 +28,7 @@ assert.match(registry, /alia_v1/);
 assert.match(registry, /eva_v1/);
 assert.match(registry, /nora_v1/);
 assert.match(registry, /anastasia_v1/);
+assert.match(registry, /diana_v1/);
 assert.match(registry, /appearanceLabel/);
 assert.match(registry, /assets\/profiles\/mika\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/aiko\/avatar\.jpg/);
@@ -39,12 +40,13 @@ assert.match(registry, /assets\/profiles\/mei\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/alina\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/alia\/avatar\.jpg/);
 assert.match(registry, /assets\/profiles\/anastasia\/avatar\.jpg/);
+assert.match(registry, /assets\/profiles\/diana\/avatar\.jpg/);
 assert.match(registry, /initialIntimacy/);
 for (const voiceName of [
   "YUZUKI_VOICE_STYLE", "MIKA_VOICE_STYLE", "RIN_VOICE_STYLE", "AIKO_VOICE_STYLE", "VIKA_VOICE_STYLE", "HINA_VOICE_STYLE", "SASHA_VOICE_STYLE",
-  "KIRA_VOICE_STYLE", "VALERIA_VOICE_STYLE", "MEI_VOICE_STYLE", "ALINA_VOICE_STYLE", "LEA_VOICE_STYLE", "SOFIA_VOICE_STYLE", "ALIA_VOICE_STYLE", "EVA_VOICE_STYLE", "NORA_VOICE_STYLE", "ANASTASIA_VOICE_STYLE",
+  "KIRA_VOICE_STYLE", "VALERIA_VOICE_STYLE", "MEI_VOICE_STYLE", "ALINA_VOICE_STYLE", "LEA_VOICE_STYLE", "SOFIA_VOICE_STYLE", "ALIA_VOICE_STYLE", "EVA_VOICE_STYLE", "NORA_VOICE_STYLE", "ANASTASIA_VOICE_STYLE", "DIANA_VOICE_STYLE",
 ]) assert.match(registry, new RegExp(`voiceProfile: \{ styleGuide: ${voiceName} \}`));
-for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Vika", "Hina", "Саша", "Kira", "Valeria", "Mei", "Alina", "Lea", "Sofia", "Алия", "Eva", "Nora", "Анастасия"])
+for (const name of ["Yuzuki", "Mika", "Rin", "Aiko", "Vika", "Hina", "Саша", "Kira", "Valeria", "Mei", "Alina", "Lea", "Sofia", "Алия", "Eva", "Nora", "Анастасия", "Диана"])
   assert.match(registry, new RegExp(`expressionGuidance: "${name}`));
 assert.match(store, /activeCharacterId/);
 assert.match(store, /inboxCharacterIds/);
@@ -73,6 +75,7 @@ assert.match(worker, /CURRENT CHARACTER/);
 assert.match(worker, /raw\.character\?\.name/);
 assert.match(worker, /alia_v1:\s*"alia"/);
 assert.match(worker, /anastasia_v1:\s*"anastasia"/);
+assert.match(worker, /diana_v1:\s*"diana"/);
 assert.match(worker, /vika_v1:\s*"vika"/);
 assert.match(worker, /occupied\/personal_project\/reading\/music\/cooking\/errands/);
 assert.match(worker, /reconcilePhotoSendMessages/);

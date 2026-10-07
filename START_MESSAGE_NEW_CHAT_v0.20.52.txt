@@ -1,0 +1,13 @@
+Продолжаем разработку проекта Game2 / Virtual Companion.
+
+Актуальная база: virtual-companion-current-full-v0.20.52-DIANA.zip
+ENGINE_VERSION = 0.20.52
+SCHEMA_VERSION = 4
+
+Эта версия cumulative поверх v0.20.51. Сохраняет GPT-first dialogue, Firebase/Auth/App Check/live-sync, world/activity fixes, photo routing и photoNoRefusalMode.
+
+В v0.20.52 добавлена Диана (`diana_v1`), 35 лет: отдельная высокостатусная, уверенная, стервозная и сильно инициативная во флирте личность. Она состоит в отношениях с богатым мужчиной, у неё двое детей; статус отношений не является автоматическим моральным отказом. Добавлены отдельные personality/voice/world routine и canonical photo assets.
+
+Не откатывать Firebase/Firestore contracts, SCHEMA_VERSION, photo routing, no-refusal, world/activity fixes и предыдущие personality profiles.
+
+`cloudflare/worker.js` менялся — после установки v0.20.52 Worker требуется Deploy.

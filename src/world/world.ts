@@ -482,6 +482,33 @@ const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldAct
       "читаю интервью с фотографом и спорю с ним у себя в голове",
     ],
   },
+  diana_v1: {
+    personal_project: [
+      "заехала в шоурум посмотреть новую поставку и уже половину вещей мысленно забраковала",
+      "проверяю, что девочки в шоуруме опять не сделали витрину слишком скучной",
+      "разбираю рабочие сообщения и думаю, сколько людей умеют усложнить совершенно простую задачу",
+    ],
+    cafe_break: [
+      "сижу на кофе между встречами и лениво наблюдаю за людьми вокруг",
+      "взяла себе полчаса в хорошем месте и не собираюсь никому объяснять, почему не спешу",
+    ],
+    errands: [
+      "езжу по делам между школой, шоурумом и парой личных встреч",
+      "закрываю семейные и рабочие мелочи, но уже думаю, куда исчезнуть вечером хотя бы на час",
+    ],
+    walk: [
+      "вышла пройтись после дел и специально иду медленнее, чем обычно",
+      "гуляю по набережной и наслаждаюсь тем, что сейчас никто от меня ничего не хочет",
+    ],
+    relaxing: [
+      "наконец дома одна на диване и наслаждаюсь редкой тишиной",
+      "отдыхаю после длинного дня и листаю телефон без особой цели",
+    ],
+    music: [
+      "включила музыку пока собираюсь и уже меняю третий образ",
+      "слушаю плейлист перед выходом и решаю, насколько вызывающе хочу выглядеть сегодня",
+    ],
+  },
   anastasia_v1: {
     personal_project: [
       "разбираю рабочие заметки и периодически отвлекаюсь на мысли вообще не о работе",
@@ -686,6 +713,17 @@ const CHARACTER_ROUTINES: Record<string, readonly RoutineWindow[]> = {
     { start: 14, end: 17, activities: ["cafe_break", "walk"], targetEnergy: .62 },
     { start: 17, end: 20, activities: ["cooking", "reading"], targetEnergy: .5 },
     { start: 20, end: 24, activities: ["relaxing", "reading", "music"], targetEnergy: .36 },
+  ],
+  diana_v1: [
+    { start: 0, end: 1, activities: ["relaxing", "music"], targetEnergy: .52 },
+    { start: 1, end: 7, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .88 },
+    { start: 7, end: 8, activities: ["waking_up"], location: "bedroom", availability: "resting", targetEnergy: .48 },
+    { start: 8, end: 10, activities: ["breakfast", "errands"], targetEnergy: .72 },
+    { start: 10, end: 14, activities: ["personal_project", "errands"], availability: "occupied", targetEnergy: .8 },
+    { start: 14, end: 16, activities: ["cafe_break", "personal_project"], targetEnergy: .7 },
+    { start: 16, end: 19, activities: ["errands", "walk", "personal_project"], targetEnergy: .68 },
+    { start: 19, end: 22, activities: ["music", "walk", "cafe_break"], targetEnergy: .76 },
+    { start: 22, end: 24, activities: ["relaxing", "music"], targetEnergy: .62 },
   ],
   anastasia_v1: [
     { start: 0, end: 6, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .85 },

@@ -1,4 +1,4 @@
-# Game2 / Virtual Companion — v0.20.49
+# Game2 / Virtual Companion — v0.20.52
 
 Current architecture: GPT-first dialogue + mechanical local state + Firebase persistence/live-sync.
 
@@ -26,7 +26,7 @@ Medium / high intimate:
 
 Photo intent is mechanically normalized before provider prompting. A recent photo session can inherit framing/outfit/location/pose, while an explicit new modifier overwrites only the requested fields.
 
-WaveSpeed reference policy in v0.20.49:
+WaveSpeed reference policy:
 
 1. single `avatar.*` reference first;
 2. multi-view `identity-sheet.*` only as fallback.
@@ -53,3 +53,9 @@ npm run verify
 ```
 
 `cloudflare/worker.js` must be deployed separately whenever it changes.
+
+## v0.20.52 character addition
+
+- Added `diana_v1`: 35-year-old luxury-oriented, highly assertive and strongly flirt-initiating character with a wealthy partner and two children.
+- Added dedicated voice/personality/world routine and canonical photo assets.
+- `SCHEMA_VERSION` remains 4.

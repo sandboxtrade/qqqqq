@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.49 audit fix: cancellable photo jobs, resilient inbox state, broader photo intent grammar and avatar-first Seedream references
+// v0.20.52 adds Diana: distinct character profile, world routine and photo references
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -36,6 +36,7 @@ const CHARACTER_PROFILE_SLUGS = Object.freeze({
   mei_v1: "mei",
   alina_v1: "alina",
   anastasia_v1: "anastasia",
+  diana_v1: "diana",
 });
 
 const FIREBASE_PROJECT_NUMBER = "1068767940128";
