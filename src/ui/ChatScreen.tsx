@@ -1,6 +1,7 @@
 import {
   type FormEvent,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -59,11 +60,11 @@ export function ChatScreen({
   const [showNewMessages, setShowNewMessages] = useState(false);
   const [openedPhoto, setOpenedPhoto] = useState<{ src: string; alt: string; caption?: string } | null>(null);
   const [photoScale, setPhotoScale] = useState(1);
-  const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const nearBottomRef = useRef(true);
   const mountedRef = useRef(false);
+  const characterRef = useRef(characterName);
 
   const updateBottomState = () => {
     const node = scrollRef.current;
@@ -75,18 +76,26 @@ export function ChatScreen({
   };
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    const node = scrollRef.current;
+    if (!node) return;
     nearBottomRef.current = true;
     setShowNewMessages(false);
-    endRef.current?.scrollIntoView({ behavior, block: "end" });
+    const target = Math.max(0, node.scrollHeight - node.clientHeight);
+    if (behavior === "auto") {
+      node.scrollTop = target;
+      return;
+    }
+    node.scrollTo({ top: target, behavior });
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
     const height = Math.min(textarea.scrollHeight, 96);
     textarea.style.height = `${Math.max(22, height)}px`;
     textarea.style.overflowY = textarea.scrollHeight > 96 ? "auto" : "hidden";
+    if (nearBottomRef.current) scrollToBottom("auto");
   }, [draft]);
 
   useEffect(() => {
@@ -104,18 +113,34 @@ export function ChatScreen({
     };
   }, [openedPhoto]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (characterRef.current !== characterName) {
+      characterRef.current = characterName;
+      nearBottomRef.current = true;
+      setShowNewMessages(false);
+      scrollToBottom("auto");
+      return;
+    }
     if (!mountedRef.current) {
       mountedRef.current = true;
-      window.requestAnimationFrame(() => scrollToBottom("auto"));
+      scrollToBottom("auto");
       return;
     }
     if (nearBottomRef.current) {
-      window.requestAnimationFrame(() => scrollToBottom("smooth"));
-    } else {
+      scrollToBottom("auto");
+    }
+  }, [characterName, messages.at(-1)?.id, messages.at(-1)?.imageStatus, streamingText, busy, phase]);
+
+  useEffect(() => {
+    if (!nearBottomRef.current && (messages.at(-1)?.id || streamingText)) {
       setShowNewMessages(true);
     }
   }, [messages.at(-1)?.id, streamingText]);
+
+  const handlePhotoLoaded = () => {
+    if (!nearBottomRef.current) return;
+    window.requestAnimationFrame(() => scrollToBottom("auto"));
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -202,6 +227,7 @@ export function ChatScreen({
                         alt={message.imageAlt || `Фото от ${characterName}`}
                         loading="lazy"
                         decoding="async"
+                        onLoad={handlePhotoLoaded}
                       />
                     </button>
                   ) : (
@@ -272,7 +298,6 @@ export function ChatScreen({
           </div>
         )}
 
-        <div ref={endRef} />
         {showNewMessages && (
           <button className="new-messages-button" type="button" onClick={() => scrollToBottom("smooth")}>
             Новые сообщения ↓

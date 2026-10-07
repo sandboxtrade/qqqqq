@@ -7,7 +7,7 @@ const chat = readFileSync(new URL("../src/ui/ChatScreen.tsx", import.meta.url), 
 const worker = readFileSync(new URL("../cloudflare/worker.js", import.meta.url), "utf8");
 const version = readFileSync(new URL("../src/config/version.ts", import.meta.url), "utf8");
 
-assert.match(version, /ENGINE_VERSION = "0\.20\.52"/);
+assert.match(version, /ENGINE_VERSION = "0\.20\.53"/);
 assert.match(version, /SCHEMA_VERSION = 4/);
 
 // Pending photo work must be a first-class cancellable job, not a detached timer.

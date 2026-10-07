@@ -1928,6 +1928,7 @@ body { overscroll-behavior: none; }
   padding: 14px 14px 12px;
   gap: 8px;
   -webkit-overflow-scrolling: touch;
+  overflow-anchor: none;
 }
 .social-content .message-row { max-width: 100%; }
 .social-content .bubble {

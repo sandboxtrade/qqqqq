@@ -1,4 +1,4 @@
-# Game2 / Virtual Companion — v0.20.52
+# Game2 / Virtual Companion — v0.20.53
 
 Current architecture: GPT-first dialogue + mechanical local state + Firebase persistence/live-sync.
 
@@ -53,6 +53,11 @@ npm run verify
 ```
 
 `cloudflare/worker.js` must be deployed separately whenever it changes.
+
+
+## v0.20.53 chat scroll stability
+
+Chat auto-follow now scrolls only the internal conversation container. Sending, receiving, streaming and photo layout changes keep the bottom pinned only while the reader is already at the bottom; manual history reading is preserved.
 
 ## v0.20.52 character addition
 

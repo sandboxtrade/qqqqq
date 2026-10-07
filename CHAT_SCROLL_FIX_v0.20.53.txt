@@ -1,0 +1,23 @@
+Game2 / Virtual Companion v0.20.53
+
+Fix: chat no longer jumps slightly upward when sending or receiving messages.
+
+Root cause:
+- ChatScreen used endRef.scrollIntoView(), which can scroll ancestor containers / the page as well as the chat scroller.
+- Smooth scrolling was retriggered on message and streaming updates.
+- Browser scroll anchoring could fight the app's own bottom-follow behavior.
+- Composer and loaded-image height changes could alter the viewport after the scroll calculation.
+
+Changes:
+- Scroll the .chat-scroll element directly via scrollTop/scrollTo.
+- Use useLayoutEffect so bottom pinning happens before paint.
+- Auto-follow only while the user is already near the bottom.
+- Keep manual history reading untouched and show "Новые сообщения" instead.
+- Re-pin after image load only if the user was at the bottom.
+- Re-pin after composer height changes.
+- Reset the anchor correctly when switching characters.
+- Set overflow-anchor:none on the chat scroller.
+
+ENGINE_VERSION=0.20.53
+SCHEMA_VERSION=4
+Cloudflare Worker unchanged; no Worker redeploy required.
