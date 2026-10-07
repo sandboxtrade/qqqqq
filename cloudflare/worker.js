@@ -1,5 +1,5 @@
 // Yuzuki GPT-first Conversation Layer — Cloudflare Worker
-// v0.20.55 routes medium/high intimate still photos through Qwen Image Edit for better identity retention.
+// v0.20.58 adds expression variance so the generated face is not a 1:1 mimic of the reference expression.
 // GPT owns conversation. Editable personality + manual long-term memory are the
 // only durable narrative context. Local engine owns mechanical state/constraints.
 
@@ -68,7 +68,7 @@ const WAVESPEED_SUBMIT_KEY_TIMEOUT_MS = 10_000;
 const WAVESPEED_SUBMIT_TOTAL_BUDGET_MS = 30_000;
 const WAVESPEED_RESULT_KEY_TIMEOUT_MS = 4_000;
 const WAVESPEED_RESULT_TOTAL_BUDGET_MS = 14_000;
-const WAVESPEED_OUTPUT_TIMEOUT_MS = 7_000;
+const WAVESPEED_OUTPUT_TIMEOUT_MS = 12_000;
 const PROFILE_IDENTITY_FILENAMES = ["identity-sheet.jpg", "identity-sheet.jpeg", "identity-sheet.png", "identity_sheet.jpg", "identity_sheet.png"];
 
 // GPT-6 Luna Standard pricing, USD / 1M tokens.
@@ -2154,8 +2154,8 @@ function buildWaveSpeedExplicitPhotoPrompt(packet, referenceCount = 0) {
   return finalizeImagePrompt([
     "Create ONE photorealistic private photo of the same adult woman from the reference image.",
     referenceCount > 0
-      ? "IDENTITY: preserve the exact face, hair, skin tone, age, body build, breast size, waist, hips and proportions from the reference. Do not redesign her face or body."
-      : "IDENTITY: keep the same adult woman and body proportions.",
+      ? "IDENTITY: preserve the exact face, hair, skin tone, age, body build, breast size, waist, hips and proportions from the reference. Do not redesign her face or body. Keep the same identity, but do not copy the exact facial expression, eye expression, or facial muscle tension from the reference image."
+      : "IDENTITY: keep the same adult woman and body proportions. The identity must stay the same, but the facial expression should be newly generated for this image.",
     `SCENE: ${location}.`,
     `FRAMING: ${explicitPhotoFramingEn(framing)}.`,
     `POSE: ${pose}.`,
@@ -2580,9 +2580,21 @@ async function submitWaveSpeedImage(env, prompt, referenceUrls = [], model = WAV
   return { skipped: true, reason: "wavespeed-submit-budget-exhausted", model, retryable: true };
 }
 
+function sniffImageMime(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < 4) return "";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return "image/webp";
+  return "";
+}
+
 async function downloadWaveSpeedOutput(url) {
   let lastReason = "wavespeed-output-fetch-failed";
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("wavespeed-output-timeout")), WAVESPEED_OUTPUT_TIMEOUT_MS);
     try {
@@ -2591,11 +2603,7 @@ async function downloadWaveSpeedOutput(url) {
         lastReason = `wavespeed-output-http-${imageResponse.status}`;
         continue;
       }
-      const mimeType = asString(imageResponse.headers.get("Content-Type"), "", 80).toLowerCase();
-      if (!mimeType.startsWith("image/")) {
-        lastReason = "wavespeed-output-invalid-content-type";
-        continue;
-      }
+      const declaredMimeType = asString(imageResponse.headers.get("Content-Type"), "", 80).toLowerCase().split(";", 1)[0];
       const declaredLength = Number(imageResponse.headers.get("Content-Length"));
       if (Number.isFinite(declaredLength) && declaredLength > MAX_GENERATED_IMAGE_BYTES) {
         return { skipped: true, reason: "wavespeed-output-too-large" };
@@ -2603,6 +2611,12 @@ async function downloadWaveSpeedOutput(url) {
       const bytes = new Uint8Array(await imageResponse.arrayBuffer());
       if (!bytes.byteLength || bytes.byteLength > MAX_GENERATED_IMAGE_BYTES) {
         return { skipped: true, reason: bytes.byteLength ? "wavespeed-output-too-large" : "wavespeed-output-empty" };
+      }
+      const sniffedMimeType = sniffImageMime(bytes);
+      const mimeType = declaredMimeType.startsWith("image/") ? declaredMimeType : sniffedMimeType;
+      if (!mimeType) {
+        lastReason = "wavespeed-output-invalid-image";
+        continue;
       }
       let binary = "";
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -2612,7 +2626,7 @@ async function downloadWaveSpeedOutput(url) {
     } finally {
       clearTimeout(timer);
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, 900 * (attempt + 1)));
   }
   return { skipped: true, reason: lastReason };
 }
@@ -2677,6 +2691,21 @@ async function readWaveSpeedImage(env, taskId, model = WAVESPEED_MODEL, options 
         // separate retry budget so a late output fetch cannot discard the job.
         const downloaded = await downloadWaveSpeedOutput(url);
         if (downloaded.ok !== true) {
+          // The generation itself is already complete. A transient CDN/output
+          // fetch problem must not turn a paid, valid image into a failed chat
+          // bubble. Keep the task pending so the next client poll retries only
+          // the download of this same finished result.
+          if (!["wavespeed-output-too-large", "wavespeed-output-empty", "wavespeed-output-invalid-image"].includes(downloaded.reason)) {
+            return {
+              ok: true,
+              pending: true,
+              reason: downloaded.reason,
+              model,
+              taskId: id,
+              credentialAttempt: index + 1,
+              credentialCount: credentials.length,
+            };
+          }
           return { ...downloaded, model, taskId: id };
         }
         return {

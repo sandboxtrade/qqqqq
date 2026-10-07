@@ -79,6 +79,7 @@ try {
   }, 1);
   assert.doesNotMatch(intimate, forbidden);
   assert.match(intimate, /same adult woman/iu);
+  assert.match(intimate, /do not copy the exact facial expression, eye expression, or facial muscle tension from the reference image/iu);
   assert.match(intimate, /breasts are completely bare and fully visible, including nipples/iu);
   assert.match(intimate, /No bra, no top/iu);
   assert.match(intimate, /full-body framing, head to feet visible/iu);

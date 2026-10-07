@@ -1,14 +1,14 @@
 {
   "name": "virtual-companion-core",
   "private": true,
-  "version": "0.20.56",
+  "version": "0.20.58",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
-    "test": "node tests/regression.mjs && node tests/local-dialogue.mjs && node tests/ai-transport.mjs && node tests/cloud-language.mjs && node tests/social-architecture.mjs && node tests/alia-character.mjs && node tests/app-check-guard.mjs && node tests/firebase-stability.mjs && node tests/photo-messages.mjs && node tests/intimacy-photo-speech.mjs && node tests/photo-routing-worker.mjs && node tests/personality-diversity.mjs && node tests/audit-fixes.mjs && node tests/deploy-workflow.mjs && node tests/anastasia-character.mjs && node tests/diana-character.mjs && node tests/chat-scroll-stability.mjs && node tests/photo-prompt-quality.mjs",
+    "test": "node tests/regression.mjs && node tests/local-dialogue.mjs && node tests/ai-transport.mjs && node tests/cloud-language.mjs && node tests/social-architecture.mjs && node tests/alia-character.mjs && node tests/app-check-guard.mjs && node tests/firebase-stability.mjs && node tests/photo-messages.mjs && node tests/intimacy-photo-speech.mjs && node tests/photo-routing-worker.mjs && node tests/personality-diversity.mjs && node tests/audit-fixes.mjs && node tests/deploy-workflow.mjs && node tests/anastasia-character.mjs && node tests/diana-character.mjs && node tests/chat-scroll-stability.mjs && node tests/photo-delivery-resilience.mjs && node tests/photo-prompt-quality.mjs",
     "verify": "npm test && npm run typecheck && npm run build"
   },
   "dependencies": {
