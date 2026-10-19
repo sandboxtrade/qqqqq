@@ -362,6 +362,26 @@ function invalidate(preservePhotos = false) {
   return epoch;
 }
 
+function localDeliveredPhotoMessage(
+  parentReplyId: string,
+  timestamp: number,
+  decision: CloudPhotoDecision,
+  dataUrl: string,
+): ChatMessage {
+  return {
+    id: `photo_${parentReplyId}`,
+    role: "character",
+    text: decision.caption ?? "",
+    timestamp,
+    kind: "image",
+    imageUrl: dataUrl,
+    imageStatus: "ready",
+    photoReason: decision.reason,
+    photoIntent: decision.intent,
+    delivery: "saved",
+  };
+}
+
 function queueGeneratedPhotoDelivery(
   version: number,
   uid: string | null,
@@ -410,15 +430,20 @@ function queueGeneratedPhotoDelivery(
     }
     const controller = new AbortController();
     job.controller = controller;
-    void persistGeneratedPhotoMessage(
-      uid,
+    void bounded(
+      persistGeneratedPhotoMessage(
+        uid,
+        controller.signal,
+        characterId,
+        decision,
+        parentReplyId,
+        timestamp + 900,
+        runtime ?? undefined,
+        signals,
+      ),
+      9 * 60_000,
+      "Доставка фото",
       controller.signal,
-      characterId,
-      decision,
-      parentReplyId,
-      timestamp + 900,
-      runtime ?? undefined,
-      signals,
     )
       .then((photo) => {
         if (!photo || controller.signal.aborted) return;
@@ -446,15 +471,20 @@ function queueGeneratedPhotoDelivery(
         const cached = await loadLocalPhoto(`photo_${parentReplyId}`, uid).catch(() => null);
         if (cached?.dataUrl && !controller.signal.aborted && (useAppStore.getState().user?.uid ?? null) === uid) {
           try {
-            const recovered = await persistGeneratedPhotoMessage(
-              uid,
+            const recovered = await bounded(
+              persistGeneratedPhotoMessage(
+                uid,
+                controller.signal,
+                characterId,
+                decision,
+                parentReplyId,
+                cached.createdAt || timestamp + 900,
+                runtime ?? undefined,
+                signals,
+              ),
+              20_000,
+              "Сохранение фото",
               controller.signal,
-              characterId,
-              decision,
-              parentReplyId,
-              cached.createdAt || timestamp + 900,
-              runtime ?? undefined,
-              signals,
             );
             if (recovered && !controller.signal.aborted && (useAppStore.getState().user?.uid ?? null) === uid) {
               if (uid) removePhotoJob(uid, parentReplyId);
@@ -475,7 +505,28 @@ function queueGeneratedPhotoDelivery(
               return;
             }
           } catch {
-            // Fall through to the visible failed state below.
+            // Fall back to immediate local delivery below.
+          }
+          if (!controller.signal.aborted && (useAppStore.getState().user?.uid ?? null) === uid) {
+            const fallbackPhoto = localDeliveredPhotoMessage(
+              parentReplyId,
+              cached.createdAt || timestamp + 900,
+              decision,
+              cached.dataUrl,
+            );
+            useAppStore.setState((state) => {
+              if (state.activeCharacterId !== characterId || (state.user?.uid ?? null) !== uid) return state;
+              const withoutPending = state.messages.filter((message) => message.id !== pendingId);
+              return {
+                messages: mergeChatMessages(withoutPending, [fallbackPhoto]),
+                maintenanceError: "Фото было сгенерировано и показано локально. Сохранение в истории будет повторено позже.",
+              };
+            });
+            markCharacterHasConversation(
+              characterId,
+              conversationPreviewFromLines([fallbackPhoto]),
+            );
+            return;
           }
         }
 
