@@ -1,14 +1,14 @@
 {
   "name": "alexandra-companion",
   "private": true,
-  "version": "0.21.15",
+  "version": "0.21.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
-    "test": "node tests/alexandra-foundation.mjs && node tests/alexandra-photo-pipeline.mjs && node tests/photo-wardrobe.mjs && node tests/dark-economy.mjs && node tests/deploy-typecheck.mjs && node tests/firebase-transport-regression.mjs && node tests/social-network.mjs && node tests/ui-refresh.mjs",
+    "test": "node tests/alexandra-foundation.mjs && node tests/alexandra-photo-pipeline.mjs && node tests/photo-wardrobe.mjs && node tests/dark-economy.mjs && node tests/deploy-typecheck.mjs && node tests/firebase-transport-regression.mjs && node tests/social-network.mjs && node tests/ui-refresh.mjs && node tests/message-stability.mjs",
     "verify": "npm test && npm run typecheck && npm run build"
   },
   "dependencies": {

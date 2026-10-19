@@ -32,14 +32,17 @@ const finishedImage = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const finalChatPrompt = "g2girl01, photorealistic casual smartphone selfie at an office desk, working with documents, modest white blouse, slightly tired expression, afternoon window light, natural camera perspective";
 const finalPresencePrompt = "g2girl01, natural candid documentary photograph of one adult woman at her desk in a busy modern office, typing at a laptop, papers and planner nearby, modest professional outfit, authentic indoor lighting, believable camera snapshot, 3:4 composition";
 function json(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }); }
-function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt, failCdnOnce = false } = {}) {
+function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt, failCdnOnce = false, falsePhotoPromise = false, missingApprovedPrompt = false, authReject = false, authUnavailable = false } = {}) {
   let cdnCalls = 0;
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     calls.push({ url, init, payload: init.body && String(init.body).startsWith("{") ? JSON.parse(init.body) : null });
     if (url.includes("firebaseappcheck.googleapis.com/v1/jwks")) return json({ keys: [{ ...jwk, kid: "photo-test-key", alg: "RS256", use: "sig" }] });
-    if (url.includes("identitytoolkit.googleapis.com")) return json({ users: [{ localId: "photo-test-user" }] });
+    if (url.includes("identitytoolkit.googleapis.com")) {
+      if (authUnavailable) throw new Error("Temporary Google identity lookup outage");
+      return authReject ? json({ error: { message: "INVALID_ID_TOKEN" } }, 400) : json({ users: [{ localId: "photo-test-user" }] });
+    }
     if (url === "https://api.openai.com/v1/responses") {
       const payload = JSON.parse(init.body);
       if (payload.text.format.name === "alexandra_presence_prompt")
@@ -47,11 +50,11 @@ function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatProm
       if (payload.text.format.name === "alexandra_required_photo_prompt")
         return json({ output_text: JSON.stringify({ prompt: photoPrompt }) });
       return json({ output_text: JSON.stringify({
-        messages: [modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
+        messages: [falsePhotoPromise ? "Ладно, вот кадр — держи фото)" : modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
         emotionReaction: Object.fromEntries(["happiness", "sadness", "irritation", "anxiety", "curiosity", "boredom", "affection", "romanticInterest"].map(x => [x, 0])),
         relationshipReaction: Object.fromEntries(["trust", "closeness", "attachment", "security", "respect", "unresolvedTension"].map(x => [x, 0])),
         intimacyReaction: Object.fromEntries(["comfort", "interest", "arousal", "initiativeDrive"].map(x => [x, 0])),
-        photoDecision: { shouldSendPhoto: !modelRefuses, reason: modelRefuses ? "none" : "user_requested", caption: modelRefuses ? "" : "Держи)", prompt: modelRefuses ? "" : photoPrompt,
+        photoDecision: { shouldSendPhoto: !modelRefuses, reason: modelRefuses ? "none" : "user_requested", caption: modelRefuses ? "" : "Держи)", prompt: modelRefuses || missingApprovedPrompt ? "" : photoPrompt,
           intent: { framing: "selfie", mood: "slightly tired", pose: "holding phone", location: "office", outfit: "white blouse", suggestiveLevel: "none" } },
       }) });
     }
@@ -281,5 +284,58 @@ test("long existing conversation is not rejected by obsolete 76 KB Worker input 
     const result = await call("/yuzukiSpeak", payload);
     assert.equal(result.status, 200);
     assert.equal(result.data.photoDecision?.shouldSendPhoto, true);
+  } finally { restore(); }
+});
+
+
+test("GPT cannot claim an image was delivered when photoDecision refuses or trust gate blocks it", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { modelRefuses: true, falsePhotoPromise: true });
+  try {
+    const result = await call("/yuzukiSpeak", { ...dialogueInput, photoPolicy: { noRefusalMode: false } });
+    assert.equal(result.data.photoDecision.shouldSendPhoto, false);
+    assert.doesNotMatch(result.data.text, /вот кадр|держи фото/iu);
+    assert.match(result.data.text, /фото.*не получилось/iu);
+    assert.equal(calls.filter(x => x.url.includes("wavespeed-ai/z-image")).length, 0);
+  } finally { restore(); }
+});
+
+test("Accepted photo without a prompt gets GPT repair before signing and starting WaveSpeed", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { missingApprovedPrompt: true, falsePhotoPromise: true });
+  try {
+    const response = await call("/yuzukiSpeak", dialogueInput);
+    assert.equal(response.data.photoDecision.shouldSendPhoto, true);
+    assert.equal(response.data.photoDecision.prompt, finalChatPrompt);
+    assert.doesNotMatch(response.data.text, /вот кадр|держи фото/iu);
+    assert.equal(calls.filter(c => c.payload?.text?.format?.name === "alexandra_required_photo_prompt").length, 1);
+    const start = await call("/yuzukiPhoto", { character: dialogueInput.character, decision: response.data.photoDecision });
+    assert.equal(start.status, 200);
+    assert.equal(start.data.pending, true);
+  } finally { restore(); }
+});
+
+
+test("Worker distinguishes App Check rejection, invalid Firebase Auth and a temporary Auth outage", async () => {
+  const calls = [];
+  let restore = installMocks(calls);
+  try {
+    const badHeaders = { ...authHeader, "X-Firebase-AppCheck": "not-a-valid-jwt" };
+    const invalidAppCheck = await worker.fetch(new Request(`${base}/yuzukiSpeak`, { method: "POST", headers: badHeaders,
+      body: JSON.stringify(dialogueInput) }), env);
+    assert.equal(invalidAppCheck.status, 401);
+    assert.equal((await invalidAppCheck.json()).reason, "app-check-invalid");
+  } finally { restore(); }
+  restore = installMocks(calls, { authReject: true });
+  try {
+    const invalidAuth = await call("/yuzukiSpeak", dialogueInput);
+    assert.equal(invalidAuth.status, 401);
+    assert.equal(invalidAuth.data.reason, "firebase-auth-invalid");
+  } finally { restore(); }
+  restore = installMocks(calls, { authUnavailable: true });
+  try {
+    const outage = await call("/yuzukiSpeak", dialogueInput);
+    assert.equal(outage.status, 503);
+    assert.equal(outage.data.reason, "firebase-auth-upstream-unavailable");
   } finally { restore(); }
 });
