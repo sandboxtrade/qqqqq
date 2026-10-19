@@ -1,6 +1,6 @@
-# Game2 v0.21.3 — Alexandra · Social & Economy Foundation
+# Game2 v0.21.5 — Alexandra · Social & Economy Foundation
 
-Первый накопительный шаг после `v0.21.2`. **Рабочая база — только этот архив, не старый GitHub и не отдельный патч.**
+Накопительное обновление поверх `v0.21.3`. **Рабочая база — только этот архив, не старый GitHub и не отдельный патч.**
 
 ## Интерфейс
 
@@ -30,6 +30,14 @@ npm run typecheck
 npm run build
 ```
 
-Сохранили `SCHEMA_VERSION = 4`, формат истории и Firestore-контракты персонажей. `ENGINE_VERSION = 0.21.3`. Отдельные данные пользователя находятся по пути `users/{uid}/player/{profile|economy}`; в локальном dev — localStorage. Future discovery и фоновое инициирование новых чатов по заинтересованности пока только предусмотрены архитектурно, не имитируются.
+Сохранили `SCHEMA_VERSION = 4`, формат истории и Firestore-контракты персонажей. `ENGINE_VERSION = 0.21.4`. Отдельные данные пользователя находятся по пути `users/{uid}/player/{profile|economy}`; в локальном dev — localStorage. Future discovery и фоновое инициирование новых чатов по заинтересованности пока только предусмотрены архитектурно, не имитируются.
 
 Архив не выкладывался в GitHub / Cloudflare. Проверки, доступные в этом окружении, описаны в `RELEASE_v0.21.3.md`.
+
+## Безотказный режим фото (v0.21.5)
+
+В настройках каждого персонажа включается отдельно. Для прямых запросов фото снимает игровые ограничения по эмоциям и отношениям, заставляет GPT подготовить фотопромпт и отправить его на текущий WaveSpeed маршрут. Не изменяет эмоции, интимное согласие или память; лимиты, правила провайдера и текущие стоп/пауза сохраняются. См. `RELEASE_v0.21.5.md`.
+
+
+## v0.21.5 — Dark UI and economy
+See `RELEASE_v0.21.5.md` and `docs/ECONOMY.md` for the additive wallet / companion account architecture, free top-ups, dark graphite styling and illustrated transfers.
