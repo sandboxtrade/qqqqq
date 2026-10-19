@@ -41,3 +41,13 @@ npm run build
 
 ## v0.21.5 — Dark UI and economy
 See `RELEASE_v0.21.5.md` and `docs/ECONOMY.md` for the additive wallet / companion account architecture, free top-ups, dark graphite styling and illustrated transfers.
+
+
+## v0.21.6 — исправление ошибок deploy TypeScript
+
+- В `TurnInput` добавлено необязательное поле `contextText?: string` для экономических событий.
+- Операции пополнения кошелька используют литеральный тип `"topup"`, совместимый с `VirtualTransaction`.
+- Регрессионные тесты проверяют эти контракты через компилятор TypeScript; импорт TypeScript в тестах переносимый.
+- `SCHEMA_VERSION = 4`, Firestore/Auth/App Check, WaveSpeed LoRA, сохранения и логика общения не изменены.
+
+Для проверки после установки зависимостей: `npm ci && npm run verify`. На текущем окружении отсутствует доступ к npm registry, поэтому production-сборка здесь не подтверждена.
