@@ -227,7 +227,7 @@ export async function addVirtualMoney(uid: string | null, amount: number, id: st
     if (wallet.appliedIds.includes(id) || wallet.transactions.some(tx => tx.id === id)) return wallet;
     if (!Number.isSafeInteger(wallet.balance + amount)) throw new Error("Превышен лимит счёта.");
     return {...wallet, balance: wallet.balance + amount, appliedIds:[id,...wallet.appliedIds].slice(0,300),
-      transactions:[{id,kind:"topup",characterId:"",label:"Игровое пополнение",amount,createdAt:Date.now()},...wallet.transactions].slice(0,80)};
+      transactions:[{id,kind:"topup" as const,characterId:"",label:"Игровое пополнение",amount,createdAt:Date.now()},...wallet.transactions].slice(0,80)};
   };
   if (!isFirebaseConfigured) {
     const updated = apply(await loadVirtualWallet(uid)); localWrite(localKey(uid,"economy"),updated); return updated;

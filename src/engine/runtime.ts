@@ -819,6 +819,8 @@ export async function setIntimacyAdultMode(
 export interface TurnInput {
   id: string;
   text: string;
+  /** Optional internal narrative for economic/game events; the visible chat text stays unchanged. */
+  contextText?: string;
   timestamp: number;
 }
 export interface TurnOptions {
