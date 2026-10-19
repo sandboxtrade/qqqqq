@@ -357,6 +357,7 @@ export function SettingsScreen({
             <div className="settings-diagnostics-body">
               <div className="setting-row"><span>Аккаунт</span><strong>{user?.email ?? "Локальный пользователь"}</strong></div>
               <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "подключён" : "локальный режим"}</strong></div>
+              <div className="setting-row"><span>Сборка Game2</span><strong>0.21.9</strong></div>
               <div className="setting-row"><span>App Check</span><strong>{appCheckLabels[appCheckState]}</strong></div>
               <div className="setting-row"><span>Диалог</span><strong>{dialogueEngineLabel}</strong></div>
               <div className="setting-row"><span>Контекст GPT</span><strong>Personality + Memory + 15/15</strong></div>

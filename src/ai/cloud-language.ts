@@ -77,6 +77,7 @@ export interface CloudLanguageInput {
     isAwake: boolean;
     connectionDrive: number;
     activityDetail?: string;
+    photoWardrobe?: { mode: "office" | "home" | "other"; outfit: string };
   };
   relationship: {
     stage: string;

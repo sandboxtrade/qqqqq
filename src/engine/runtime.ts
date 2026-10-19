@@ -23,7 +23,7 @@ import {
   simulateWorld,
 } from "../world/world";
 import type { WorldState, WorldSimulationResult } from "../world/world";
-import { describeWorldActivityDetail, worldClock } from "../world/world";
+import { describeWorldActivityDetail, resolvePhotoWardrobe, worldClock } from "../world/world";
 import { checkSignal } from "../core/async";
 import type { ConversationCursor } from "../storage/repositories/interfaces";
 import {
@@ -1047,10 +1047,12 @@ export async function handleUserMessage(
   const historyPromise = base.revision !== current.revision
     ? repository.listConversationEvents({ limit: 80 }).then((page) => conversationFrom(page.events))
     : Promise.resolve(options.history);
-  const [, history, storedEditableContext] = await Promise.all([
+  const [, history, storedEditableContext, financeContext] = await Promise.all([
     repository.appendEvent(userEvent),
     historyPromise,
     repository.loadEditableContext(),
+    loadCompanionEconomicContext(uid, characterId).catch(() =>
+      "ЭКОНОМИКА МИРА: средняя зарплата $2,000 в месяц."),
   ]);
   checkSignal(signal);
   const editableContext = normalizeEditableContext(
@@ -1061,7 +1063,6 @@ export async function handleUserMessage(
   );
   // Financial memories are separate from the user-editable long-term chat memory.
   // Never prevent dialogue if the economy document temporarily cannot load.
-  const financeContext = await loadCompanionEconomicContext(uid, characterId).catch(() => "ЭКОНОМИКА МИРА: средняя зарплата $2,000 в месяц.");
   const contextMs = Math.round(performance.now() - contextStarted);
   const stableHistory = history.filter((line) => line.id !== input.id);
   const recentHistory = selectBalancedRecentHistory(stableHistory, 15);
@@ -1214,6 +1215,7 @@ export async function handleUserMessage(
         isAwake: turnWorld.isAwake,
         connectionDrive: turnWorld.connectionDrive,
         activityDetail: describeWorldActivityDetail(turnWorld.currentActivity, now, characterId),
+        photoWardrobe: resolvePhotoWardrobe(now, turnWorld.timeZone, characterId),
       },
       relationship: {
         stage: relationship.stage,
@@ -1595,6 +1597,7 @@ export async function maintainRuntime(
           isAwake: advanced.state.world.isAwake,
           connectionDrive: advanced.state.world.connectionDrive,
           activityDetail: describeWorldActivityDetail(advanced.state.world.currentActivity, maintenanceNow, characterId),
+          photoWardrobe: resolvePhotoWardrobe(maintenanceNow, advanced.state.world.timeZone, characterId),
         },
         relationship: {
           stage: advanced.state.relationship.stage,

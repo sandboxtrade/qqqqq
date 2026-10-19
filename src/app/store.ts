@@ -958,6 +958,32 @@ function isRecoverableTurnSyncError(error: unknown) {
   const message = errorText(error);
   return /\[(?:state-conflict|state-world-conflict)\]/iu.test(message);
 }
+function isTransientFirestoreTurnError(error: unknown) {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code ?? "") : "";
+  return /^(?:unavailable|aborted|deadline-exceeded)$/iu.test(
+    code.replace(/^firestore\//iu, ""),
+  );
+}
+
+/** Serialize committed dialogue turns from tabs on the same origin/account.
+ * Firestore retains the final revision check for other devices and old clients. */
+async function withCharacterTurnLock<T>(
+  uid: string | null,
+  characterId: string,
+  signal: AbortSignal,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request(
+      `game2-turn:${JSON.stringify([uid, characterId])}`,
+      { mode: "exclusive", signal },
+      run,
+    );
+  }
+  return run();
+}
 
 async function sendTurn(message: ChatMessage) {
   const store = useAppStore.getState();
@@ -974,10 +1000,10 @@ async function sendTurn(message: ChatMessage) {
     () =>
       controller.abort(
         new Error(
-          "Отправка заняла больше 40 секунд. Проверь соединение и повтори.",
+          "Отправка заняла больше 85 секунд. Проверь соединение и повтори.",
         ),
       ),
-    40000,
+    85000,
   );
   useAppStore.setState((state) => ({
     busy: true,
@@ -1015,31 +1041,56 @@ async function sendTurn(message: ChatMessage) {
           useAppStore.setState({ phase });
       },
     });
-    let result: Awaited<ReturnType<typeof handleUserMessage>>;
-    try {
-      result = await handleUserMessage(
-        message,
-        store.runtime,
-        turnOptions(baseHistory),
-      );
-    } catch (error) {
-      if (controller.signal.aborted || !isRecoverableTurnSyncError(error)) throw error;
-      useAppStore.setState({
-        streamingText: "",
-        phase: "Восстанавливаем синхронизацию…",
-      });
-      // Same immutable message id is intentionally reused. appendEvent and
-      // handleUserMessage are idempotent, so this recovers state conflicts
-      // without duplicating the user's message or relationship effects.
-      const recovered = await bootstrapRuntime(store.user?.uid ?? null, controller.signal, undefined, store.activeCharacterId);
-      if (version !== epoch || controller.signal.aborted) return;
-      useAppStore.setState({ runtime: recovered.state, maintenanceError: null });
-      result = await handleUserMessage(
-        message,
-        recovered.state,
-        turnOptions(recovered.recentConversation as ChatMessage[]),
-      );
-    }
+    const result = await withCharacterTurnLock(
+      store.user?.uid ?? null, store.activeCharacterId, controller.signal,
+      async () => {
+        let activeRuntime = store.runtime!;
+        let activeHistory = baseHistory;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            return await handleUserMessage(
+              message, activeRuntime, turnOptions(activeHistory),
+            );
+          } catch (error) {
+            const recoverable = isRecoverableTurnSyncError(error) ||
+              isTransientFirestoreTurnError(error);
+            if (controller.signal.aborted || !recoverable || attempt >= 2) throw error;
+            useAppStore.setState({
+              streamingText: "",
+              phase: "Восстанавливаем соединение с Firebase…",
+            });
+            // Reuse the same user-event ID; the runtime first checks for a
+            // committed reply, so a response already stored is not duplicated.
+            // Avoid reloading the entire history unless the revision conflict
+            // requires a fresh snapshot.
+            await new Promise<void>((resolve, reject) => {
+              const onAbort = () => { clearTimeout(timer); reject(controller.signal.reason); };
+              const timer = setTimeout(() => {
+                controller.signal.removeEventListener("abort", onAbort);
+                resolve();
+              }, 200 * (attempt + 1));
+              if (controller.signal.aborted) onAbort();
+              else controller.signal.addEventListener("abort", onAbort, { once: true });
+            });
+            if (isRecoverableTurnSyncError(error)) {
+              // A genuine revision conflict requires a new state/history pair.
+              const recovered = await bootstrapRuntime(
+                store.user?.uid ?? null, controller.signal, undefined,
+                store.activeCharacterId,
+              );
+              if (version !== epoch || controller.signal.aborted) return Promise.reject(new Error("turn-invalidated"));
+              activeRuntime = recovered.state;
+              activeHistory = recovered.recentConversation as ChatMessage[];
+              useAppStore.setState({ runtime: recovered.state, maintenanceError: null });
+            }
+            // 'unavailable' / 'deadline-exceeded' is not a revision conflict.
+            // handleUserMessage will recheck the persisted reply by the SAME ID
+            // on retry. Do not amplify an outage by bootstrapping the whole
+            // character and loading dozens of extra Firestore documents.
+          }
+        }
+      },
+    );
     if (version !== epoch || controller.signal.aborted) return;
     useAppStore.setState((state) => {
       const replyMessages: ConversationLine[] = result.replyMessages?.length
@@ -1079,6 +1130,10 @@ async function sendTurn(message: ChatMessage) {
       store.activeCharacterId,
       conversationPreviewFromLines(useAppStore.getState().messages),
     );
+    if (result.trace?.timings) {
+      // No personal message text or API secrets are logged.
+      console.debug("[Game2] turn timings (ms)", result.trace.timings);
+    }
 
     // v0.21.2: GPT approves and signs its photo prompt. The queued photo uses
     // the same durable local journal and cache as earlier versions.
@@ -1093,6 +1148,14 @@ async function sendTurn(message: ChatMessage) {
 
   } catch (error) {
     if (version !== epoch) return;
+    // The raw Firebase code distinguishes permission-denied, unavailable and
+    // aborted. Avoid logging user messages, prompt contents or credentials.
+    console.warn("[Game2] turn delivery failed", {
+      code: error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "") : "",
+      reason: error instanceof Error ? error.message : String(error),
+      version: "0.21.9",
+    });
     useAppStore.setState((state) => {
       const confirmed = (activeTurnId === message.id && activeTurnConfirmed) || state.messages.some(m => m.id === `reply_${message.id}` && m.delivery === "saved");
       return {

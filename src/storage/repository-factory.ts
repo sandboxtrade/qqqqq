@@ -7,6 +7,7 @@ import {
 } from "./firebase";
 import { assertRuntimeConfiguration } from "../config/runtime-config";
 import { bounded, checkSignal } from "../core/async";
+import { annotateFirestoreOperation, FIRESTORE_READ_TIMEOUT_MS, mayTimeOutFirestoreOperation } from "./firestore-operation-policy";
 
 const local = new Map<string, CompanionRepository>();
 
@@ -39,12 +40,17 @@ export function getCompanionRepository(
       if (typeof method !== "function") return method;
       return (...args: unknown[]) => {
         checkSignal(signal);
-        return bounded(
-          Promise.resolve(method.apply(object, args)),
-          key === "resetConversationAndMemory" ? 45000 : 8000,
-          key === "resetConversationAndMemory" ? "Очистка диалога и памяти" : "Firebase",
-          signal,
-        ).then((value) => {
+        const operation = String(key);
+        const inFlight = Promise.resolve().then(() => method.apply(object, args));
+        // A timeout on a Firestore write does NOT cancel the SDK transaction.
+        // The previous 8-second blanket timeout could therefore leave a write
+        // running while a duplicate attempt was already being submitted.
+        const result = isFirebaseConfigured && mayTimeOutFirestoreOperation(operation)
+          ? bounded(inFlight, FIRESTORE_READ_TIMEOUT_MS, `Firestore:${operation}`, signal)
+          : inFlight;
+        return result.catch((error: unknown) => {
+          throw isFirebaseConfigured ? annotateFirestoreOperation(error, operation) : error;
+        }).then((value: unknown) => {
           checkSignal(signal);
           return value;
         });

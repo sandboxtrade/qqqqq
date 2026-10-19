@@ -32,7 +32,7 @@ const finishedImage = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const finalChatPrompt = "g2girl01, photorealistic casual smartphone selfie at an office desk, working with documents, modest white blouse, slightly tired expression, afternoon window light, natural camera perspective";
 const finalPresencePrompt = "g2girl01, natural candid documentary photograph of one adult woman at her desk in a busy modern office, typing at a laptop, papers and planner nearby, modest professional outfit, authentic indoor lighting, believable camera snapshot, 3:4 composition";
 function json(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }); }
-function installMocks(calls, { modelRefuses = false } = {}) {
+function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt } = {}) {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
@@ -44,13 +44,13 @@ function installMocks(calls, { modelRefuses = false } = {}) {
       if (payload.text.format.name === "alexandra_presence_prompt")
         return json({ output_text: JSON.stringify({ prompt: finalPresencePrompt }) });
       if (payload.text.format.name === "alexandra_required_photo_prompt")
-        return json({ output_text: JSON.stringify({ prompt: finalChatPrompt }) });
+        return json({ output_text: JSON.stringify({ prompt: photoPrompt }) });
       return json({ output_text: JSON.stringify({
         messages: [modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
         emotionReaction: Object.fromEntries(["happiness", "sadness", "irritation", "anxiety", "curiosity", "boredom", "affection", "romanticInterest"].map(x => [x, 0])),
         relationshipReaction: Object.fromEntries(["trust", "closeness", "attachment", "security", "respect", "unresolvedTension"].map(x => [x, 0])),
         intimacyReaction: Object.fromEntries(["comfort", "interest", "arousal", "initiativeDrive"].map(x => [x, 0])),
-        photoDecision: { shouldSendPhoto: !modelRefuses, reason: modelRefuses ? "none" : "user_requested", caption: modelRefuses ? "" : "Держи)", prompt: modelRefuses ? "" : finalChatPrompt,
+        photoDecision: { shouldSendPhoto: !modelRefuses, reason: modelRefuses ? "none" : "user_requested", caption: modelRefuses ? "" : "Держи)", prompt: modelRefuses ? "" : photoPrompt,
           intent: { framing: "selfie", mood: "slightly tired", pose: "holding phone", location: "office", outfit: "white blouse", suggestiveLevel: "none" } },
       }) });
     }
@@ -173,5 +173,34 @@ test("photo override stays off by default and never affects an ordinary chat or 
     assert.equal(stopped.data.photoDecision.shouldSendPhoto, false);
     assert.equal(calls.filter(c => c.payload?.text?.format?.name === "alexandra_required_photo_prompt").length, 0);
     assert.equal(calls.filter(c => c.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 0);
+  } finally { restore(); }
+});
+
+
+test("office wardrobe remains fixed over consecutive photo requests, home is flexible", async () => {
+  const calls = [];
+  const clothingVariant = "g2girl01, photorealistic mirror selfie wearing a vivid red summer dress, candid smartphone photography, office desk in background";
+  const restore = installMocks(calls, { photoPrompt: clothingVariant });
+  try {
+    const officeWorld = { ...dialogueInput.world, photoWardrobe: {
+      mode: "office", outfit: "white office blouse with middle buttons slightly undone, black fitted office pencil skirt, black high heels",
+    } };
+    for (let i = 0; i < 3; i++) {
+      const dialogue = await call("/yuzukiSpeak", { ...dialogueInput,
+        userText: `Саш, ещё селфи номер ${i + 1}`, world: officeWorld });
+      assert.equal(dialogue.data.photoDecision.shouldSendPhoto, true);
+      assert.match(dialogue.data.photoDecision.prompt, /SAME FIXED OFFICE OUTFIT/u);
+      assert.match(dialogue.data.photoDecision.prompt, /white office blouse/u);
+      assert.match(dialogue.data.photoDecision.prompt, /black high heels/u);
+      assert.doesNotMatch(dialogue.data.photoDecision.prompt, /red summer dress/u);
+      const generated = await call("/yuzukiPhoto", { character: dialogueInput.character, decision: dialogue.data.photoDecision });
+      assert.equal(generated.status, 200);
+    }
+    const home = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Скинь фото дома",
+      world: { ...dialogueInput.world, photoWardrobe: { mode: "home", outfit: "" } },
+    });
+    assert.match(home.data.photoDecision.prompt, /red summer dress/u);
+    assert.doesNotMatch(home.data.photoDecision.prompt, /SAME FIXED OFFICE OUTFIT/u);
+    assert.equal(calls.filter(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 3);
   } finally { restore(); }
 });

@@ -95,7 +95,7 @@ test("photo client retains WaveSpeed job polling, recovery and auth", () => {
 
 test("schema 4 and new 0.21.3 screen modules persist", () => {
   assert.match(source("src/config/version.ts"), /SCHEMA_VERSION = 4/u);
-  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.6"/u);
+  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.9"/u);
   for (const file of ["src/ui/PeopleScreen.tsx", "src/ui/MyProfile.tsx", "src/ui/AlexandraSocial.tsx", "src/ui/ChatScreen.tsx"]) assert.ok(source(file).length > 200, file);
 });
 
@@ -119,4 +119,20 @@ test("per-character photo no-refusal switch is editable, persisted and passed to
   assert.match(context, /photoNoRefusalMode: false/u);
   assert.match(runtime, /photoPolicy: \{ noRefusalMode: editableContext.photoNoRefusalMode \}/u);
   assert.match(worker, /photoPolicy: \{ noRefusalMode: input\?\.photoPolicy\?\.noRefusalMode === true \}/u);
+});
+
+
+test("Firestore fast consistent reads and serialized chat retries keep immutable turn IDs", () => {
+  const firestore = source("src/storage/repositories/firestore-repository.ts");
+  const store = source("src/app/store.ts");
+  const runtime = source("src/engine/runtime.ts");
+  const world = source("src/world/world.ts");
+  assert.match(firestore, /async loadRuntimeState\(\)/u);
+  assert.match(firestore, /getDoc\(stateRef\), getDoc\(worldRef\)/u);
+  assert.match(firestore, /only in[\s\S]+?exceptional case/u);
+  assert.match(store, /withCharacterTurnLock/u);
+  assert.match(store, /isTransientFirestoreTurnError/u);
+  assert.match(store, /message, activeRuntime, turnOptions\(activeHistory\)/u);
+  assert.match(runtime, /resolvePhotoWardrobe\(now, turnWorld.timeZone, characterId\)/u);
+  assert.match(world, /slot.activity === "personal_project"/u);
 });

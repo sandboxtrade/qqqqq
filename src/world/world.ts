@@ -323,6 +323,27 @@ export function resolveRoutine(
   };
 }
 
+/** The current work shift controls outfit continuity even while the world
+ * temporarily switches currentActivity to chatting. No saved-data migration. */
+export function resolvePhotoWardrobe(
+  timestamp: number,
+  timeZone: string,
+  characterId: string,
+): { mode: "office" | "home" | "other"; outfit: string } {
+  const slot = resolveRoutine(timestamp, timeZone, characterId);
+  if (characterId === "alexandra_v1" &&
+      slot.activity === "personal_project" && slot.location === "outside") {
+    return {
+      mode: "office",
+      outfit: "white office blouse with the middle buttons slightly undone, black fitted office pencil skirt, black high heels",
+    };
+  }
+  return {
+    mode: isHomeLocation(slot.location) ? "home" : "other",
+    outfit: "",
+  };
+}
+
 export function clampElapsedMs(from: number, to: number, maxDays = 14) {
   const max = maxDays * 24 * 3_600_000;
   return Math.max(0, Math.min(to - from, max));

@@ -498,54 +498,46 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   async loadRuntimeState(): Promise<RuntimePersistenceState> {
     const stateRef = this.childDoc("state", "current");
     const worldRef = this.childDoc("world", "current");
-
+    // Every ordinary chat turn previously made an unconditional write-capable
+    // transaction merely to read these two documents. Two independent reads
+    // are cheaper and avoid transaction retries/ABORTED under contention.
+    const [stateSnap, worldSnap] = await Promise.all([
+      getDoc(stateRef), getDoc(worldRef),
+    ]);
+    this.ownerId();
+    const snapshot = stateSnap.exists()
+      ? decodeCompanionSnapshot(stateSnap.data()) : null;
+    if (!worldSnap.exists()) return { snapshot, world: null };
+    const decoded = decodeWorldState(worldSnap.data());
+    if (!snapshot || decoded.revision === undefined ||
+        snapshot.revision === decoded.revision) {
+      return { snapshot, world: decoded.world };
+    }
+    // The read pair may straddle an atomic commit from another tab; only in
+    // this exceptional case re-read both under a transaction and repair if
+    // the revision mismatch still exists. Never overwrite payload fields.
     return runTransaction(this.db(), async (tx) => {
-      const [stateSnap, worldSnap] = await Promise.all([
-        tx.get(stateRef),
-        tx.get(worldRef),
+      const [freshState, freshWorld] = await Promise.all([
+        tx.get(stateRef), tx.get(worldRef),
       ]);
       this.ownerId();
-
-      const snapshot = stateSnap.exists()
-        ? decodeCompanionSnapshot(stateSnap.data())
-        : null;
-      if (!worldSnap.exists()) return { snapshot, world: null };
-
-      const { world, revision: worldRevision } = decodeWorldState(
-        worldSnap.data(),
-      );
-      const stateRevision = snapshot?.revision;
-      if (
-        snapshot &&
-        stateRevision !== undefined &&
-        worldRevision !== undefined &&
-        stateRevision !== worldRevision
-      ) {
-        // Older tabs / interrupted historical builds could leave the two
-        // documents one revision apart. Bricking the whole app on read makes
-        // chat and the recovery/reset controls unusable. Preserve the actual
-        // payloads and repair only the revision marker atomically.
-        const repairedRevision = Math.max(stateRevision, worldRevision);
-        if (stateRevision !== repairedRevision) {
-          tx.set(
-            stateRef,
-            sanitizeForFirestore(
-              encodeCompanionSnapshot({ ...snapshot, revision: repairedRevision }),
-            ),
-          );
-        }
-        if (worldRevision !== repairedRevision) {
-          tx.set(
-            worldRef,
-            sanitizeForFirestore(encodeWorldState(world, repairedRevision)),
-          );
-        }
-        return {
-          snapshot: { ...snapshot, revision: repairedRevision },
-          world,
-        };
+      const latest = freshState.exists()
+        ? decodeCompanionSnapshot(freshState.data()) : null;
+      if (!freshWorld.exists()) return { snapshot: latest, world: null };
+      const { world, revision: worldRevision } = decodeWorldState(freshWorld.data());
+      if (!latest || worldRevision === undefined || latest.revision === worldRevision) {
+        return { snapshot: latest, world };
       }
-      return { snapshot, world };
+      const repairedRevision = Math.max(latest.revision ?? 0, worldRevision);
+      if (latest.revision !== repairedRevision) {
+        tx.set(stateRef, sanitizeForFirestore(
+          encodeCompanionSnapshot({ ...latest, revision: repairedRevision }),
+        ));
+      }
+      if (worldRevision !== repairedRevision) {
+        tx.set(worldRef, sanitizeForFirestore(encodeWorldState(world, repairedRevision)));
+      }
+      return { snapshot: { ...latest, revision: repairedRevision }, world };
     });
   }
 
