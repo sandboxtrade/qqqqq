@@ -32,7 +32,8 @@ const finishedImage = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const finalChatPrompt = "g2girl01, photorealistic casual smartphone selfie at an office desk, working with documents, modest white blouse, slightly tired expression, afternoon window light, natural camera perspective";
 const finalPresencePrompt = "g2girl01, natural candid documentary photograph of one adult woman at her desk in a busy modern office, typing at a laptop, papers and planner nearby, modest professional outfit, authentic indoor lighting, believable camera snapshot, 3:4 composition";
 function json(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }); }
-function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt } = {}) {
+function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt, failCdnOnce = false } = {}) {
+  let cdnCalls = 0;
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
@@ -56,14 +57,21 @@ function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatProm
     }
     if (url.endsWith("/wavespeed-ai/z-image/turbo-lora")) return json({ data: { id: "mock-task-xyz", status: "created" } });
     if (url.endsWith("/predictions/mock-task-xyz/result")) return json({ data: { status: "completed", outputs: ["https://cdn.wavespeed.ai/images/photo.png"] } });
-    if (url === "https://cdn.wavespeed.ai/images/photo.png") return new Response(finishedImage, { status: 200, headers: { "Content-Type": "image/png" } });
+    if (url === "https://cdn.wavespeed.ai/images/photo.png") {
+      cdnCalls++;
+      if (failCdnOnce && cdnCalls === 1) throw new Error("Provider CDN temporary failure");
+      return new Response(finishedImage, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
     throw new Error(`UNEXPECTED_FETCH ${url}`);
   };
   return () => { globalThis.fetch = oldFetch; };
 }
-async function call(path, payload) {
+async function callRaw(path, payload) {
   const request = new Request(`${base}${path}`, { method: "POST", headers: authHeader, body: JSON.stringify(payload) });
-  const response = await worker.fetch(request, env);
+  return worker.fetch(request, env);
+}
+async function call(path, payload) {
+  const response = await callRaw(path, payload);
   return { status: response.status, data: await response.json() };
 }
 const dialogueInput = {
@@ -94,8 +102,17 @@ test("GPT decision -> server signed prompt -> WaveSpeed LoRA submit -> signed po
     assert.equal(submitted.payload.prompt, finalChatPrompt);
     const completed = await call("/yuzukiPhotoResult", { taskId: start.data.providerTaskId, taskToken: start.data.taskToken });
     assert.equal(completed.status, 200, JSON.stringify(completed.data));
-    assert.match(completed.data.dataUrl, /^data:image\/png;base64,/u);
+    assert.equal(completed.data.ready, true);
     assert.equal(completed.data.provider, "wavespeed");
+    assert.equal(completed.data.dataUrl, undefined, "large image bytes must not be sent as JSON");
+    assert.equal(submitted.payload.enable_sync_mode, false);
+    assert.equal(submitted.payload.enable_base64_output, false);
+    const asset = await callRaw("/yuzukiPhotoAsset", { taskId: start.data.providerTaskId, taskToken: start.data.taskToken });
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get("Content-Type"), "image/png");
+    assert.deepEqual(Buffer.from(await asset.arrayBuffer()), finishedImage);
+    assert.equal(calls.filter(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 1,
+      "photo download must not submit another paid job");
     assert.ok(!calls.some(x => x.url.includes("/v1/images/")), "GPT image API is inactive");
     assert.ok(!calls.some(x => /seedream|qwen-image/u.test(x.url)), "old WaveSpeed routes are inactive");
   } finally { restore(); }
@@ -202,5 +219,67 @@ test("office wardrobe remains fixed over consecutive photo requests, home is fle
     assert.match(home.data.photoDecision.prompt, /red summer dress/u);
     assert.doesNotMatch(home.data.photoDecision.prompt, /SAME FIXED OFFICE OUTFIT/u);
     assert.equal(calls.filter(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 3);
+  } finally { restore(); }
+});
+
+
+test("finished paid image can be recovered after a temporary CDN fetch failure", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { failCdnOnce: true });
+  try {
+    const dialogue = await call("/yuzukiSpeak", dialogueInput);
+    const start = await call("/yuzukiPhoto", { character: dialogueInput.character, decision: dialogue.data.photoDecision });
+    const task = { taskId: start.data.providerTaskId, taskToken: start.data.taskToken };
+    const status = await call("/yuzukiPhotoResult", task);
+    assert.equal(status.data.ready, true);
+    const broken = await call("/yuzukiPhotoAsset", task);
+    assert.equal(broken.status, 502);
+    assert.equal(broken.data.reason, "wavespeed-output-fetch-failed");
+    const recovered = await callRaw("/yuzukiPhotoAsset", task);
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(Buffer.from(await recovered.arrayBuffer()), finishedImage);
+    assert.equal(calls.filter(c => c.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 1);
+  } finally { restore(); }
+});
+
+test("image bytes require signed task authorization, not just task id", async () => {
+  const calls = [];
+  const restore = installMocks(calls);
+  try {
+    const forged = await call("/yuzukiPhotoAsset", { taskId: "mock-task-xyz", taskToken: "forged.token" });
+    assert.equal(forged.status, 403);
+    assert.equal(calls.filter(c => c.url.includes("/predictions/")).length, 0);
+  } finally { restore(); }
+});
+
+test("reusing one signed photo approval does not submit a second paid prediction within one Worker isolate", async () => {
+  const calls = [];
+  const restore = installMocks(calls);
+  try {
+    const response = await call("/yuzukiSpeak", dialogueInput);
+    assert.equal(response.data.photoDecision.shouldSendPhoto, true);
+    const payload = { character: dialogueInput.character, decision: response.data.photoDecision };
+    const first = await call("/yuzukiPhoto", payload);
+    const second = await call("/yuzukiPhoto", payload);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(first.data.providerTaskId, second.data.providerTaskId);
+    assert.equal(first.data.taskToken, second.data.taskToken);
+    assert.equal(calls.filter(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 1);
+  } finally { restore(); }
+});
+
+test("long existing conversation is not rejected by obsolete 76 KB Worker input cap", async () => {
+  const calls = [];
+  const restore = installMocks(calls);
+  try {
+    const history = Array.from({ length: 30 }, (_, i) => ({
+      role: i % 2 ? "character" : "user", text: `long message ${i}: ` + "x".repeat(2400),
+    }));
+    const payload = { ...dialogueInput, recentHistory: history, personality: "p".repeat(7000), memory: "m".repeat(12000) };
+    assert.ok(JSON.stringify(payload).length > 76_000);
+    const result = await call("/yuzukiSpeak", payload);
+    assert.equal(result.status, 200);
+    assert.equal(result.data.photoDecision?.shouldSendPhoto, true);
   } finally { restore(); }
 });

@@ -233,20 +233,34 @@ export class FirestoreCompanionRepository implements CompanionRepository {
     const markers = pending.docs.map((d) =>
       decodeTurnPendingMarker(d.data(), d.id),
     );
-    const events = await Promise.all(
-      markers.map(async (marker) => {
-        const [event, reply] = await Promise.all([
-          getDoc(this.childDoc("events", marker.messageId)),
-          getDoc(this.childDoc("events", `reply_${marker.messageId}`)),
-        ]);
-        if (reply.exists() || !event.exists()) return null;
-        const decoded = decodeCharacterEvent(event.data(), marker.messageId);
-        return decoded.type === "message" && decoded.source === "user"
-          ? decoded
-          : null;
-      }),
-    );
-    return events.filter((event): event is CharacterEvent => event !== null);
+    if (!markers.length) return [];
+
+    // Loading each marker's user event + reply with two getDoc calls caused up
+    // to 200 extra Firestore reads during chat bootstrap. Firestore supports
+    // batches of up to 30 document ids in an `in` query. Fetch both halves
+    // together, then preserve the original chronological marker order.
+    const eventIds = [...new Set(markers.flatMap((marker) => [
+      marker.messageId,
+      `reply_${marker.messageId}`,
+    ]))];
+    const byId = new Map<string, CharacterEvent>();
+    for (let offset = 0; offset < eventIds.length; offset += 30) {
+      const batch = eventIds.slice(offset, offset + 30);
+      const snap = await getDocs(query(
+        this.subcollection("events"),
+        where(documentId(), "in", batch),
+      ));
+      this.ownerId();
+      for (const item of snap.docs) byId.set(
+        item.id,
+        decodeCharacterEvent(item.data(), item.id),
+      );
+    }
+    return markers.flatMap((marker) => {
+      if (byId.has(`reply_${marker.messageId}`)) return [];
+      const event = byId.get(marker.messageId);
+      return event?.type === "message" && event.source === "user" ? [event] : [];
+    });
   }
 
   async dismissPendingTurn(messageId: string) {
@@ -498,47 +512,30 @@ export class FirestoreCompanionRepository implements CompanionRepository {
   async loadRuntimeState(): Promise<RuntimePersistenceState> {
     const stateRef = this.childDoc("state", "current");
     const worldRef = this.childDoc("world", "current");
-    // Every ordinary chat turn previously made an unconditional write-capable
-    // transaction merely to read these two documents. Two independent reads
-    // are cheaper and avoid transaction retries/ABORTED under contention.
-    const [stateSnap, worldSnap] = await Promise.all([
-      getDoc(stateRef), getDoc(worldRef),
-    ]);
-    this.ownerId();
-    const snapshot = stateSnap.exists()
-      ? decodeCompanionSnapshot(stateSnap.data()) : null;
-    if (!worldSnap.exists()) return { snapshot, world: null };
-    const decoded = decodeWorldState(worldSnap.data());
-    if (!snapshot || decoded.revision === undefined ||
-        snapshot.revision === decoded.revision) {
-      return { snapshot, world: decoded.world };
-    }
-    // The read pair may straddle an atomic commit from another tab; only in
-    // this exceptional case re-read both under a transaction and repair if
-    // the revision mismatch still exists. Never overwrite payload fields.
-    return runTransaction(this.db(), async (tx) => {
-      const [freshState, freshWorld] = await Promise.all([
-        tx.get(stateRef), tx.get(worldRef),
+    // Firestore's two getDoc calls are NOT an atomic snapshot: a state/world
+    // transaction from another tab may commit between them. Retry a skewed
+    // pair as read-only; NEVER "repair" it by copying the higher revision
+    // onto an older payload. That can corrupt the next turn's base state.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [stateSnap, worldSnap] = await Promise.all([
+        getDoc(stateRef), getDoc(worldRef),
       ]);
       this.ownerId();
-      const latest = freshState.exists()
-        ? decodeCompanionSnapshot(freshState.data()) : null;
-      if (!freshWorld.exists()) return { snapshot: latest, world: null };
-      const { world, revision: worldRevision } = decodeWorldState(freshWorld.data());
-      if (!latest || worldRevision === undefined || latest.revision === worldRevision) {
-        return { snapshot: latest, world };
+      const snapshot = stateSnap.exists()
+        ? decodeCompanionSnapshot(stateSnap.data()) : null;
+      if (!worldSnap.exists()) return { snapshot, world: null };
+      const decoded = decodeWorldState(worldSnap.data());
+      if (!snapshot || decoded.revision === undefined ||
+          snapshot.revision === decoded.revision) {
+        return { snapshot, world: decoded.world };
       }
-      const repairedRevision = Math.max(latest.revision ?? 0, worldRevision);
-      if (latest.revision !== repairedRevision) {
-        tx.set(stateRef, sanitizeForFirestore(
-          encodeCompanionSnapshot({ ...latest, revision: repairedRevision }),
-        ));
+      if (attempt < 2) {
+        await new Promise<void>(resolve => setTimeout(resolve, 80 * (attempt + 1)));
+        continue;
       }
-      if (worldRevision !== repairedRevision) {
-        tx.set(worldRef, sanitizeForFirestore(encodeWorldState(world, repairedRevision)));
-      }
-      return { snapshot: { ...latest, revision: repairedRevision }, world };
-    });
+    }
+    // A persistent mismatch must be diagnosed, not hidden by rewriting state.
+    throw new Error("Ревизии состояния и мира не совпадают. Данные не изменены. [state-world-conflict]");
   }
 
   async loadSnapshot(): Promise<CompanionSnapshot | null> {

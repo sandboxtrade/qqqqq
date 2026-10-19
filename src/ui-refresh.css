@@ -1,0 +1,299 @@
+/* Game2 v0.21.14 — unified interface. Purely visual; no Firebase/game-state changes. */
+.alex-shell {
+  --ui-bg: #090a0e;
+  --ui-panel: #15161c;
+  --ui-panel-raised: #1c1d25;
+  --ui-stroke: #2a2c37;
+  --ui-stroke-strong: #3c3e4e;
+  --ui-text: #f2f1f7;
+  --ui-muted: #a1a2b1;
+  --ui-soft: #787b8d;
+  --ui-accent: #b8a5f3;
+  --ui-accent-strong: #d5c8ff;
+  --ui-accent-wash: rgba(178,156,241,.115);
+  --ui-radius: 20px;
+  color: var(--ui-text);
+  color-scheme: dark;
+  background: var(--ui-bg);
+  background-image: radial-gradient(ellipse 110% 43% at 18% -15%, rgba(91,72,136,.12), transparent 72%);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+.alex-shell * { min-width: 0; }
+.alex-shell button { cursor: pointer; touch-action: manipulation; }
+.alex-shell button:disabled { cursor: not-allowed; }
+.alex-shell :is(button, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 3px;
+}
+.alex-shell :is(button, a, input, textarea, select) { -webkit-tap-highlight-color: transparent; }
+.alex-shell :is(input, textarea, select) { accent-color: var(--ui-accent); }
+.alex-shell .alex-content { background: transparent; scrollbar-color: #353441 transparent; }
+.alex-shell .alex-content:not(.chat-content) { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.alex-shell .alex-content.chat-content, .alex-shell[data-page="settings"] .alex-content { overflow: hidden; }
+
+/* Header and tab bar: one fixed navigation system across all screens. */
+.alex-shell .alex-header {
+  position: relative;
+  z-index: 7;
+  min-height: 74px;
+  height: auto;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 13px;
+  padding: max(12px, env(safe-area-inset-top)) 17px 12px;
+  background: rgba(13,14,19,.97);
+  border-bottom: 1px solid var(--ui-stroke);
+  box-shadow: 0 5px 28px rgba(0,0,0,.17);
+}
+.alex-shell .alex-header-avatar,
+.alex-shell .alex-brand-mark {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #575068;
+  border-radius: 16px;
+  color: #f5f0ff;
+  background: radial-gradient(circle at 25% 20%,#5a506e 0,#302a3c 64%,#211f28 100%);
+  font-size: 19px;
+  font-weight: 790;
+  letter-spacing: -.035em;
+}
+.alex-shell .alex-brand-mark { font-size: 19px; letter-spacing: -.07em; }
+.alex-brand-mark span { color: var(--ui-accent); }
+.alex-shell .alex-header-copy { gap: 5px; }
+.alex-shell .alex-header-copy strong { color: var(--ui-text); font-size: 17px; letter-spacing: -.025em; font-weight: 740; }
+.alex-shell .alex-header-copy > span { color: var(--ui-muted); font-size: 11px; letter-spacing: .005em; }
+.alex-shell .alex-status-dot { width: 7px; height: 7px; background: #7ad5ac; box-shadow: 0 0 0 3px rgba(113,207,164,.08); }
+.alex-shell .alex-status-dot.offline { background: #858897; box-shadow: none; }
+.alex-shell .alex-settings-button {
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #20212a;
+  border: 1px solid var(--ui-stroke);
+  border-radius: 15px;
+  color: #d1d0dc;
+  transition: background-color .15s, border-color .15s;
+}
+.alex-shell .alex-settings-button:active { background: #2d2b39; }
+.alex-shell .alex-bottom-nav {
+  position: relative;
+  isolation: isolate;
+  z-index: 8;
+  flex: none;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  min-height: 69px;
+  gap: 4px;
+  padding: 7px 11px max(9px,env(safe-area-inset-bottom));
+  border-top: 1px solid var(--ui-stroke);
+  background: rgba(12,13,18,.98);
+  box-shadow: 0 -10px 34px rgba(0,0,0,.27);
+}
+.alex-shell .alex-bottom-nav button {
+  position: relative;
+  min-height: 51px;
+  padding: 7px 4px 5px;
+  border: 0;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  color: #868898;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 630;
+  line-height: 1.2;
+  transition: color .16s, background-color .16s;
+}
+.alex-shell .alex-bottom-nav button .icon { width: 22px; height: 22px; }
+.alex-shell .alex-bottom-nav button.active {
+  color: var(--ui-accent-strong);
+  background: var(--ui-accent-wash);
+}
+.alex-shell .alex-bottom-nav button.active::before { display:none; }
+.alex-shell .alex-bottom-nav button:active { background: #22212b; }
+
+/* Page hierarchy, comfortable type, consistent cards. */
+.alex-shell .alex-page { width: 100%; max-width: 700px; padding: 22px 17px 42px; }
+.alex-shell .alex-page-heading { margin-bottom: 20px; }
+.alex-shell .alex-eyebrow { font-size: 10px; color: var(--ui-accent); letter-spacing: .14em; }
+.alex-shell .alex-page-heading h1 { margin: 7px 0 8px; color: var(--ui-text); font-size: clamp(27px, 7vw, 32px); line-height: 1.1; letter-spacing: -.044em; }
+.alex-shell .alex-page-heading p { max-width: 490px; color: var(--ui-muted); font-size: 13px; line-height: 1.55; }
+.alex-shell .alex-section-title h2 { font-size: 20px; letter-spacing: -.026em; }
+.alex-shell .alex-section-title span { font-size: 11px; color: var(--ui-muted); }
+.alex-shell :is(.alex-wallet-strip,.alex-wallet-card,.alex-person-card,.alex-interaction-panel,.alex-social-profile,.alex-action-grid button,.alex-topup-panel,.alex-companion-account,.alex-profile-visibility) {
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--ui-stroke);
+  background: linear-gradient(155deg,#1b1c23 0%,#15161c 75%);
+  color: var(--ui-text);
+  box-shadow: 0 9px 30px rgba(0,0,0,.12), inset 0 1px rgba(255,255,255,.027);
+}
+.alex-shell .alex-wallet-strip { min-height: 69px; padding: 17px 18px; gap: 8px; }
+.alex-shell .alex-wallet-strip span { font-size: 12px; color: var(--ui-muted); }
+.alex-shell .alex-wallet-strip strong { font-size: 20px; letter-spacing: -.025em; color: var(--ui-text); }
+.alex-shell .alex-person-card { margin: 15px 0; padding: 20px; }
+.alex-shell .alex-person-head { align-items: flex-start; gap: 14px; }
+.alex-shell .alex-person-head .alex-social-avatar { flex: none; width: 64px; height: 64px; border-radius: 21px; font-size: 26px; }
+.alex-shell .alex-person-head strong { font-size: 20px; letter-spacing: -.028em; line-height: 1.25; }
+.alex-shell .alex-person-head span { font-size: 11px; color: var(--ui-accent); }
+.alex-shell .alex-person-head small { font-size: 12px; line-height: 1.5; color: var(--ui-muted); }
+.alex-shell .alex-person-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin: 20px 0 0; }
+.alex-shell .alex-person-actions button { min-height: 45px; display:flex; gap: 6px; align-items:center; justify-content:center; border-radius: 13px; color: #d2d0df; background:#22232c; font-size: 12px; }
+.alex-shell .alex-person-actions button.primary,
+.alex-shell .alex-confirm-spend button:last-child,
+.alex-shell .alex-save-button,
+.alex-shell .alex-topup-action button {
+  border: 1px solid #c5b4f4;
+  background: #c5b4f4;
+  color: #1a1427;
+  font-weight: 750;
+}
+.alex-shell .alex-person-settings { width: 100%; min-height: 43px; margin-top: 12px; border-radius: 13px; font-size: 11px; }
+.alex-shell .alex-companion-account { padding: 16px; margin-top: 15px; margin-bottom: 10px; }
+.alex-shell .alex-companion-account strong { font-size: 22px; }
+.alex-shell .alex-social-empty { padding: 25px 18px; border: 1px dashed var(--ui-stroke-strong); border-radius: 19px; background: #14151c; }
+.alex-shell .alex-social-empty strong { color: var(--ui-text); }
+.alex-shell .alex-spending-panel { margin-top: 17px; padding-top: 17px; }
+.alex-shell .alex-spending-panel h3 { color: var(--ui-text); font-size: 16px; }
+.alex-shell .alex-spending-items button { min-height: 51px; padding: 12px; border-radius: 13px; background: #24242e; }
+.alex-shell .alex-spending-items button:active,
+.alex-shell .alex-topup-presets button:active { border-color: var(--ui-accent); }
+.alex-shell .alex-confirm-spend { padding: 15px; border-radius: 16px; }
+.alex-shell .alex-confirm-spend button { min-height: 43px; }
+
+/* Player profile: account card and form more like an editable social profile. */
+.alex-shell .alex-profile-cover { min-height: 214px; gap: 7px; padding: 25px; border-radius: 23px; box-shadow: 0 14px 35px #0004; }
+.alex-shell .alex-profile-cover .alex-profile-picture { width: 80px; height: 80px; border: 3px solid rgba(255,255,255,.5); box-shadow:0 7px 25px rgba(0,0,0,.25); }
+.alex-shell .alex-profile-cover strong { font-size: 22px; letter-spacing: -.025em; }
+.alex-shell .alex-profile-cover span { font-size: 12px; }
+.alex-form-intro { margin: 25px 0 5px; }
+.alex-form-intro h2 { margin:0 0 5px; color:var(--ui-text); font-size:19px; letter-spacing:-.02em; }
+.alex-form-intro p { margin:0; color:var(--ui-muted); font-size:12px; line-height:1.5; }
+.alex-shell .alex-profile-form { gap: 15px 12px; margin: 18px 0 25px; }
+.alex-shell .alex-profile-form label { gap: 8px; color: #c0bfcd; font-size: 12px; font-weight: 660; }
+.alex-shell .alex-profile-form :is(input:not([type="checkbox"]),select,textarea),
+.alex-shell :is(.alex-topup-action,.alex-custom-transfer) input {
+  width: 100%; min-height: 46px; padding: 11px 13px; border-radius: 13px;
+  border: 1px solid var(--ui-stroke-strong); background:#12131a; color:var(--ui-text);
+  font-size: 16px; line-height: 1.4;
+}
+.alex-shell .alex-profile-form textarea { min-height: 100px; resize: vertical; }
+.alex-shell .alex-profile-form input::placeholder, .alex-shell .alex-profile-form textarea::placeholder { color:#737587; }
+.alex-shell .alex-profile-form :is(input,textarea,select):focus { outline: none; border-color: #b2a0e4; box-shadow:0 0 0 3px rgba(181,154,239,.11); }
+.alex-shell .alex-profile-visibility { padding:15px; }
+.alex-shell .alex-profile-visibility input { width:18px; height:18px; }
+.alex-shell .alex-save-button { min-height: 49px; border-radius: 14px; font-size: 13px; }
+.alex-shell .alex-topup-panel { padding: 19px; margin: 15px 0 22px; }
+.alex-shell .alex-topup-panel>div:first-child strong { font-size: 16px; }
+.alex-shell .alex-topup-presets { gap:8px; margin:16px 0; }
+.alex-shell .alex-topup-presets button { padding:11px 4px; min-height:43px; border-radius: 12px; }
+.alex-shell .alex-topup-action button { min-height:46px; border-radius:13px; font-size:12px; }
+.alex-shell .alex-wallet-card strong { font-size:24px; }
+.alex-shell .alex-ledger-row { padding: 13px 0; }
+
+/* Messenger: dedicated reading region + stable input. */
+.alex-shell .chat-screen { background: #0b0c11; }
+.alex-shell .chat-scroll { padding: 17px 15px 15px; gap:10px; background:transparent; }
+.alex-shell .bubble { max-width:min(85%,420px); border-radius:19px; padding:11px 14px 9px; }
+.alex-shell .bubble.character { background:#202129; color:#eeeef4; border:1px solid #30313c; border-bottom-left-radius:6px; }
+.alex-shell .bubble.user { background:#343044; color:#f6f2ff; border:1px solid #514660; border-bottom-right-radius:6px; }
+.alex-shell .bubble p { font-size:15px; line-height:1.5; }
+.alex-shell .bubble time { color: #a9a7b5; font-size:10px; margin-top:7px; }
+.alex-shell .bubble.character:has(.chat-photo) { padding:5px; }
+.alex-shell .chat-photo-open { border-radius:15px; background:#101116; }
+.alex-shell .chat-photo-open img { border-radius:15px; }
+.alex-shell .chat-photo-placeholder { background: radial-gradient(circle at 47% 36%, rgba(178,155,241,.11),transparent 58%),#14151c; border-color:#373440; }
+.alex-shell .composer { background:#0e0f15; border-top:1px solid var(--ui-stroke); padding:11px 13px max(12px,env(safe-area-inset-bottom)); gap:10px; }
+.alex-shell .composer-field { background:#1b1b24; border:1px solid #373745; border-radius:18px; padding:12px 13px; min-height:51px; }
+.alex-shell .composer-field:focus-within { border-color:#b5a1e7; background:#20202a; box-shadow:0 0 0 3px rgba(177,151,236,.075); }
+.alex-shell .composer-field textarea { color:#fff; caret-color:#d0bfff; font-size:16px; }
+.alex-shell .composer-field textarea::placeholder { color:#8d8d9c; }
+.alex-shell .send-button { min-width:51px; min-height:51px; width:51px; height:51px; border-radius:17px; background:#c9b5fc; color:#1b1726; box-shadow:none; }
+.alex-shell .send-button:disabled { opacity:.43; }
+.alex-shell .starter-chip { min-height: 40px; border-radius: 999px; background:#22202e; color:#dfd4f4; border:1px solid #3e364f; }
+.alex-shell .empty-chat { max-width:300px; padding:32px 20px; gap:13px; }
+.alex-shell .empty-chat .icon { color:#c9b1fc; }
+.alex-shell .empty-chat strong { color:#f1ebfa; font-size:17px; }
+.alex-shell .empty-chat span { font-size:12px; color:#aaa5b3; line-height:1.55; }
+.alex-shell .new-messages-button { background:#292338; border-color:#5b4a78; color:#f1e8ff; }
+
+/* Social feed: align existing functions with app typography and geometry. */
+.alex-shell .g2-social-network { --g2s-card:#191a22; --g2s-stroke:#30313d; --g2s-muted:var(--ui-muted); --g2s-accent:var(--ui-accent); max-width:700px; padding: 22px 15px 70px; }
+.alex-shell .g2-social-title { margin-bottom:20px; padding:0 2px; }
+.alex-shell .g2-social-title h1 { font-size:30px; line-height:1.1; letter-spacing:-.04em; }
+.alex-shell .g2-social-kicker { font-size:10px; }
+.alex-shell .g2-social-title-actions button { width:44px; height:44px; border-radius:15px; background:#24242f; }
+.alex-shell .g2-social-quick-profile { padding:13px; border-radius:19px; gap:13px; }
+.alex-shell .g2-social-compose-trigger { font-size:14px; }
+.alex-shell .g2-social-stories { gap:21px; margin:19px 5px 22px; }
+.alex-shell .g2-social-stories button { gap:9px; font-size:11px; }
+.alex-shell .g2-social-search { min-height:48px; border-radius:15px; padding:12px 14px; }
+.alex-shell .g2-social-search input { font-size:16px!important; }
+.alex-shell .g2-social-tabs { gap:8px; margin:16px -2px 14px; padding:0 2px 5px; }
+.alex-shell .g2-social-tabs button { min-height:39px; padding:9px 15px; font-size:12px; border-radius:12px; }
+.alex-shell .g2-social-tabs button.selected { background:#c8b6fa; color:#1a1426; }
+.alex-shell .g2-social-posts { gap:15px; }
+.alex-shell .g2-social-post { padding:18px 16px 13px; border-radius:21px; background:linear-gradient(150deg,#1c1d25,#15161c); box-shadow:0 10px 32px rgba(0,0,0,.11); }
+.alex-shell .g2-post-top { gap:12px; }
+.alex-shell .g2-post-author { gap:11px; }
+.alex-shell .g2-post-author strong { font-size:14px; }
+.alex-shell .g2-post-author small { font-size:11px; color:#aaa5b4; }
+.alex-shell .g2-post-copy { font-size:14px; line-height:1.57; margin:15px 0 12px; }
+.alex-shell .g2-post-image { border-radius:16px; }
+.alex-shell .g2-post-actions { padding-top:12px; gap:10px; }
+.alex-shell .g2-post-actions button { min-height:42px; padding:10px 8px; border-radius:12px; font-size:12px; }
+.alex-shell .g2-social-post .g2-post-actions button.selected { color:#d8b5fa; }
+.alex-shell .g2-comment-form input { min-height:45px; font-size:16px; }
+.alex-shell .g2-social-person-profile { border-radius:21px; }
+.alex-shell .g2-social-cover { height:130px; }
+.alex-shell .g2-social-profile-details { padding:0 18px 20px; }
+.alex-shell .g2-social-profile-details h2 { font-size:23px; }
+.alex-shell .g2-social-profile-details>p { font-size:13px; }
+.alex-shell .g2-social-profile-ctas button, .alex-shell .g2-social-primary { min-height:44px; }
+.alex-shell .g2-social-composer { background:#1b1b24; border-color:#45404f; }
+.alex-shell .g2-social-composer textarea { font-size:16px; line-height:1.55; }
+.alex-shell .g2-compose-image input { font-size:16px; }
+.alex-shell .g2-social-composer footer button { min-height:45px; }
+
+/* Settings: calmer diagnostics surface and larger, accessible touch controls. */
+.alex-shell .settings-screen { background:#0b0c12; }
+.alex-shell .settings-topbar { background:#111218; border-bottom:1px solid var(--ui-stroke); }
+.alex-shell .settings-scroll { padding:20px 16px calc(26px + env(safe-area-inset-bottom)); }
+.alex-shell .settings-list-card, .alex-shell .settings-details-card { border-color:var(--ui-stroke); background:#181920; border-radius:19px; }
+.alex-shell .settings-group-head h3 { color:#b8b7c4; font-size:12px; }
+.alex-shell .settings-row { min-height:72px; }
+.alex-shell .settings-hero-card { background:linear-gradient(150deg,#262035,#16151c); border-color:#3c3450; border-radius:19px; }
+.alex-shell .settings-icon-button { width:44px; height:44px; border-radius:14px; }
+.alex-shell .settings-full-editor { font-size:16px; }
+.alex-shell .settings-back-button, .alex-shell .settings-save-button { min-height:42px; }
+
+.alex-shell .alex-inline-error, .alex-shell .social-error-banner {
+  border:1px solid #77404e; background:#37212c; color:#f4c8d1; border-radius:15px; font-size:13px;
+}
+
+@media (min-width: 700px) {
+  .alex-shell { max-width:560px; }
+  .alex-shell .alex-page { padding-left:24px; padding-right:24px; }
+}
+@media (max-width: 390px) {
+  .alex-shell .alex-header { gap:10px; padding-left:13px; padding-right:13px; }
+  .alex-shell .alex-page { padding-left:13px; padding-right:13px; }
+  .alex-shell .alex-person-card { padding:16px; }
+  .alex-shell .alex-person-actions { gap:6px; }
+  .alex-shell .alex-person-actions button { font-size:11px; }
+  .alex-shell .g2-social-network { padding-left:10px; padding-right:10px; }
+  .alex-shell .alex-bottom-nav { padding-left:6px; padding-right:6px; }
+  .alex-shell .alex-bottom-nav button { font-size:10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .alex-shell *, .alex-shell *::before, .alex-shell *::after { scroll-behavior:auto!important; animation-duration:.01ms!important; transition-duration:.01ms!important; }
+}

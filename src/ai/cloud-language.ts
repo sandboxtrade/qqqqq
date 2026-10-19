@@ -297,7 +297,9 @@ interface WorkerReply {
 }
 
 const TOKEN_PREP_TIMEOUT_MS = 18_000;
-const WORKER_REQUEST_TIMEOUT_MS = 40_000;
+// Must exceed the Worker's maximum 35s GPT call + up to 8s Firebase Auth
+// verification and network overhead, otherwise the client aborts a valid reply.
+const WORKER_REQUEST_TIMEOUT_MS = 52_000;
 const TRANSIENT_CIRCUIT_MS = 2_000;
 const NOT_FOUND_CIRCUIT_MS = 10 * 60_000;
 let unavailableUntil = 0;

@@ -28,7 +28,7 @@ export function PeopleScreen({ wallet, walletBusy, ready, onChat, onSettings, on
       <div className="alex-person-head"><div className="alex-social-avatar">{person.core.name.charAt(0)}</div>
         <div><strong>{person.core.name}, {person.core.age}</strong><span>@{person.handle} · {person.occupation}</span><small>{person.bio}</small></div></div>
       <div className="alex-person-actions">
-        <button type="button" className="primary" onClick={() => onChat(person.id)}>Написать</button>
+        <button type="button" className="primary" onClick={() => onChat(person.id)}><Icon name="chat" size={17}/>Написать</button>
         <button type="button" onClick={() => { setSelected(person.id); setPanel(panel === "gifts" && selected === person.id ? null : "gifts"); setPending(null); }}>Подарок</button>
         <button type="button" onClick={() => { setSelected(person.id); setPanel(panel === "transfer" && selected === person.id ? null : "transfer"); setPending(null); }}>Перевод</button>
       </div>

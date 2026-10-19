@@ -13,6 +13,8 @@ import { GIFT_CATALOG, loadPlayerProfile, loadVirtualWallet, savePlayerProfile, 
 import "./styles.css";
 import "./social-v2.css";
 import "./alexandra.css";
+import "./social-network.css";
+import "./ui-refresh.css";
 
 const SettingsScreen = lazy(() => import("./ui/SettingsScreen").then(m => ({ default: m.SettingsScreen })));
 type Page = "chat" | "people" | "social" | "profile" | "settings";
@@ -48,6 +50,12 @@ export default function App() {
     exportConversation: s.exportConversation,
   })));
   const [page, setPage] = useState<Page>("chat");
+  const [settingsReturnPage, setSettingsReturnPage] = useState<Exclude<Page, "settings">>("chat");
+  const openSettings = () => {
+    if (page === "settings") { setPage(settingsReturnPage); return; }
+    setSettingsReturnPage(page);
+    setPage("settings");
+  };
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
   const [wallet, setWallet] = useState<VirtualWallet | null>(null);
   const [playerLoading, setPlayerLoading] = useState(true);
@@ -106,8 +114,8 @@ export default function App() {
   };
   const openCharacterSettings = (characterId: string) => {
     if (!isKnownCharacterId(characterId)) return;
-    if (activeCharacterId === characterId) { setPage("settings"); return; }
-    void selectCharacter(characterId).then(() => setPage("settings"));
+    if (activeCharacterId === characterId) { setSettingsReturnPage("people"); setPage("settings"); return; }
+    void selectCharacter(characterId).then(() => { setSettingsReturnPage("people"); setPage("settings"); });
   };
   const saveProfile = async (draft: PlayerProfile) => {
     if (playerBusy) return;
@@ -156,12 +164,18 @@ export default function App() {
 
   const status = initializing ? "Подключение…" : busy ? "Пишет сообщение…" :
     !ready ? "Не в сети" : runtime?.world.isAwake === false ? "Спит" : "На связи";
-  return <main className="social-app-shell alex-shell">
+  return <main className="social-app-shell alex-shell" data-page={page}>
     <header className="alex-header">
-      <button className="alex-header-avatar alex-avatar-button" type="button" onClick={() => setPage("people")}>{character.core.name.charAt(0)}</button>
-      <div className="alex-header-copy"><strong>{page === "profile" ? "Мой профиль" : page === "people" ? "Люди" : page === "social" ? "Соцсеть" : character.core.name}</strong>
-        <span>{page === "chat" ? <><i className={ready ? "alex-status-dot" : "alex-status-dot offline"}/>{status}</> : "Game2 · виртуальный мир"}</span></div>
-      <button className="alex-settings-button" type="button" aria-label="Настройки" onClick={() => setPage(page === "settings" ? "chat" : "settings")}><Icon name={page === "settings" ? "close" : "settings"} size={21}/></button>
+      {page === "chat" ? (
+        <button className="alex-header-avatar alex-avatar-button" type="button" aria-label="Открыть профиль Александры в разделе Люди" onClick={() => setPage("people")}>{character.core.name.charAt(0)}</button>
+      ) : (
+        <div className="alex-brand-mark" aria-hidden="true">G<span>2</span></div>
+      )}
+      <div className="alex-header-copy">
+        <strong>{page === "profile" ? "Мой профиль" : page === "people" ? "Люди" : page === "social" ? "Соцсеть" : page === "settings" ? "Настройки" : character.core.name}</strong>
+        <span>{page === "chat" ? <><i className={ready ? "alex-status-dot" : "alex-status-dot offline"}/>{status}</> : "GAME2 · SOCIAL WORLD"}</span>
+      </div>
+      <button className="alex-settings-button" type="button" aria-label={page === "settings" ? "Вернуться" : "Открыть настройки"} title={page === "settings" ? "Назад" : "Настройки"} onClick={openSettings}><Icon name={page === "settings" ? "close" : "settings"} size={20}/></button>
     </header>
     {runtimeConfigurationError && <div className="alex-inline-error" role="status">{runtimeConfigurationError}</div>}
     {error && <div className="error-banner social-error-banner"><span>{error}</span><button type="button" onClick={() => { clearError(); if (!ready) void initialize(); }}>{ready ? "×" : "Повторить"}</button></div>}
@@ -172,11 +186,11 @@ export default function App() {
         onRetry={retry} onRetryPhoto={retryPhoto} onDismissFailed={dismissFailed}
         hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlder} />}
       {page === "people" && <PeopleScreen wallet={wallet} walletBusy={playerBusy} ready={ready} onChat={openChat} onSettings={openCharacterSettings} onSpend={spend}/>}
-      {page === "social" && <AlexandraSocial onMessage={() => openChat("alexandra_v1")} onMyProfile={() => setPage("profile")} playerProfile={playerProfile}/>}
+      {page === "social" && <AlexandraSocial uid={uid} onMessage={() => openChat("alexandra_v1")} onMyProfile={() => setPage("profile")} playerProfile={playerProfile}/>}
       {page === "profile" && <MyProfile profile={playerProfile} wallet={wallet} loading={playerLoading} saving={playerBusy} onSave={saveProfile} onTopUp={topUp} />}
       {page === "settings" && <Suspense fallback={<div className="alex-loading">Настройки…</div>}>
         <SettingsScreen key={activeCharacterId} characterName={character.core.name} firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
-          onClose={() => setPage("profile")} appCheckState={appCheckState} user={user} trace={lastTrace}
+          onClose={() => setPage(settingsReturnPage)} appCheckState={appCheckState} user={user} trace={lastTrace}
           maintenanceError={maintenanceError} onSignOut={() => void signOut()}
           onClearConversationAndMemory={clearConversationAndMemory} clearingData={resettingData}
           resetDisabled={!ready || resettingData} personality={editablePersonality}
@@ -188,10 +202,10 @@ export default function App() {
       </Suspense>}
     </div>
     {page !== "settings" && <nav className="social-bottom-nav alex-bottom-nav" aria-label="Навигация">
-      <button type="button" className={page === "chat" ? "active" : ""} onClick={() => setPage("chat")}><Icon name="chat" size={21}/><span>Чат</span></button>
-      <button type="button" className={page === "people" ? "active" : ""} onClick={() => setPage("people")}><Icon name="together" size={21}/><span>Люди</span></button>
-      <button type="button" className={page === "social" ? "active" : ""} onClick={() => setPage("social")}><Icon name="look" size={21}/><span>Соцсеть</span></button>
-      <button type="button" className={page === "profile" ? "active" : ""} onClick={() => setPage("profile")}><Icon name="settings" size={21}/><span>Профиль</span></button>
+      <button type="button" className={page === "chat" ? "active" : ""} aria-current={page === "chat" ? "page" : undefined} onClick={() => setPage("chat")}><Icon name="chat" size={21}/><span>Чат</span></button>
+      <button type="button" className={page === "people" ? "active" : ""} aria-current={page === "people" ? "page" : undefined} onClick={() => setPage("people")}><Icon name="together" size={21}/><span>Люди</span></button>
+      <button type="button" className={page === "social" ? "active" : ""} aria-current={page === "social" ? "page" : undefined} onClick={() => setPage("social")}><Icon name="social" size={22}/><span>Соцсеть</span></button>
+      <button type="button" className={page === "profile" ? "active" : ""} aria-current={page === "profile" ? "page" : undefined} onClick={() => setPage("profile")}><Icon name="person" size={22}/><span>Профиль</span></button>
     </nav>}
   </main>;
 }

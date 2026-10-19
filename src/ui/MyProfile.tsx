@@ -19,6 +19,7 @@ export function MyProfile({ profile, wallet, loading, saving, onSave, onTopUp }:
       <div className="alex-profile-picture">{draft.avatarUrl ? <img src={draft.avatarUrl} alt="Мой аватар" /> : draft.displayName.charAt(0).toUpperCase()}</div>
       <strong>{draft.displayName}</strong><span>{draft.handle ? `@${draft.handle}` : "Добавь имя пользователя"}</span>
     </div>
+    <div className="alex-form-intro"><h2>Редактировать профиль</h2><p>Имя, фотографии и описание формируют твою анкету в социальном мире.</p></div>
     <form className="alex-profile-form" onSubmit={event => { event.preventDefault(); void onSave(draft); }}>
       <label>Имя<input required maxLength={48} value={draft.displayName} onChange={e => edit({displayName:e.target.value})}/></label>
       <label>Имя пользователя<input maxLength={24} value={draft.handle} placeholder="nickname" onChange={e => edit({handle:e.target.value})}/></label>
@@ -29,7 +30,7 @@ export function MyProfile({ profile, wallet, loading, saving, onSave, onTopUp }:
       <label>Ссылка на аватар (HTTPS)<input type="url" value={draft.avatarUrl} placeholder="https://…" onChange={e => edit({avatarUrl:e.target.value})}/></label>
       <label>Оформление<select value={draft.theme} onChange={e => edit({theme:e.target.value as PlayerProfile["theme"]})}>{THEMES.map(t => <option value={t.value} key={t.value}>{t.label}</option>)}</select></label>
       <label className="alex-profile-visibility"><input type="checkbox" checked={draft.discoverable} onChange={e => edit({discoverable:e.target.checked})}/><span><strong>Показывать анкету другим персонажам</strong><small>Подготовка к будущим входящим знакомствам. Автоматический подбор и новые сообщения пока не включены.</small></span></label>
-      <button className="alex-save-button" type="submit" disabled={saving || !draft.displayName.trim()}>{saving ? "Сохранение…" : "Сохранить профиль"}</button>
+      <button className="alex-save-button" type="submit" disabled={saving || !draft.displayName.trim()}>{saving ? "Сохранение…" : "Сохранить изменения"}</button>
     </form>
     <div className="alex-section-title"><h2>Кошелёк</h2><span>Виртуальная валюта</span></div>
     <div className="alex-wallet-card"><Icon name="gift" size={25}/><div><small>Твой баланс</small><strong>{formatGameMoney(wallet?.balance ?? 0)}</strong></div></div>

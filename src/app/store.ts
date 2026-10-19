@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "../config/version";
 import { encodeEconomyEvent, decodeEconomyEvent, formatGameMoney, economyEventContext, type VirtualTransaction } from "../storage/player-data";
 import { create } from "zustand";
 import {
@@ -605,38 +606,39 @@ function startLiveSync(version: number, user: AuthProfile | null, characterId: s
     if (version !== epoch) return;
     pendingLiveRevision = Math.max(pendingLiveRevision, revision);
     const state = useAppStore.getState();
-    if (
-      version !== epoch ||
-      state.busy ||
-      !state.runtime ||
-      pendingLiveRevision <= state.runtime.revision
-    )
-      return;
-    liveRefresh?.abort();
+    if (state.busy || !state.runtime ||
+        pendingLiveRevision <= state.runtime.revision || liveRefresh) return;
     const controller = new AbortController();
     liveRefresh = controller;
+    const requestedRevision = pendingLiveRevision;
+    // Coalesce revision notifications. Do not abort an in-flight Firestore
+    // read only to launch another read: getDoc itself is not cancellable.
     void bounded(
       refreshRuntimeFromPersistence(user.uid, controller.signal, state.runtime, characterId),
-      9000,
+      25_000,
       "Синхронизация состояния",
       controller.signal,
     )
       .then((runtime) => {
-        if (
-          version === epoch &&
-          !controller.signal.aborted &&
-          !useAppStore.getState().busy &&
-          runtime.revision >= (useAppStore.getState().runtime?.revision ?? 0)
-        )
-          useAppStore.setState({ runtime });
+        if (version !== epoch || controller.signal.aborted) return;
+        const latest = useAppStore.getState();
+        if (!latest.busy && runtime.revision >= (latest.runtime?.revision ?? 0)) {
+          useAppStore.setState({ runtime, maintenanceError: null });
+        }
       })
       .catch((error) => {
         if (version === epoch && !controller.signal.aborted)
           useAppStore.setState({ maintenanceError: errorText(error) });
       })
       .finally(() => {
-        controller.abort();
+        const isCurrent = version === epoch && liveRefresh === controller;
         if (liveRefresh === controller) liveRefresh = null;
+        controller.abort();
+        // A newer revision arrived while the read was in flight; reconcile it
+        // once, but never run a retry loop after a network error.
+        if (isCurrent && pendingLiveRevision > requestedRevision) {
+          refreshRuntime(pendingLiveRevision);
+        }
       });
   };
 
@@ -838,14 +840,14 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
   try {
     const result = await bounded(
       bootstrapRuntime(user?.uid ?? null, controller.signal, undefined, characterId),
-      12000,
+      40000,
       "Запуск",
       controller.signal,
     );
     if (version !== epoch) return;
     const editableContext = await bounded(
       loadCharacterEditableContext(characterId, user?.uid ?? null, controller.signal),
-      10000,
+      25000,
       "Загрузка характера и памяти",
       controller.signal,
     );
@@ -1000,10 +1002,10 @@ async function sendTurn(message: ChatMessage) {
     () =>
       controller.abort(
         new Error(
-          "Отправка заняла больше 85 секунд. Проверь соединение и повтори.",
+          "Отправка заняла больше 110 секунд. Проверь соединение и повтори.",
         ),
       ),
-    85000,
+    110000,
   );
   useAppStore.setState((state) => ({
     busy: true,
@@ -1154,7 +1156,7 @@ async function sendTurn(message: ChatMessage) {
       code: error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code ?? "") : "",
       reason: error instanceof Error ? error.message : String(error),
-      version: "0.21.9",
+      version: ENGINE_VERSION,
     });
     useAppStore.setState((state) => {
       const confirmed = (activeTurnId === message.id && activeTurnConfirmed) || state.messages.some(m => m.id === `reply_${message.id}` && m.delivery === "saved");
@@ -1175,9 +1177,11 @@ async function sendTurn(message: ChatMessage) {
     if (active === controller) active = null;
     if (activeTurnId === message.id) activeTurnId = null;
     if (version === epoch) {
-      // The user event may already be persisted even when a later storage step fails,
-      // so memory work must be scheduled after every attempted turn.
-      scheduleMaintenance();
+      // Background maintenance must not compete with an immediately retried
+      // failed turn for a struggling Firestore connection. User event is
+      // immutable and remains recoverable on the next successful run/boot.
+      const failed = useAppStore.getState().failedMessageIds.includes(message.id);
+      scheduleMaintenance(failed ? 30_000 : 2000);
       flushLiveRevision?.();
     }
   }
@@ -1226,9 +1230,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         ? await bounded(
             (async () => {
               await finishRedirect();
-              return waitForInitialAuth(10000);
+              return waitForInitialAuth(15000);
             })(),
-            12000,
+            18000,
             "Google Auth",
           )
         : null;
@@ -1651,14 +1655,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
     ) return;
     const parentReplyId = message.id.slice("pending_photo_".length);
     if (!parentReplyId) return;
-    const decision: CloudPhotoDecision = {
-      shouldSendPhoto: true,
-      reason: message.photoReason ?? "user_requested",
-      caption: message.text,
-      intent: message.photoIntent,
-    };
     const savedJob = state.user ? readPhotoJob(state.user.uid, parentReplyId) : null;
-    if (savedJob && !savedJob.task) writePhotoJob({ ...savedJob, status: "queued" });
+    if (!savedJob?.task?.providerTaskId || !savedJob.task.taskToken) {
+      const warning = "Номер оплаченной задачи WaveSpeed не сохранился. Нельзя безопасно повторить запрос — это может списать деньги повторно.";
+      set((current) => ({
+        maintenanceError: warning,
+        messages: current.messages.map((item) => item.id === messageId ? { ...item, photoError: warning } : item),
+      }));
+      return;
+    }
+    // Reuse the complete GPT-signed original decision and existing paid task.
+    const decision = savedJob.decision;
     set({ maintenanceError: null, photoBalanceAlert: null });
     queueGeneratedPhotoDelivery(
       epoch,

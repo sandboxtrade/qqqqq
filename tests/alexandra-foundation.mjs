@@ -33,15 +33,16 @@ test("four tabs, social contacts and user profile replace the old nearby scene",
   assert.equal(existsSync(new URL("../src/ai/presence-photo.ts", import.meta.url)), false);
 });
 
-test("inactive legacy providers remain in source while WaveSpeed LoRA is active in chat", () => {
+test("active Worker is clean while protected GPT and WaveSpeed LoRA routes are preserved", () => {
   const worker = source("cloudflare/worker.js");
   assert.doesNotMatch(worker, /\/alexandraPresencePhoto/u);
   assert.match(worker, /wavespeed-ai\/z-image\/turbo-lora/u);
   assert.match(worker, /ALEXANDRA_LORA_URL/u);
-  assert.match(worker, /gpt-image-2/u);
-  for (const provider of ["api.wavespeed.ai", "seedream-v4.5", "seedream-v5.0-lite", "qwen-image", "/yuzukiPhoto", "/yuzukiPhotoResult"]) assert.ok(worker.includes(provider), provider);
+  assert.doesNotMatch(worker, /const\s+alexPhotoProviders\s*=|gpt-image-2|seedream-v4\.5|seedream-v5\.0-lite|qwen-image/u);
+  for (const route of ["/yuzukiSpeak", "/yuzukiPhoto", "/yuzukiPhotoResult", "/health"]) assert.ok(worker.includes(route), route);
   assert.match(worker, /verifyAppCheckToken/u);
   assert.match(worker, /verifyFirebaseAuth/u);
+  assert.ok(worker.split("\n").length < 900, "no 3K-line inactive legacy backend");
 });
 
 test("wallet debits atomically, profile is additive and offers never force affection", () => {
@@ -55,7 +56,7 @@ test("wallet debits atomically, profile is additive and offers never force affec
   assert.match(data, /discoverable/u);
   assert.match(data, /transactions\.some/u);
   assert.match(people, /Подтвердить/u);
-  assert.match(profile, /Сохранить профиль/u);
+  assert.match(profile, /Сохранить изменения/u);
   assert.match(registry, /characterProfiles\.find/u);
   assert.doesNotMatch(data, /relationshipReaction|affection/u);
 });
@@ -95,7 +96,7 @@ test("photo client retains WaveSpeed job polling, recovery and auth", () => {
 
 test("schema 4 and new 0.21.3 screen modules persist", () => {
   assert.match(source("src/config/version.ts"), /SCHEMA_VERSION = 4/u);
-  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.9"/u);
+  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.15"/u);
   for (const file of ["src/ui/PeopleScreen.tsx", "src/ui/MyProfile.tsx", "src/ui/AlexandraSocial.tsx", "src/ui/ChatScreen.tsx"]) assert.ok(source(file).length > 200, file);
 });
 
@@ -129,7 +130,9 @@ test("Firestore fast consistent reads and serialized chat retries keep immutable
   const world = source("src/world/world.ts");
   assert.match(firestore, /async loadRuntimeState\(\)/u);
   assert.match(firestore, /getDoc\(stateRef\), getDoc\(worldRef\)/u);
-  assert.match(firestore, /only in[\s\S]+?exceptional case/u);
+  assert.match(firestore, /Retry a skewed/u);
+  assert.match(firestore, /throw new Error\("Ревизии состояния/u);
+  assert.doesNotMatch(firestore.slice(firestore.indexOf("async loadRuntimeState()"), firestore.indexOf("async loadSnapshot()")), /tx\.set\(/u);
   assert.match(store, /withCharacterTurnLock/u);
   assert.match(store, /isTransientFirestoreTurnError/u);
   assert.match(store, /message, activeRuntime, turnOptions\(activeHistory\)/u);

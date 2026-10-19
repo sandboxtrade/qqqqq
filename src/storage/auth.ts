@@ -27,7 +27,7 @@ function profile(user: User): AuthProfile {
 }
 
 export function waitForInitialAuth(
-  timeoutMs = 6000,
+  timeoutMs = 15000,
 ): Promise<AuthProfile | null> {
   if (!isFirebaseConfigured) return Promise.resolve(null);
   const app = getFirebaseApp();

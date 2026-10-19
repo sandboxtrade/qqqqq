@@ -60,6 +60,7 @@ interface WorkerPhotoReply {
   ok?: unknown;
   skipped?: unknown;
   pending?: unknown;
+  ready?: unknown;
   reason?: unknown;
   error?: unknown;
   detail?: unknown;
@@ -86,7 +87,7 @@ interface WorkerPhotoReply {
 
 // Z-Image Turbo LoRA is asynchronous. Submit waits for a prediction id,
 // then result polling continues without creating a second billed task.
-const PHOTO_START_TIMEOUT_MS = 235_000;
+const PHOTO_START_TIMEOUT_MS = 65_000;
 // Count completed polls instead of using a wall-clock deadline. Mobile Safari
 // can suspend timers while backgrounded; a wall-clock timeout used to mark an
 // otherwise healthy WaveSpeed job as failed immediately after the app resumed.
@@ -115,6 +116,9 @@ function workerPhotoEndpoint() {
 
 function workerPhotoResultEndpoint() {
   return workerPhotoEndpoint().replace(/\/yuzukiPhoto$/u, "/yuzukiPhotoResult");
+}
+function workerPhotoAssetEndpoint() {
+  return workerPhotoEndpoint().replace(/\/yuzukiPhoto$/u, "/yuzukiPhotoAsset");
 }
 
 function asNumber(value: unknown) {
@@ -302,6 +306,71 @@ function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
+/** Fetch the already-generated photo as bytes, avoiding large base64 JSON
+ * responses in Safari. Retries never submit a new paid WaveSpeed prediction. */
+async function fetchFinishedImage(
+  taskId: string,
+  taskToken: string,
+  idToken: string,
+  appCheckToken: string,
+  signal?: AbortSignal,
+): Promise<{ dataUrl: string; mimeType: string }> {
+  let lastFailure = "photo-asset-unavailable";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt) await sleep(attempt * 3000, signal);
+    const controller = new AbortController();
+    const detach = bindAbort(signal, controller);
+    const timeout = window.setTimeout(() => controller.abort(new Error("photo-asset-timeout")), 45_000);
+    try {
+      const response = await fetch(workerPhotoAssetEndpoint(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+          "X-Firebase-AppCheck": appCheckToken,
+        },
+        body: JSON.stringify({ taskId, taskToken }),
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({})) as WorkerPhotoReply;
+        lastFailure = reasonFrom(error, response.status);
+        if (response.status === 401 || response.status === 403 || response.status === 400) break;
+        continue;
+      }
+      const mimeType = (response.headers.get("Content-Type") || "").split(";")[0].trim();
+      if (!["image/png", "image/jpeg", "image/webp"].includes(mimeType)) {
+        lastFailure = "photo-asset-invalid-mime";
+        continue;
+      }
+      const blob = await response.blob();
+      if (!blob.size || blob.size > 14_000_000) {
+        lastFailure = "photo-asset-invalid-size";
+        continue;
+      }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("photo-file-reader-error"));
+        reader.readAsDataURL(blob);
+      });
+      if (!dataUrl.startsWith(`data:${mimeType};base64,`)) {
+        lastFailure = "photo-asset-invalid-data";
+        continue;
+      }
+      return { dataUrl, mimeType };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      lastFailure = error instanceof Error ? error.message : "photo-asset-load-failed";
+    } finally {
+      window.clearTimeout(timeout);
+      detach();
+    }
+  }
+  throw new Error(`Не удалось загрузить уже созданное фото (${lastFailure}). Повторное получение не создаст новую генерацию.`);
+}
+
 async function pollWaveSpeedPhoto(
   taskId: string,
   idToken: string,
@@ -360,6 +429,28 @@ async function pollWaveSpeedPhoto(
       if (data.pending === true) {
         lastReason = firstString(data.reason) || "wavespeed-pending";
         continue;
+      }
+      if (data.ok === true && data.ready === true && pollContext.taskToken) {
+        // Task is paid and completed. Download it in a separate binary request.
+        // If Safari interrupts transfer, keep the prediction ID in the journal.
+        try {
+          const image = await fetchFinishedImage(taskId, pollContext.taskToken, idToken, appCheckToken, signal);
+          return {
+            attempted: true, used: true,
+            dataUrl: image.dataUrl, mimeType: image.mimeType,
+            model: firstString(data.model, pollContext.model), provider: "wavespeed",
+            providerTaskId: taskId,
+            prompt: firstString(pollContext.prompt),
+          };
+        } catch (error) {
+          if (signal?.aborted) throw signal.reason ?? error;
+          return {
+            attempted: true, used: false, provider: "wavespeed",
+            providerTaskId: taskId,
+            reason: "photo-asset-download-failed",
+            detail: error instanceof Error ? error.message : String(error),
+          };
+        }
       }
       const dataUrl = firstString(data.dataUrl);
       if (data.ok === true && dataUrl) {

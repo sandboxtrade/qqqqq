@@ -5,6 +5,8 @@ import type { RuntimeTrace } from "../engine/runtime";
 import type { ConversationExportLimit } from "../chat/conversation-export";
 import { MAX_MEMORY_CHARS, MAX_PERSONALITY_CHARS } from "../context/yuzuki-context";
 import { DebugPanel } from "./components";
+import { ENGINE_VERSION } from "../config/version";
+import { lastFirebaseFailure, subscribeFirebaseDiagnostic } from "../storage/firebase-diagnostics";
 
 // Character settings share the established Firestore context format (SCHEMA_VERSION 4).
 
@@ -95,6 +97,8 @@ export function SettingsScreen({
   exportBusy: boolean;
   onExportConversation: (limit: ConversationExportLimit) => Promise<string>;
 }) {
+  const [firebaseFailure, setFirebaseFailure] = useState(lastFirebaseFailure);
+  useEffect(() => subscribeFirebaseDiagnostic(() => setFirebaseFailure(lastFirebaseFailure())), []);
   const [view, setView] = useState<SettingsView>("home");
   const [confirmReset, setConfirmReset] = useState(false);
   const [personalityDraft, setPersonalityDraft] = useState(personality);
@@ -356,8 +360,8 @@ export function SettingsScreen({
             </summary>
             <div className="settings-diagnostics-body">
               <div className="setting-row"><span>Аккаунт</span><strong>{user?.email ?? "Локальный пользователь"}</strong></div>
-              <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "подключён" : "локальный режим"}</strong></div>
-              <div className="setting-row"><span>Сборка Game2</span><strong>0.21.9</strong></div>
+              <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "настроен" : "локальный режим"}</strong></div>
+              <div className="setting-row"><span>Сборка Game2</span><strong>{ENGINE_VERSION}</strong></div>
               <div className="setting-row"><span>App Check</span><strong>{appCheckLabels[appCheckState]}</strong></div>
               <div className="setting-row"><span>Диалог</span><strong>{dialogueEngineLabel}</strong></div>
               <div className="setting-row"><span>Контекст GPT</span><strong>Personality + Memory + 15/15</strong></div>
@@ -368,6 +372,13 @@ export function SettingsScreen({
                   <div className="setting-row"><span>Формулировка</span><strong>{(trace.timings.generationMs / 1000).toFixed(1)} с</strong></div>
                   <div className="setting-row"><span>Всего</span><strong>{(trace.timings.totalMs / 1000).toFixed(1)} с</strong></div>
                 </>
+              )}
+              {firebaseFailure && (
+                <div className="error-card">
+                  Последний сбой Firebase: {firebaseFailure.operation} · {firebaseFailure.code}
+                  {firebaseFailure.elapsedMs ? ` · ${firebaseFailure.elapsedMs} мс` : ""}
+                  {` · ${new Date(firebaseFailure.at).toLocaleTimeString("ru-RU")}`}
+                </div>
               )}
               {maintenanceError && <div className="error-card">Фоновое состояние: {maintenanceError}</div>}
               <DebugPanel trace={trace} />

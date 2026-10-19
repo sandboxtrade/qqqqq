@@ -7,7 +7,7 @@
 export const FIRESTORE_READ_TIMEOUT_MS = 30_000;
 
 const PURE_READ_METHODS = new Set([
-  "getEvent", "listRecentEvents", "listConversationEvents", "listPendingTurns",
+  "getEvent", "loadRuntimeState", "loadSnapshot", "loadWorldState", "listRecentEvents", "listConversationEvents", "listPendingTurns",
   "listPendingMemoryEvents", "listProcessedMemoryEvents",
   "loadEditableContext", "loadIntimacyState", "loadIntimacyPreferences",
   "loadMemoryRecoveryState", "loadMemory", "listMemories", "loadKnowledge",

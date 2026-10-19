@@ -16,6 +16,7 @@ import type { CharacterEvent } from "../events/event-types";
 import type { ConversationCursor } from "./repositories/interfaces";
 import { getFirebaseDb, isFirebaseConfigured } from "./firebase";
 import { getAuthenticatedUid } from "./auth";
+import { recordFirebaseFailure } from "./firebase-diagnostics";
 import {
   decodeCharacterEvent,
   decodeCompanionSnapshot,
@@ -64,7 +65,12 @@ export function subscribeCharacterLiveSync(
       throw new Error("Сеанс изменился. Live sync остановлен.");
   };
 
-  const fail = (error: unknown) => callbacks.onError?.(asError(error));
+  const fail = (error: unknown) => {
+    const code = error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "") : "";
+    recordFirebaseFailure("liveSync", code, 0);
+    callbacks.onError?.(asError(error));
+  };
   const eventsRef = collection(
     db,
     "users",
@@ -78,6 +84,7 @@ export function subscribeCharacterLiveSync(
   let stopped = false;
   let catchUpRunning = false;
   let catchUpRequested = false;
+  let catchUpTimer: ReturnType<typeof setTimeout> | null = null;
   let contiguousCursor = options.after ?? null;
   let lastStateRevision = -1;
   const catchUpBatchSize = Math.max(
@@ -161,7 +168,14 @@ export function subscribeCharacterLiveSync(
           // Do not advance contiguousCursor from the bounded snapshot: if more
           // than 300 messages arrived offline that would skip the middle. Only
           // the ascending catch-up is allowed to advance it.
-          requestCatchUp();
+          // Batch snapshot notifications into one catch-up query. Previously
+          // every change caused another full Firestore read, often while the
+          // previous query was still finishing (especially on mobile).
+          if (catchUpTimer) clearTimeout(catchUpTimer);
+          catchUpTimer = setTimeout(() => {
+            catchUpTimer = null;
+            requestCatchUp();
+          }, 900);
         } catch (error) {
           fail(error);
         }
@@ -195,6 +209,8 @@ export function subscribeCharacterLiveSync(
   return () => {
     stopped = true;
     catchUpRequested = false;
+    if (catchUpTimer) clearTimeout(catchUpTimer);
+    catchUpTimer = null;
     unsubscribeEvents();
     unsubscribeState();
   };

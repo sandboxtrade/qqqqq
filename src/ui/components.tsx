@@ -20,9 +20,13 @@ export type IconName =
   | "hanger"
   | "chair"
   | "close"
-  | "google";
+  | "google"
+  | "social"
+  | "person";
 
 const paths: Record<IconName, string> = {
+  social: "M4 4h16v16H4zM4 9h16M9 4v16M14 4v16",
+  person: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21v-2a8 8 0 0 1 16 0v2",
   chat: "M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5.5 4v-4.7A2.5 2.5 0 0 1 4 12.5z",
   together:
     "M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7 1.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2.8 20c.5-4 2.5-6 5.7-6s5.2 2 5.7 6m-1.2-5.1c.7-.3 1.5-.4 2.5-.4 2.8 0 4.6 1.8 5 5.5",

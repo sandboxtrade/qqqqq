@@ -7,7 +7,7 @@ import {
   ReCaptchaEnterpriseProvider,
   type AppCheck,
 } from "firebase/app-check";
-import { getFirestore, type Firestore } from "firebase/firestore";
+import { initializeFirestore, type Firestore } from "firebase/firestore";
 import {
   assertRuntimeConfiguration,
   firebaseMissingFields,
@@ -20,6 +20,7 @@ import {
 } from "../config/runtime-config";
 
 import { bounded } from "../core/async";
+import { recordFirebaseFailure } from "./firebase-diagnostics";
 
 export const firebaseConfig = runtimeFirebaseConfig;
 
@@ -175,6 +176,7 @@ export async function getFirebaseAppCheckToken(forceRefresh = false): Promise<st
       return result.token;
     } catch (error) {
       appCheckState = isAppCheckThrottleError(error) ? "throttled" : "error";
+      recordFirebaseFailure("appCheck", appCheckErrorCode(error), 0);
       throw new Error(describeAppCheckError(error));
     }
   })();
@@ -192,7 +194,12 @@ export function getFirebaseDb(): Firestore | null {
   assertRuntimeConfiguration();
   if (!db) {
     const firebaseApp = getFirebaseApp();
-    db = firebaseApp ? getFirestore(firebaseApp) : null;
+    // Auto-detect networks that block or prematurely close Firestore's
+    // streaming WebChannel transport (mobile Safari, webviews and proxies).
+    // All callers use this singleton; do not initialize a second Firestore SDK.
+    db = firebaseApp ? initializeFirestore(firebaseApp, {
+      experimentalAutoDetectLongPolling: true,
+    }) : null;
   }
   return db;
 }
