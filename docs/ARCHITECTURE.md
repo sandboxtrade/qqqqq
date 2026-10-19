@@ -1,49 +1,27 @@
-# Current Architecture — v0.20.49
+# Game2 / Alexandra v0.21.2 — архитектура
 
-## Core principle
+`alexandra_v1` — единственный активный персонаж. Оставлены Firebase Auth, Firestore, App Check, live-sync, память, механические emotion/relationship/intimacy/world, правила инициативы и `SCHEMA_VERSION = 4`. Новое хранилище или миграции не вводились; фото в IndexedDB на текущем устройстве.
 
-Dialogue is GPT-first. Canonical state is mechanical/local-state-first.
+## Чат
 
-The engine owns character state, emotion, relationship, intimacy constraints, world/activity, persistence and revisions. GPT owns natural-language generation plus bounded reaction/photo suggestions.
+`ChatScreen -> app/store -> engine/runtime -> ai/cloud-language -> /yuzukiSpeak -> GPT`.
 
-## Character context
+GPT получает механическое состояние и возвращает `messages`, bounded emotional/relationship/intimacy deltas и `photoDecision`. При согласии GPT пишет **готовый английский промпт**, начинающийся с `g2girl01`; Worker проверяет механические ограничения, подписывает промпт короткоживущим HMAC-токеном и возвращает решение. После сохранения ответа `src/app/store.ts` запускает очередь `queueGeneratedPhotoDelivery` и прежнее долговечное локальное журналирование задачи.
 
-Every GPT turn receives immutable `CHARACTER PROFILE` anchors from `src/character/character-registry.ts` independently of editable Firestore personality. This keeps old accounts from collapsing characters into one generic voice.
+Затем `src/ai/cloud-photo.ts -> POST /yuzukiPhoto` отправляет решение с подписанным промптом. Worker сверяет подпись, пользовательский Firebase Auth + App Check, лимит запросов, LoRA, и делает единственный submit в `wavespeed-ai/z-image/turbo-lora`. Клиент сохраняет taskId/taskToken и опрашивает `POST /yuzukiPhotoResult`. Подписанный токен задачи связан с аккаунтом и ID задачи. Полученное изображение сохраняется локально, а сообщение фиксируется прежним форматом событий.
 
-## World
+## Рядом
 
-Normal chat does not replace the actual current activity/location with `chatting`. Characters can work, walk, read, eat, listen to music or remain outside while replying. Sleep/current-turn hard boundaries remain above optional photo overrides.
+`App/world.currentActivity -> presence-photo.ts -> POST /alexandraPresencePhoto`.
 
-## Photo mechanics
+Worker принимает только activity из разрешённого перечня, а GPT выбирает естественную сцену в рамках текущей активности, без произвольной внешности и без смены занятия. Тот же WaveSpeed Z-Image Turbo LoRA создаёт фото. Результат опрашивается с подписанным taskToken, сохраняется в IndexedDB. Сохранены ограничение обновления раз в 30 минут, TTL 3 часа и серверный лимит 4 обращения/час (process-local). Для незавершённой задачи «Рядом» создан локальный журнал возобновления опроса без повторного submit.
 
-1. Worker mechanically detects direct photo requests and active-session follow-ups.
-2. `derivePhotoIntentPatch()` is the single visual-modifier parser.
-3. Continuations inherit the previous sent-photo intent and overwrite only explicitly changed fields.
-4. Mechanical photo intent outranks GPT-generated visual choices.
-5. Provider-specific prompt builders receive the resolved intent.
+## Провайдеры
 
-Direct/no-refusal handling supports natural phrases such as `скинь фото`, `давай фото`, `можно фотку?`, `фото в полный рост`, `ещё фотку`, plus active-session modifiers such as `в ванной`, `на кровати`, `в серых лосинах`, `топлесс`, `со спины`, `обернись`.
+**Активный генератор новых фото только `wavespeed-ai/z-image/turbo-lora`.** LoRA задаётся серверной `ALEXANDRA_LORA_URL`, сила `ALEXANDRA_LORA_SCALE` (по умолчанию 0.85), разрешение 1024*1536, seed -1. Параметры соответствуют WaveSpeed API.
 
-### Provider routing
+Старые сервисы gpt-image-2 / Seedream / Qwen физически оставлены в архиве как неактивный код для обратной совместимости/истории, но **ни один активный HTTP-маршрут их не вызывает**. OpenAI GPT используется только для *текста и промптов*, не для генерации пикселей.
 
-- ordinary / low -> `gpt-image-2`, then Seedream 4.5 Edit fallback;
-- medium / high -> Seedream 5.0 Lite Edit directly;
-- WAN 2.6 / MiniMax H3 are not part of production routing.
+## Ограничения
 
-### Seedream references
-
-WaveSpeed receives exactly one character reference. Production order is clean avatar first, identity-sheet fallback only. This reduces collage/frame contamination from multi-view sheets.
-
-### Photo job lifecycle
-
-Deferred user-photo jobs are registered in a cancellable job map. Runtime `invalidate()` clears pending timers and aborts active provider requests, preventing old photo work from surviving reset, character switch or sign-out.
-
-## Inbox/UI state
-
-Messages contains only characters with existing conversation history. Per-character refresh errors preserve known inbox membership/previews instead of being interpreted as an empty conversation. Auth UID changes clear inbox metadata immediately.
-
-Generated/proactive messages update inbox previews directly and do not rely solely on live-sync.
-
-## Persistence
-
-`SCHEMA_VERSION = 4` remains unchanged. Firestore paths, state/world revision pairing, App Check and live-sync contracts are preserved.
+Внешняя LoRA ещё не подключена; реальная генерация не проверена. Подписанный prompt нельзя поменять без провала HMAC; однако локальные счётчики вызовов Worker не эквивалентны глобальному квотированию Cloudflare KV/Durable Object. Гарантированная server-wide idempotency задач потребует отдельного постоянного сервера или KV/Durable Object — добавлять его сейчас не стали во избежание изменения существующего формата и фундамента.

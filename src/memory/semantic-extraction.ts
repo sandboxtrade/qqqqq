@@ -263,7 +263,7 @@ export function characterOpinionFactFromMind(
     id: `fact_${event.id}_character_opinion_${topicKey}`,
     subject: "character",
     key: `character.opinion.${topicKey}`,
-    statement: `Yuzuki относится к теме «${topic}» ${POSITION_LABEL[mind.position]}; ${REASON_LABEL[mind.reason]}.`,
+    statement: `Александра относится к теме «${topic}» ${POSITION_LABEL[mind.position]}; ${REASON_LABEL[mind.reason]}.`,
     value,
     confidence: clamp01(Math.max(0.45, mind.confidence)),
     evidenceCount: 1,
@@ -292,8 +292,8 @@ export function characterTensionFactFromMind(
     subject: "character",
     key: `character.tension.${topicKey}`,
     statement: integrated
-      ? `Yuzuki уже встроила встречный аргумент по теме «${topic}» и постепенно скорректировала позицию.`
-      : `У Yuzuki появилось реальное сомнение по теме «${topic}», но одного встречного аргумента пока недостаточно, чтобы перевернуть её позицию.`,
+      ? `Александра уже встроила встречный аргумент по теме «${topic}» и постепенно скорректировала позицию.`
+      : `У Александра появилось реальное сомнение по теме «${topic}», но одного встречного аргумента пока недостаточно, чтобы перевернуть её позицию.`,
     value: `${integrated ? "integrated" : "challenge"}|${direction}`,
     confidence: clamp01(Math.max(0.48, mind.confidence - (integrated ? 0 : 0.08))),
     evidenceCount: 1,

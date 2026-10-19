@@ -175,6 +175,10 @@ export interface CloudPhotoDecision {
   shouldSendPhoto: boolean;
   reason: PhotoDecisionReason;
   caption?: string;
+  /** GPT-authored final WaveSpeed prompt, not a client template. */
+  prompt?: string;
+  /** Short-lived Worker signature for the GPT photo decision. */
+  authorization?: string;
   intent?: CloudPhotoIntent;
 }
 
@@ -263,6 +267,8 @@ interface WorkerReply {
     shouldSendPhoto?: unknown;
     reason?: unknown;
     caption?: unknown;
+    prompt?: unknown;
+    authorization?: unknown;
     intent?: {
       framing?: unknown;
       mood?: unknown;
@@ -431,6 +437,8 @@ function parsePhotoDecision(raw: WorkerReply["photoDecision"]): CloudPhotoDecisi
     shouldSendPhoto: true,
     reason,
     caption: asOptionalString(raw.caption, 220),
+    prompt: asOptionalString(raw.prompt, 1500),
+    authorization: asOptionalString(raw.authorization, 3200),
     intent: {
       framing,
       mood: asOptionalString(raw.intent?.mood, 80) ?? "natural",

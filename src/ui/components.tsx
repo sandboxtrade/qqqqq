@@ -78,11 +78,11 @@ export function AuthGate({
   return (
     <main className="auth-shell">
       <div className="auth-orb">
-        <span>Y</span>
+        <span>А</span>
       </div>
       <div className="auth-copy">
-        <span className="eyebrow">PRIVATE COMPANION</span>
-        <h1>Только ваше пространство</h1>
+        <span className="eyebrow">ALEXANDRA</span>
+        <h1>Ваш диалог с Александрой</h1>
         <p>
           Войдите через Google, чтобы память, состояние и история
           синхронизировались через Firestore.

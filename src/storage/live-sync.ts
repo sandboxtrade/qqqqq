@@ -79,6 +79,7 @@ export function subscribeCharacterLiveSync(
   let catchUpRunning = false;
   let catchUpRequested = false;
   let contiguousCursor = options.after ?? null;
+  let lastStateRevision = -1;
   const catchUpBatchSize = Math.max(
     50,
     Math.min(options.catchUpBatchSize ?? 200, 300),
@@ -146,17 +147,17 @@ export function subscribeCharacterLiveSync(
     );
     unsubscribeEvents = onSnapshot(
       eventsQuery,
-      { includeMetadataChanges: true },
       (snapshot) => {
         if (snapshot.metadata.hasPendingWrites) return;
         try {
           ensureOwner();
           const events = conversationEvents(
-            snapshot.docs
-              .map((item) => decodeCharacterEvent(item.data(), item.id))
-              .reverse(),
+            snapshot.docChanges()
+              .filter((change) => change.type !== "removed")
+              .map((change) => decodeCharacterEvent(change.doc.data(), change.doc.id))
+              .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id)),
           );
-          callbacks.onEvents(events);
+          if (events.length) callbacks.onEvents(events);
           // Do not advance contiguousCursor from the bounded snapshot: if more
           // than 300 messages arrived offline that would skip the middle. Only
           // the ascending catch-up is allowed to advance it.
@@ -170,14 +171,16 @@ export function subscribeCharacterLiveSync(
 
     unsubscribeState = onSnapshot(
       doc(db, "users", uid, "characters", characterId, "state", "current"),
-      { includeMetadataChanges: true },
       (snapshot) => {
         if (snapshot.metadata.hasPendingWrites) return;
         try {
           ensureOwner();
           if (!snapshot.exists()) return;
           const state = decodeCompanionSnapshot(snapshot.data());
-          callbacks.onRevision(state.revision ?? 0);
+          const revision = state.revision ?? 0;
+          if (revision === lastStateRevision) return;
+          lastStateRevision = revision;
+          callbacks.onRevision(revision);
         } catch (error) {
           fail(error);
         }

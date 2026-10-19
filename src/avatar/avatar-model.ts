@@ -122,7 +122,7 @@ export interface VisualEmotionContext {
   userTone?: string;
   /** Optional GPT-observed relationship event for this turn. */
   relationshipEvent?: string;
-  /** GPT-observed outward intimacy of Yuzuki's own generated reply. */
+  /** GPT-observed outward intimacy of Александра's own generated reply. */
   intimacyTone?: "none" | "flirty" | "aroused" | "high_arousal";
   /** Mechanical intimacy signal only; never narrative intent/NLU. */
   intimacySignalKind?: string;
@@ -258,7 +258,7 @@ export function resolveVisualEmotionState(
   add("embarrassed", (flirtSignal && e.anxiety > 0.3 ? 0.32 : 0.02) + e.anxiety * 0.32, e.anxiety);
   add("blushing", (flirtSignal && romanticDrive > 0.58 ? 0.38 : 0) + e.anxiety * 0.18 + romanticDrive * 0.24, romanticDrive);
 
-  // The generated reply is the most immediate evidence of how Yuzuki is
+  // The generated reply is the most immediate evidence of how Александра is
   // outwardly presenting herself right now. This does not mutate consent or
   // intimacy state; it only keeps the visible frame synchronized with her words.
   if (intimacyTone === "flirty")
@@ -454,40 +454,40 @@ const scenePresets: Record<string, Pick<CharacterAsset, "sceneFit" | "sceneScale
     sceneScale: 0.98,
     scenePosition: [50, 50],
     pose: "bedroom-sitting",
-    description: "Yuzuki sitting on the bed in her room",
+    description: "Александра sitting on the bed in her room",
   },
 };
 
 const activityDescriptions: Record<ActivitySceneName, string> = {
-  idle: "Yuzuki is quietly sitting with nothing special in her hands",
-  reading: "Yuzuki is reading a book",
-  phone: "Yuzuki is looking at her phone",
-  texting: "Yuzuki is texting on her phone",
-  scrolling: "Yuzuki is scrolling through her phone",
-  sleeping: "Yuzuki is sleeping",
-  falling_asleep: "Yuzuki is falling asleep",
-  waking_up: "Yuzuki is waking up",
-  resting: "Yuzuki is resting",
-  lying: "Yuzuki is lying down",
-  daydreaming: "Yuzuki is daydreaming",
-  thinking_activity: "Yuzuki is lost in thought",
-  listening_music: "Yuzuki is listening to music",
-  watching: "Yuzuki is watching something",
-  drinking: "Yuzuki is having a drink",
-  eating: "Yuzuki is having a snack",
-  working: "Yuzuki is busy with something",
-  writing: "Yuzuki is writing something",
-  drawing: "Yuzuki is drawing",
-  stretching: "Yuzuki is stretching",
-  fixing_hair: "Yuzuki is fixing her hair",
-  getting_ready: "Yuzuki is getting ready",
-  looking_window: "Yuzuki is looking out the window",
-  bored_idle: "Yuzuki looks a little bored",
-  waiting: "Yuzuki is waiting",
-  putting_phone_away: "Yuzuki is putting her phone away and turning her attention to you",
-  putting_book_away: "Yuzuki is putting her book away and turning her attention to you",
-  sitting_up: "Yuzuki is sitting up to focus on you",
-  ready_to_chat: "Yuzuki is free now and ready to talk",
+  idle: "Александра is quietly sitting with nothing special in her hands",
+  reading: "Александра is reading a book",
+  phone: "Александра is looking at her phone",
+  texting: "Александра is texting on her phone",
+  scrolling: "Александра is scrolling through her phone",
+  sleeping: "Александра is sleeping",
+  falling_asleep: "Александра is falling asleep",
+  waking_up: "Александра is waking up",
+  resting: "Александра is resting",
+  lying: "Александра is lying down",
+  daydreaming: "Александра is daydreaming",
+  thinking_activity: "Александра is lost in thought",
+  listening_music: "Александра is listening to music",
+  watching: "Александра is watching something",
+  drinking: "Александра is having a drink",
+  eating: "Александра is having a snack",
+  working: "Александра is busy with something",
+  writing: "Александра is writing something",
+  drawing: "Александра is drawing",
+  stretching: "Александра is stretching",
+  fixing_hair: "Александра is fixing her hair",
+  getting_ready: "Александра is getting ready",
+  looking_window: "Александра is looking out the window",
+  bored_idle: "Александра looks a little bored",
+  waiting: "Александра is waiting",
+  putting_phone_away: "Александра is putting her phone away and turning her attention to you",
+  putting_book_away: "Александра is putting her book away and turning her attention to you",
+  sitting_up: "Александра is sitting up to focus on you",
+  ready_to_chat: "Александра is free now and ready to talk",
 };
 
 function mediaTypeFromPath(path: string): CharacterAsset["mediaType"] {
@@ -507,7 +507,7 @@ function createSceneAsset(
     sceneScale: 0.98,
     scenePosition: [50, 50] as [number, number],
     pose: `scene-${variant}`,
-    description: `Yuzuki: ${emotion}, intensity ${intensity}, variant ${variant}`,
+    description: `Александра: ${emotion}, intensity ${intensity}, variant ${variant}`,
   };
   return {
     id: `scene.${emotion}.${intensity}.${variant}${mediaType === "video" ? ".video" : ""}`,
@@ -565,8 +565,8 @@ function createSequenceSceneAsset(
     id: `scene.${info.kind}.${info.step}.${info.variant}${mediaType === "video" ? ".video" : ""}`,
     src,
     description: info.kind === "sx"
-      ? `Yuzuki intimacy sequence step ${info.step}, variant ${info.variant}`
-      : `Yuzuki intimacy afterglow frame ${info.step}, variant ${info.variant}`,
+      ? `Александра intimacy sequence step ${info.step}, variant ${info.variant}`
+      : `Александра intimacy afterglow frame ${info.step}, variant ${info.variant}`,
     pose: `${info.kind}-${info.step}`,
     outfit: "scene-set",
     expression: "playful",
@@ -601,7 +601,7 @@ function buildSceneEmotionAssets(): CharacterAsset[] {
 const placeholderAsset: CharacterAsset = {
   id: "placeholder.neutral",
   src: "assets/character/placeholder-avatar.png",
-  description: "Yuzuki placeholder",
+  description: "Александра placeholder",
   pose: "placeholder",
   outfit: "placeholder",
   expression: "neutral",
@@ -1021,7 +1021,7 @@ type VisualEmotionProfile = readonly [
 
 /**
  * Small affect-space used only for image fallback. This is deliberately
- * independent from the Brain's emotional state: the Brain decides what Yuzuki
+ * independent from the Brain's emotional state: the Brain decides what Александра
  * feels first, then this table answers "which available photograph looks most
  * like that feeling?". Keeping every vocabulary item in one space makes newly
  * added photo packs work without adding another hand-written fallback chain.

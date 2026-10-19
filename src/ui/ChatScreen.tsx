@@ -2,6 +2,7 @@ import {
   type FormEvent,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -19,9 +20,9 @@ function timeOf(timestamp: number) {
 
 const BOTTOM_THRESHOLD_PX = 72;
 const starterPrompts = [
-  "Как ты сейчас?",
-  "О чём ты хочешь поговорить?",
-  "Побудем немного вместе?",
+  "Привет, мы вроде не знакомы",
+  "Как у тебя сегодня день?",
+  "Ты сейчас на работе или учишься?",
 ];
 
 export function ChatScreen({
@@ -32,8 +33,6 @@ export function ChatScreen({
   onSend,
   draft,
   onDraftChange,
-  streamingText,
-  phase,
   onRetry,
   onRetryPhoto,
   onDismissFailed,
@@ -42,8 +41,6 @@ export function ChatScreen({
   onLoadOlder,
 }: {
   characterName: string;
-  streamingText: string;
-  phase: string;
   onRetry: (messageId: string) => Promise<void>;
   onRetryPhoto: (messageId: string) => Promise<void>;
   onDismissFailed: (messageId: string) => Promise<void>;
@@ -65,6 +62,11 @@ export function ChatScreen({
   const nearBottomRef = useRef(true);
   const mountedRef = useRef(false);
   const characterRef = useRef(characterName);
+  const scrollGeneration = useRef(0);
+  useLayoutEffect(() => {
+    scrollGeneration.current++;
+    return () => { scrollGeneration.current++; };
+  }, [characterName]);
 
   const updateBottomState = () => {
     const node = scrollRef.current;
@@ -99,6 +101,24 @@ export function ChatScreen({
   }, [draft]);
 
   useEffect(() => {
+    let frame = 0;
+    const resized = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (nearBottomRef.current) scrollToBottom("auto");
+      });
+    };
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resized) : null;
+    if (scrollRef.current) observer?.observe(scrollRef.current);
+    window.visualViewport?.addEventListener("resize", resized);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.visualViewport?.removeEventListener("resize", resized);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!openedPhoto) return;
     setPhotoScale(1);
     const previousOverflow = document.body.style.overflow;
@@ -129,64 +149,23 @@ export function ChatScreen({
     if (nearBottomRef.current) {
       scrollToBottom("auto");
     }
-  }, [characterName, messages.at(-1)?.id, messages.at(-1)?.imageStatus, streamingText, busy, phase]);
+  }, [characterName, messages.at(-1)?.id, messages.at(-1)?.imageStatus]);
 
   useEffect(() => {
-    if (!nearBottomRef.current && (messages.at(-1)?.id || streamingText)) {
+    if (!nearBottomRef.current && messages.at(-1)?.id) {
       setShowNewMessages(true);
     }
-  }, [messages.at(-1)?.id, streamingText]);
+  }, [messages.at(-1)?.id]);
 
   const handlePhotoLoaded = () => {
     if (!nearBottomRef.current) return;
     window.requestAnimationFrame(() => scrollToBottom("auto"));
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const value = draft.trim();
-    if (!value || !ready || busy) return;
-    onDraftChange("");
-    nearBottomRef.current = true;
-    void onSend(value);
-  };
-
-  return (
-    <section className="chat-screen">
-      <div className="chat-scroll" ref={scrollRef} onScroll={updateBottomState}>
-        {messages.length > 0 && hasOlderMessages && (
-          <button
-            className="load-older"
-            type="button"
-            disabled={loadingOlder}
-            onClick={() => {
-              const node = scrollRef.current;
-              const previousHeight = node?.scrollHeight ?? 0;
-              const previousTop = node?.scrollTop ?? 0;
-              void onLoadOlder().then(() => {
-                window.requestAnimationFrame(() => {
-                  if (!node) return;
-                  node.scrollTop = previousTop + Math.max(0, node.scrollHeight - previousHeight);
-                  updateBottomState();
-                });
-              });
-            }}
-          >
-            {loadingOlder ? "Загружаем…" : "Показать более ранние сообщения"}
-          </button>
-        )}
-
-        {!messages.length && (
-          <div className="empty-chat">
-            <Icon name="sparkle" size={22} />
-            <strong>Разговор начинается здесь</strong>
-            <span>
-              Она будет помнить важные вещи, менять состояние и возвращаться к незакрытым темам.
-            </span>
-          </div>
-        )}
-
-        {messages.map((message) => (
+  // A long conversation may contain hundreds of image and text bubbles.
+  // Editing a draft must not recreate and reformat all of them on every keypress.
+  const messageItems = useMemo(() => (
+    messages.map((message) => (
           <article key={message.id} className={`message-row ${message.role}`}>
             <div className={`bubble ${message.role}`}>
               {message.proactive && <span className="proactive-label">сама написала</span>}
@@ -196,12 +175,12 @@ export function ChatScreen({
                     <div className="chat-photo-placeholder" role="status">
                       <span className="photo-loader" aria-hidden="true" />
                       <strong>готовит фото…</strong>
-                      <small>это отдельное сообщение, не живая сцена</small>
+                      <small>Отправит, когда фото будет готово</small>
                     </div>
                   ) : message.imageStatus === "failed" ? (
                     <div className="chat-photo-placeholder photo-failed" role="status">
                       <strong>фото не отправилось</strong>
-                      <small>можно повторить без дублирования уже сохранённого результата</small>
+                      <small>{message.photoError ?? "Проверь соединение и попробуй снова"}</small>
                       <button
                         className="photo-retry-button"
                         type="button"
@@ -273,28 +252,61 @@ export function ChatScreen({
               )}
             </div>
           </article>
-        ))}
+        ))
+  ), [messages, characterName, busy, onRetry, onRetryPhoto, onDismissFailed, onDraftChange]);
 
-        {streamingText && (
-          <article className="message-row character">
-            <div className="bubble character streaming">
-              <p>{streamingText}</p>
-              <small>ответ ещё не сохранён</small>
-            </div>
-          </article>
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = draft.trim();
+    if (!value || !ready || busy) return;
+    onDraftChange("");
+    nearBottomRef.current = true;
+    void onSend(value);
+  };
+
+  return (
+    <section className="chat-screen">
+      <div className="chat-scroll" ref={scrollRef} onScroll={updateBottomState}>
+        {messages.length > 0 && hasOlderMessages && (
+          <button
+            className="load-older"
+            type="button"
+            disabled={loadingOlder}
+            onClick={() => {
+              const generation = scrollGeneration.current;
+              const node = scrollRef.current;
+              const previousHeight = node?.scrollHeight ?? 0;
+              const previousTop = node?.scrollTop ?? 0;
+              void onLoadOlder().then(() => {
+                window.requestAnimationFrame(() => {
+                  if (!node || scrollRef.current !== node || scrollGeneration.current !== generation) return;
+                  node.scrollTop = previousTop + Math.max(0, node.scrollHeight - previousHeight);
+                  updateBottomState();
+                });
+              });
+            }}
+          >
+            {loadingOlder ? "Загружаем…" : "Показать более ранние сообщения"}
+          </button>
         )}
 
-        {busy && !streamingText && (
+        {!messages.length && (
+          <div className="empty-chat">
+            <Icon name="sparkle" size={22} />
+            <strong>Разговор начинается здесь</strong>
+            <span>
+              Она будет помнить важные вещи, менять состояние и возвращаться к незакрытым темам.
+            </span>
+          </div>
+        )}
+
+        {messageItems}
+
+        {busy && (
           <div className="typing">
             <span />
             <span />
             <span />
-          </div>
-        )}
-
-        {busy && (
-          <div className="send-phase" role="status">
-            {phase}
           </div>
         )}
 
@@ -375,7 +387,7 @@ export function ChatScreen({
             rows={1}
             maxLength={12000}
             placeholder={ready ? `Напиши ${characterName}…` : "Инициализация…"}
-            disabled={!ready || busy}
+            disabled={!ready}
           />
         </div>
         <button

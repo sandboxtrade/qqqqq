@@ -46,12 +46,14 @@ import { createDefaultEditableContext } from "../context/yuzuki-context";
 import { exportConversationText } from "../chat/conversation-export-service";
 import type { ConversationExportLimit } from "../chat/conversation-export";
 import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-language";
+import { listPhotoJobs, writePhotoJob, removePhotoJob, clearPhotoJobs, readPhotoJob } from "../storage/photo-jobs";
 import { loadLocalPhoto } from "../storage/local-photo-cache";
 import { isWaveSpeedBalanceFailureError } from "../ai/cloud-photo";
 import { getCompanionRepository } from "../storage/repository-factory";
 import type { CharacterEvent } from "../events/event-types";
 export interface ChatMessage extends ConversationLine {
   delivery?: "pending" | "failed" | "skipped" | "saved";
+  photoError?: string;
 }
 export type AuthStatus = "local" | "checking" | "signed_out" | "signed_in";
 
@@ -85,6 +87,7 @@ interface AppStore {
   lastTrace: RuntimeTrace | null;
   streamingText: string;
   chatDraft: string;
+  chatDrafts: Record<string, string>;
   phase: string;
   failedMessageIds: string[];
   historyCursor: ConversationCursor | null;
@@ -119,11 +122,13 @@ interface AppStore {
   clearError: () => void;
   dismissPhotoBalanceAlert: () => void;
 }
-const ACTIVE_CHARACTER_KEY = "yuzuki.social.active-character";
+const ACTIVE_CHARACTER_KEY = "alexandra.social.active-character";
 function initialCharacterId() {
   if (typeof window === "undefined") return defaultCharacter.id;
-  const stored = window.localStorage.getItem(ACTIVE_CHARACTER_KEY) ?? "";
-  return isKnownCharacterId(stored) ? stored : defaultCharacter.id;
+  try {
+    const stored = window.localStorage.getItem(ACTIVE_CHARACTER_KEY) ?? "";
+    return isKnownCharacterId(stored) ? stored : defaultCharacter.id;
+  } catch { return defaultCharacter.id; }
 }
 function defaultContextFor(characterId: string) {
   const profile = getCharacterProfile(characterId);
@@ -173,8 +178,20 @@ function markCharacterHasConversation(
   preview?: InboxConversationPreview | null,
 ) {
   useAppStore.setState((state) => {
-    const inboxPreviews = preview
-      ? { ...state.inboxPreviews, [characterId]: preview }
+    const previous = state.inboxPreviews[characterId];
+    // A reconnect/catch-up can surface an older event after a newer preview.
+    // Never rewind the conversation list or reorder it on stale evidence.
+    const acceptedPreview = preview && (!previous || preview.timestamp >= previous.timestamp)
+      ? preview
+      : null;
+    const previewChanged = Boolean(acceptedPreview && (
+      !previous || previous.timestamp !== acceptedPreview.timestamp ||
+      previous.text !== acceptedPreview.text || previous.role !== acceptedPreview.role ||
+      previous.kind !== acceptedPreview.kind
+    ));
+    if (state.inboxCharacterIds.includes(characterId) && !previewChanged) return state;
+    const inboxPreviews = previewChanged && acceptedPreview
+      ? { ...state.inboxPreviews, [characterId]: acceptedPreview }
       : state.inboxPreviews;
     return {
       inboxPreviews,
@@ -209,7 +226,8 @@ async function refreshInboxCharacterIds(version: number, user: AuthProfile | nul
   for (const item of discovered) {
     if (item.status === "found") {
       ids.add(item.id);
-      if (item.preview) inboxPreviews[item.id] = item.preview;
+      if (item.preview && item.preview.timestamp >= (inboxPreviews[item.id]?.timestamp ?? 0))
+        inboxPreviews[item.id] = item.preview;
       continue;
     }
     if (item.status === "empty") {
@@ -223,15 +241,26 @@ async function refreshInboxCharacterIds(version: number, user: AuthProfile | nul
   if (current.messages.length) {
     ids.add(current.activeCharacterId);
     const activePreview = conversationPreviewFromLines(current.messages);
-    if (activePreview) inboxPreviews[current.activeCharacterId] = activePreview;
+    if (activePreview && activePreview.timestamp >= (inboxPreviews[current.activeCharacterId]?.timestamp ?? 0))
+      inboxPreviews[current.activeCharacterId] = activePreview;
   }
   const valid = ids;
   for (const id of Object.keys(inboxPreviews)) {
     if (!valid.has(id)) delete inboxPreviews[id];
   }
+  const nextIds = orderInboxCharacterIds([...ids], inboxPreviews);
+  const sameIds = nextIds.length === current.inboxCharacterIds.length &&
+    nextIds.every((id, index) => id === current.inboxCharacterIds[index]);
+  const samePreviews = Object.keys(inboxPreviews).length === Object.keys(current.inboxPreviews).length &&
+    Object.entries(inboxPreviews).every(([id, next]) => {
+      const old = current.inboxPreviews[id];
+      return old && old.text === next.text && old.timestamp === next.timestamp &&
+        old.role === next.role && old.kind === next.kind;
+    });
+  if (sameIds && samePreviews) return;
   useAppStore.setState({
     inboxPreviews,
-    inboxCharacterIds: orderInboxCharacterIds([...ids], inboxPreviews),
+    inboxCharacterIds: nextIds,
   });
 }
 
@@ -275,8 +304,8 @@ function cancelPendingPhotoJobs(reason = "photo-job-invalidated") {
 function createPhotoBalanceAlert() {
   return {
     open: true,
-    title: "Недостаточно средств WaveSpeed",
-    message: "Генерация фото не запустилась, потому что у всех доступных WaveSpeed-ключей сейчас недостаточно средств на балансе. Пополни баланс хотя бы одного ключа в Cloudflare Secrets и попробуй ещё раз.",
+    title: "Генерация фото в чате отключена",
+    message: "У WaveSpeed недостаточно средств для генерации. Пополните баланс API и повторите фотографию.",
   } satisfies PhotoBalanceAlertState;
 }
 
@@ -316,12 +345,14 @@ function stopMaintenance() {
   maintenance?.abort();
   maintenance = null;
 }
-function invalidate() {
+function invalidate(preservePhotos = false) {
   epoch++;
+  activeTurnId = null;
+  activeTurnConfirmed = false;
   resetWorldClock();
   active?.abort();
   active = null;
-  cancelPendingPhotoJobs();
+  if (!preservePhotos) cancelPendingPhotoJobs();
   stopMaintenance();
   stopLiveSync();
   return epoch;
@@ -341,8 +372,13 @@ function queueGeneratedPhotoDelivery(
   const pendingId = `pending_photo_${parentReplyId}`;
   const jobKey = photoJobKey(characterId, parentReplyId);
   const previousJob = pendingPhotoJobs.get(jobKey);
-  if (previousJob?.timer) clearTimeout(previousJob.timer);
-  previousJob?.controller?.abort(new Error("photo-job-replaced"));
+  if (uid && !readPhotoJob(uid, parentReplyId)) {
+    try { writePhotoJob({ uid, characterId, parentReplyId, timestamp, decision, status: "queued" }); }
+    catch {
+      useAppStore.setState({ maintenanceError: "Не удалось сохранить фотозадачу на устройстве. Генерация не запущена." });
+      return;
+    }
+  }
   const pending: ChatMessage = {
     id: pendingId,
     role: "character",
@@ -360,10 +396,11 @@ function queueGeneratedPhotoDelivery(
     return { messages: mergeChatMessages(state.messages, [pending]) };
   });
 
+  if (previousJob) return;
   const job: PendingPhotoJob = { timer: null, controller: null };
   job.timer = setTimeout(() => {
     job.timer = null;
-    if (version !== epoch || pendingPhotoJobs.get(jobKey) !== job) {
+    if ((useAppStore.getState().user?.uid ?? null) !== uid || pendingPhotoJobs.get(jobKey) !== job) {
       pendingPhotoJobs.delete(jobKey);
       return;
     }
@@ -380,9 +417,11 @@ function queueGeneratedPhotoDelivery(
       signals,
     )
       .then((photo) => {
-        if (!photo || version !== epoch || controller.signal.aborted) return;
+        if (!photo || controller.signal.aborted) return;
+        if (uid) removePhotoJob(uid, parentReplyId);
+        if ((useAppStore.getState().user?.uid ?? null) !== uid) return;
         useAppStore.setState((state) => {
-          if (state.activeCharacterId !== characterId) return state;
+          if (state.activeCharacterId !== characterId || (state.user?.uid ?? null) !== uid) return state;
           const withoutPending = state.messages.filter((message) => message.id !== pendingId);
           return {
             messages: mergeChatMessages(withoutPending, [
@@ -392,16 +431,16 @@ function queueGeneratedPhotoDelivery(
         });
         markCharacterHasConversation(
           characterId,
-          conversationPreviewFromLines(useAppStore.getState().messages),
+          conversationPreviewFromLines([photo]),
         );
       })
       .catch(async (error) => {
-        if (version !== epoch || controller.signal.aborted) return;
+        if (controller.signal.aborted || (useAppStore.getState().user?.uid ?? null) !== uid) return;
 
         // If generation already finished and was cached locally, retry only the
         // persistence/delivery step. This must never pay for a second image.
-        const cached = await loadLocalPhoto(`photo_${parentReplyId}`).catch(() => null);
-        if (cached?.dataUrl && version === epoch && !controller.signal.aborted) {
+        const cached = await loadLocalPhoto(`photo_${parentReplyId}`, uid).catch(() => null);
+        if (cached?.dataUrl && !controller.signal.aborted && (useAppStore.getState().user?.uid ?? null) === uid) {
           try {
             const recovered = await persistGeneratedPhotoMessage(
               uid,
@@ -413,9 +452,10 @@ function queueGeneratedPhotoDelivery(
               runtime ?? undefined,
               signals,
             );
-            if (recovered && version === epoch && !controller.signal.aborted) {
+            if (recovered && !controller.signal.aborted && (useAppStore.getState().user?.uid ?? null) === uid) {
+              if (uid) removePhotoJob(uid, parentReplyId);
               useAppStore.setState((state) => {
-                if (state.activeCharacterId !== characterId) return state;
+                if (state.activeCharacterId !== characterId || (state.user?.uid ?? null) !== uid) return state;
                 const withoutPending = state.messages.filter((message) => message.id !== pendingId);
                 return {
                   messages: mergeChatMessages(withoutPending, [
@@ -426,7 +466,7 @@ function queueGeneratedPhotoDelivery(
               });
               markCharacterHasConversation(
                 characterId,
-                conversationPreviewFromLines(useAppStore.getState().messages),
+                conversationPreviewFromLines([recovered]),
               );
               return;
             }
@@ -435,9 +475,9 @@ function queueGeneratedPhotoDelivery(
           }
         }
 
-        if (version !== epoch || controller.signal.aborted) return;
+        if (controller.signal.aborted || (useAppStore.getState().user?.uid ?? null) !== uid) return;
         useAppStore.setState((state) => {
-          if (state.activeCharacterId !== characterId) return state;
+          if (state.activeCharacterId !== characterId || (state.user?.uid ?? null) !== uid) return state;
           const balanceAlert = isWaveSpeedBalanceFailureError(error)
             ? (state.photoBalanceAlert ?? createPhotoBalanceAlert())
             : state.photoBalanceAlert;
@@ -447,6 +487,7 @@ function queueGeneratedPhotoDelivery(
                 ? {
                     ...message,
                     imageStatus: "failed" as const,
+                    photoError: errorText(error),
                     delivery: "failed" as const,
                   }
                 : message,
@@ -465,6 +506,8 @@ function queueGeneratedPhotoDelivery(
 }
 async function hydrateMissingPhotoMessages(characterId: string) {
   const state = useAppStore.getState();
+  const version = epoch;
+  const uid = state.user?.uid ?? null;
   if (state.activeCharacterId !== characterId) return;
   const pending = state.messages.filter((message) =>
     message.kind === "image" &&
@@ -477,7 +520,7 @@ async function hydrateMissingPhotoMessages(characterId: string) {
   const hydrated = await Promise.all(
     pending.map(async (message) => ({
       id: message.id,
-      photo: await loadLocalPhoto(message.localPhotoId!).catch(() => null),
+      photo: await loadLocalPhoto(message.localPhotoId!, uid).catch(() => null),
     })),
   );
   const patch = new Map(
@@ -487,7 +530,7 @@ async function hydrateMissingPhotoMessages(characterId: string) {
   );
   if (!patch.size) return;
   useAppStore.setState((current) => {
-    if (current.activeCharacterId !== characterId) return current;
+    if (version !== epoch || current.activeCharacterId !== characterId || (current.user?.uid ?? null) !== uid) return current;
     let changed = false;
     const messages = current.messages.map((message) => {
       const imageUrl = patch.get(message.id);
@@ -557,13 +600,16 @@ function startLiveSync(version: number, user: AuthProfile | null, characterId: s
         const activeResolved = replyForFailedMessage(events, activeTurnId);
         if (activeResolved) activeTurnConfirmed = true;
         const merged = mergeChatMessages(state.messages, incoming).map((message) =>
-          resolvedIds.has(message.id)
+          resolvedIds.has(message.id) && message.delivery !== "saved"
             ? { ...message, delivery: "saved" as const }
             : message,
         );
         const failedMessageIds = state.failedMessageIds.filter(
           (id) => !resolvedIds.has(id),
         );
+        if (merged.length === state.messages.length &&
+          merged.every((message, index) => message === state.messages[index]) &&
+          failedMessageIds.length === state.failedMessageIds.length && !activeResolved) return state;
         return {
           messages: merged,
           failedMessageIds,
@@ -742,7 +788,12 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       controller.signal,
     );
     if (version !== epoch) return;
-    const editableContext = await loadCharacterEditableContext(characterId, user?.uid ?? null, controller.signal);
+    const editableContext = await bounded(
+      loadCharacterEditableContext(characterId, user?.uid ?? null, controller.signal),
+      10000,
+      "Загрузка характера и памяти",
+      controller.signal,
+    );
     if (version !== epoch) return;
     const failedMessageIds = [...new Set(result.pendingTurnIds)];
     const failedSet = new Set(failedMessageIds);
@@ -780,6 +831,20 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       markCharacterHasConversation(characterId, conversationPreviewFromLines(result.recentConversation));
     void refreshInboxCharacterIds(version, user);
     startLiveSync(version, user, characterId);
+    if (user) {
+      for (const job of listPhotoJobs(user.uid, characterId)) {
+        if (job.status === "starting" && !job.task && !pendingPhotoJobs.has(photoJobKey(characterId, job.parentReplyId))) {
+          useAppStore.setState((state) => ({ messages: mergeChatMessages(state.messages, [{
+            id: `pending_photo_${job.parentReplyId}`, role: "character", text: job.decision.caption ?? "",
+            photoError: "Запуск прервался. Повтор может оплатить новый кадр.",
+            timestamp: job.timestamp, kind: "image", imageStatus: "failed", delivery: "failed",
+            photoReason: job.decision.reason, photoIntent: job.decision.intent,
+          }]) }));
+        } else {
+          queueGeneratedPhotoDelivery(version, user.uid, characterId, job.decision, job.parentReplyId, job.timestamp, result.state);
+        }
+      }
+    }
     scheduleMaintenance();
   } finally {
     controller.abort();
@@ -793,8 +858,9 @@ function watchAuth() {
     const state = useAppStore.getState();
     if (
       authAction ||
-      state.initializing ||
-      state.authStatus === "checking" ||
+      // Ignore the initial handshake, but not a genuine UID switch while an
+      // old character is still booting. That must invalidate private state.
+      (state.initializing && state.authStatus === "checking" && !state.user) ||
       state.user?.uid === user?.uid
     )
       return;
@@ -811,6 +877,7 @@ function watchAuth() {
       lastTrace: null,
       streamingText: "",
       chatDraft: "",
+      chatDrafts: {},
       failedMessageIds: [],
       historyCursor: null,
       hasOlderMessages: false,
@@ -958,19 +1025,17 @@ async function sendTurn(message: ChatMessage) {
       conversationPreviewFromLines(useAppStore.getState().messages),
     );
 
-    if (result.photoDecision?.shouldSendPhoto) {
-      const replyCount = result.replyMessages?.length ?? 1;
+    // v0.21.2: GPT approves and signs its photo prompt. The queued photo uses
+    // the same durable local journal and cache as earlier versions.
+    if (!result.silent && result.photoDecision?.shouldSendPhoto &&
+        result.photoDecision.prompt && result.photoDecision.authorization) {
       queueGeneratedPhotoDelivery(
-        version,
-        store.user?.uid ?? null,
-        store.activeCharacterId,
-        result.photoDecision,
-        result.replyId,
-        result.replyTimestamp + replyCount * 700 + 250,
-        result.state,
-        result.trace?.cloudLanguage?.signals,
+        version, store.user?.uid ?? null, store.activeCharacterId,
+        result.photoDecision, result.replyId, result.replyTimestamp + 900,
+        result.state, result.trace?.cloudLanguage?.signals,
       );
     }
+
   } catch (error) {
     if (version !== epoch) return;
     useAppStore.setState((state) => {
@@ -1017,6 +1082,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   lastTrace: null,
   streamingText: "",
   chatDraft: "",
+  chatDrafts: {},
   phase: "",
   failedMessageIds: [],
   historyCursor: null,
@@ -1081,10 +1147,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!isKnownCharacterId(characterId)) return;
     const state = get();
     if (state.activeCharacterId === characterId && state.ready) return;
-    const version = invalidate();
+    const version = invalidate(true);
     const fallback = defaultContextFor(characterId);
-    if (typeof window !== "undefined")
-      window.localStorage.setItem(ACTIVE_CHARACTER_KEY, characterId);
+    if (typeof window !== "undefined") {
+      try { window.localStorage.setItem(ACTIVE_CHARACTER_KEY, characterId); } catch { /* Selection still works without local storage. */ }
+    }
     set({
       activeCharacterId: characterId,
       ready: false,
@@ -1094,7 +1161,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       messages: [],
       lastTrace: null,
       streamingText: "",
-      chatDraft: "",
+      chatDraft: state.chatDrafts[characterId] ?? "",
       failedMessageIds: [],
       historyCursor: null,
       hasOlderMessages: false,
@@ -1159,7 +1226,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   signOut: async () => {
-    invalidate();
+    const version = invalidate();
     authAction = true;
     set({
       ready: false,
@@ -1172,6 +1239,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       lastTrace: null,
       streamingText: "",
       chatDraft: "",
+      chatDrafts: {},
       failedMessageIds: [],
       historyCursor: null,
       hasOlderMessages: false,
@@ -1190,6 +1258,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
     try {
       await bounded(signOutFirebase(), 10000, "Выход из Google");
+      if (version !== epoch) return;
       set({
         busy: false,
         user: null,
@@ -1198,7 +1267,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         authStatus: isLocalRepositoryAllowed ? "local" : "signed_out",
       });
     } catch (error) {
-      set({ busy: false, error: errorText(error) });
+      if (version === epoch) set({ busy: false, error: errorText(error) });
     } finally {
       authAction = false;
     }
@@ -1208,6 +1277,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!state.ready || !state.runtime || state.resettingData) return;
     const user = state.user;
     const current = state.runtime;
+    if (user) clearPhotoJobs(user.uid, state.activeCharacterId);
     // Reset is also the escape hatch for a stuck send/Firebase operation.
     // invalidate() aborts the active turn, maintenance and live refresh first.
     const version = invalidate();
@@ -1239,6 +1309,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           messages: [],
           lastTrace: null,
           chatDraft: "",
+          chatDrafts: { ...currentState.chatDrafts, [state.activeCharacterId]: "" },
           failedMessageIds: [],
           historyCursor: null,
           hasOlderMessages: false,
@@ -1458,6 +1529,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       caption: message.text,
       intent: message.photoIntent,
     };
+    const savedJob = state.user ? readPhotoJob(state.user.uid, parentReplyId) : null;
+    if (savedJob && !savedJob.task) writePhotoJob({ ...savedJob, status: "queued" });
     set({ maintenanceError: null, photoBalanceAlert: null });
     queueGeneratedPhotoDelivery(
       epoch,
@@ -1497,7 +1570,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       controller.abort();
     }
   },
-  setChatDraft: (text) => set({ chatDraft: text.slice(0, 12000) }),
+  setChatDraft: (text) => set((state) => {
+    const draft = text.slice(0, 12000);
+    return {
+      chatDraft: draft,
+      chatDrafts: { ...state.chatDrafts, [state.activeCharacterId]: draft },
+    };
+  }),
   loadOlder: async () => {
     const state = get();
     if (

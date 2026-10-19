@@ -46,15 +46,30 @@ export function nextInitiativeCheckAt(
 }
 
 // ---- message-sync.ts ----
+function sameMessageContent(left: ChatMessage, right: ChatMessage): boolean {
+  const leftKeys = Object.keys(left) as (keyof ChatMessage)[];
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((key) => {
+    const a = left[key];
+    const b = right[key];
+    // Firestore decodes these small structured objects into fresh references on
+    // every snapshot. Equal data must not invalidate all rendered chat bubbles.
+    return a === b || (a !== null && b !== null && typeof a === "object" &&
+      typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+  });
+}
+
 export function mergeChatMessages(
   current: ChatMessage[],
   incoming: ChatMessage[],
 ): ChatMessage[] {
+  if (!incoming.length) return current;
   const byId = new Map<string, ChatMessage>();
   for (const message of current) byId.set(message.id, message);
   for (const message of incoming) {
     const existing = byId.get(message.id);
-    byId.set(message.id, {
+    const next: ChatMessage = {
       ...existing,
       ...message,
       delivery:
@@ -63,11 +78,15 @@ export function mergeChatMessages(
         existing?.delivery === "skipped"
           ? existing.delivery
           : message.delivery ?? existing?.delivery ?? "saved",
-    });
+    };
+    byId.set(message.id, existing && sameMessageContent(existing, next) ? existing : next);
   }
-  return [...byId.values()].sort(
+  const merged = [...byId.values()].sort(
     (a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id),
   );
+  return merged.length === current.length && merged.every((message, index) => message === current[index])
+    ? current
+    : merged;
 }
 
 export function replyTargets(events: CharacterEvent[]): Set<string> {

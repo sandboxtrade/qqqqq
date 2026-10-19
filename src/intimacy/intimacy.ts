@@ -640,6 +640,19 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     return finish();
   }
 
+  // Alexandra starts with zero relationship. A single suggestive message or gift
+  // cannot open an intimate scene while she does not yet know the user.
+  if (input.character.id === "alexandra_v1" &&
+      (input.relationship.trust < 0.38 || input.relationship.closeness < 0.38)) {
+    state.phase = "normal";
+    state.interactionStatus = "inactive";
+    state.activeScene = null;
+    state.arousal = 0;
+    state.initiativeDrive = 0;
+    action = signal.kind === "none" ? "none" : "gated";
+    return finish();
+  }
+
   const comfortBase = clampIntimacy(
     input.relationship.trust * 0.3 +
     input.relationship.closeness * 0.3 +

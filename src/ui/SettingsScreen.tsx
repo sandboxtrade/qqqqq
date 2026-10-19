@@ -6,7 +6,7 @@ import type { ConversationExportLimit } from "../chat/conversation-export";
 import { MAX_MEMORY_CHARS, MAX_PERSONALITY_CHARS } from "../context/yuzuki-context";
 import { DebugPanel } from "./components";
 
-// Legacy regression compatibility: прежние подписи «Личность Yuzuki» и «Память Yuzuki» теперь отображаются динамически через characterName.
+// Character settings share the established Firestore context format (SCHEMA_VERSION 4).
 
 const appCheckLabels: Record<AppCheckState, string> = {
   checking: "проверяется",
@@ -295,36 +295,6 @@ export function SettingsScreen({
                 <b>›</b>
               </div>
             </button>
-          </div>
-        </section>
-
-        <section className="settings-group">
-          <div className="settings-group-head">
-            <h3>Поведение</h3>
-            <span>для {characterName}</span>
-          </div>
-          <div className="settings-list-card">
-            <button
-              className="settings-row settings-toggle-row"
-              type="button"
-              role="switch"
-              aria-checked={photoNoRefusalMode}
-              disabled={contextBusy}
-              onClick={() => void onSetPhotoNoRefusalMode(!photoNoRefusalMode)}
-            >
-              <div className="settings-row-copy">
-                <strong>Безотказный режим</strong>
-                <span>Прямые запросы фото не отклоняются из-за настроения, отношений или intimacy-state.</span>
-              </div>
-              <div className={`settings-switch ${photoNoRefusalMode ? "on" : ""}`} aria-hidden="true">
-                <span />
-              </div>
-            </button>
-            <div className="settings-mode-note">
-              {photoNoRefusalMode
-                ? "Включён: персонаж принимает прямой запрос фото. Сон и технический отказ генератора всё ещё могут помешать отправке."
-                : "Выключен: решение о фото зависит от её текущего состояния и отношений."}
-            </div>
           </div>
         </section>
 

@@ -27,15 +27,13 @@ export type RelationshipDelta = Partial<
 const clamp = (v: number) => Math.max(0, Math.min(1, v));
 
 export const initialRelationshipState: RelationshipState = {
-  // Yuzuki starts from an established acquaintance / light-friend baseline.
-  // There is some basic trust and comfort, but no pre-baked romantic bond.
-  trust: 0.42,
-  closeness: 0.34,
-  attachment: 0.22,
-  security: 0.46,
-  respect: 0.5,
+  trust: 0,
+  closeness: 0,
+  attachment: 0,
+  security: 0,
+  respect: 0,
   unresolvedTension: 0,
-  stage: "familiar",
+  stage: "new",
   updatedAt: Date.now(),
 };
 
@@ -66,7 +64,7 @@ export function applyRelationshipDelta(
       ? 1 - state.unresolvedTension / 0.2
       : 0;
     if (calmFactor > 0)
-      next.security = clamp(next.security + elapsedHours * 0.004 * calmFactor);
+      next.security = clamp(next.security + elapsedHours * 0.004 * calmFactor * Math.min(1, state.trust * 3));
     next.unresolvedTension = clamp(
       state.unresolvedTension * Math.exp(-0.035 * Math.min(96, elapsedHours)),
     );

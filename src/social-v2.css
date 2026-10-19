@@ -460,3 +460,39 @@
   line-height: 1.35;
   min-height: 1.35em;
 }
+
+/* v0.20.59: shared minimum touch size and legible secondary content. */
+.conversation-more { min-width: 44px; min-height: 60px; }
+.conversation-preview { font-size: 12px; color: #aaa1b0; }
+.person-card-bottom button { min-height: 44px; font-size: 12px; }
+.person-card-bottom p { font-size: 12px; line-height: 1.48; }
+.profile-gallery-caption { min-width: 0; overflow-wrap: anywhere; }
+.profile-interest-list span { font-size: 11px; line-height: 1.25; }
+.social-back-v2 { width: 44px; height: 44px; }
+@media (max-width: 360px) {
+  .people-grid-v2 { gap: 8px; }
+  .person-name-line { gap: 4px; flex-wrap: wrap; }
+  .person-name-line strong { font-size: 16px; }
+  .person-card-copy small { font-size: 10px; }
+  .person-card-bottom { padding: 9px; }
+  .profile-facts-grid { grid-template-columns: minmax(0, 1fr); }
+  .profile-facts-grid > div.wide { grid-column: auto; }
+}
+/* Give the third gallery photo a balanced landscape row, without cropping the face. */
+.profile-gallery-grid > .profile-gallery-card:nth-child(3):last-child {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 48%) minmax(0, 1fr);
+  align-items: center;
+}
+.profile-gallery-grid > .profile-gallery-card:nth-child(3):last-child .profile-gallery-media {
+  aspect-ratio: 4 / 5;
+  height: 100%;
+  max-height: 240px;
+}
+.profile-gallery-grid > .profile-gallery-card:nth-child(3):last-child .profile-gallery-caption {
+  padding: 14px;
+  gap: 7px;
+}
+.profile-gallery-grid > .profile-gallery-card:nth-child(3):last-child .profile-gallery-caption strong { font-size: 13px; }
+.profile-gallery-grid > .profile-gallery-card:nth-child(3):last-child .profile-gallery-caption span { font-size: 11px; line-height: 1.5; }

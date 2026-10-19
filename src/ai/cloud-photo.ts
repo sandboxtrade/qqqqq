@@ -1,5 +1,6 @@
 import { getAuth } from "firebase/auth";
 import { runtimeCloudLanguageEndpoint } from "../config/runtime-config";
+import type { PhotoTask } from "../storage/photo-jobs";
 import { bounded } from "../core/async";
 import {
   getFirebaseApp,
@@ -67,6 +68,7 @@ interface WorkerPhotoReply {
   model?: unknown;
   provider?: unknown;
   providerTaskId?: unknown;
+  taskToken?: string;
   credentialFailure?: unknown;
   retryWithNextKey?: unknown;
   credentialAttempt?: unknown;
@@ -82,13 +84,18 @@ interface WorkerPhotoReply {
   };
 }
 
-// OpenAI image edits can legitimately be slow. The initial request only waits
-// for OpenAI or for WaveSpeed to hand back a task id; WaveSpeed completion is
-// polled separately so a finished fallback is not lost with one long request.
+// Z-Image Turbo LoRA is asynchronous. Submit waits for a prediction id,
+// then result polling continues without creating a second billed task.
 const PHOTO_START_TIMEOUT_MS = 235_000;
-const WAVESPEED_POLL_TIMEOUT_MS = 150_000;
-const WAVESPEED_POLL_INTERVAL_MS = 3_000;
-const POLL_REQUEST_TIMEOUT_MS = 32_000;
+// Count completed polls instead of using a wall-clock deadline. Mobile Safari
+// can suspend timers while backgrounded; a wall-clock timeout used to mark an
+// otherwise healthy WaveSpeed job as failed immediately after the app resumed.
+const WAVESPEED_POLL_INTERVAL_MS = 5_000;
+const WAVESPEED_MAX_POLL_ATTEMPTS = 96;
+// The Worker may retry downloading an already-completed CDN image several
+// times. Give that recovery path enough room to return instead of aborting the
+// client request halfway through a successful recovery.
+const POLL_REQUEST_TIMEOUT_MS = 70_000;
 const WAVESPEED_KEY_RETRY_START_TIMEOUT_MS = 35_000;
 const TOKEN_TIMEOUT_MS = 18_000;
 
@@ -198,6 +205,7 @@ async function requestWaveSpeedKeyRetry(
         decision: normalizedDecision(input.decision),
         retryWaveSpeedModel: activeModel,
         retryWaveSpeedTaskId: taskId,
+        taskToken: initial.taskToken,
         retryWaveSpeedCredentialAttempt: asNumber(initial.credentialAttempt),
       }),
       cache: "no-store",
@@ -267,6 +275,8 @@ function normalizedDecision(decision: CloudPhotoDecision): CloudPhotoDecision {
         shouldSendPhoto: true,
         reason: decision.reason === "self_initiated" ? "self_initiated" : "user_requested",
         caption: decision.caption,
+        prompt: decision.prompt,
+        authorization: decision.authorization,
         intent: decision.intent,
       }
     : { shouldSendPhoto: false, reason: "none" };
@@ -299,12 +309,12 @@ async function pollWaveSpeedPhoto(
   initial: WorkerPhotoReply,
   input: CloudPhotoInput,
   signal?: AbortSignal,
+  onTask?: (task: PhotoTask) => void,
 ): Promise<CloudPhotoResult> {
-  const startedAt = Date.now();
-  const deadline = startedAt + WAVESPEED_POLL_TIMEOUT_MS;
   let lastReason = "wavespeed-pending";
   let pollContext = initial;
-  while (Date.now() < deadline) {
+  let refreshedAuth = false;
+  for (let attempt = 0; attempt < WAVESPEED_MAX_POLL_ATTEMPTS; attempt += 1) {
     await sleep(WAVESPEED_POLL_INTERVAL_MS, signal);
     const controller = new AbortController();
     const detach = bindAbort(signal, controller);
@@ -322,6 +332,7 @@ async function pollWaveSpeedPhoto(
         },
         body: JSON.stringify({
           taskId,
+          taskToken: pollContext.taskToken,
           model: firstString(pollContext.model) || undefined,
           credentialAttempt: asNumber(pollContext.credentialAttempt),
         }),
@@ -333,6 +344,15 @@ async function pollWaveSpeedPhoto(
       const data = (await response.json().catch(() => ({}))) as WorkerPhotoReply;
       pollContext = { ...pollContext, ...data };
       if (!response.ok) {
+        if (response.status === 401 && !refreshedAuth) {
+          const app = getFirebaseApp();
+          const user = app ? getAuth(app).currentUser : null;
+          if (user) {
+            [idToken, appCheckToken] = await acquireTokens(user, { forceAuth: true }, signal);
+            refreshedAuth = true;
+            continue;
+          }
+        }
         lastReason = reasonFrom(data, response.status);
         if (response.status >= 500 || response.status === 429) continue;
         return { attempted: true, used: false, provider: "wavespeed", providerTaskId: taskId, reason: lastReason };
@@ -370,7 +390,8 @@ async function pollWaveSpeedPhoto(
           signal,
         );
         if (keyRetry && "nextTaskId" in keyRetry) {
-          return pollWaveSpeedPhoto(keyRetry.nextTaskId, idToken, appCheckToken, keyRetry.nextInitial, input, signal);
+          onTask?.({ ...keyRetry.nextInitial, providerTaskId: keyRetry.nextTaskId } as PhotoTask);
+          return pollWaveSpeedPhoto(keyRetry.nextTaskId, idToken, appCheckToken, keyRetry.nextInitial, input, signal, onTask);
         }
         if (keyRetry) return keyRetry;
       }
@@ -400,11 +421,11 @@ async function pollWaveSpeedPhoto(
     used: false,
     provider: "wavespeed",
     providerTaskId: taskId,
-    reason: lastReason === "wavespeed-pending" ? "wavespeed-poll-timeout" : lastReason,
+    reason: lastReason === "wavespeed-pending" ? "wavespeed-poll-attempts-exhausted" : lastReason,
   };
 }
 
-export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortSignal): Promise<CloudPhotoResult> {
+export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortSignal, options: { resume?: PhotoTask; onTask?: (task: PhotoTask) => void } = {}): Promise<CloudPhotoResult> {
   if (!isFirebaseConfigured) return { attempted: false, used: false, reason: "firebase-not-configured" };
   if (!input.decision.shouldSendPhoto || !input.decision.intent) {
     return { attempted: false, used: false, reason: "photo-not-requested" };
@@ -435,6 +456,10 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
       { forceAuth: true },
       signal,
     );
+  }
+
+  if (options.resume) {
+    return pollWaveSpeedPhoto(options.resume.providerTaskId, idToken, appCheckToken, options.resume, input, signal, options.onTask);
   }
 
   const controller = new AbortController();
@@ -485,7 +510,8 @@ export async function generateCloudPhoto(input: CloudPhotoInput, signal?: AbortS
     if (data.pending === true && data.provider === "wavespeed" && providerTaskId) {
       window.clearTimeout(timeout);
       detach();
-      return pollWaveSpeedPhoto(providerTaskId, idToken, appCheckToken, data, input, signal);
+      options.onTask?.({ providerTaskId, taskToken: data.taskToken, model: firstString(data.model), credentialAttempt: asNumber(data.credentialAttempt), prompt: firstString(data.prompt) });
+      return pollWaveSpeedPhoto(providerTaskId, idToken, appCheckToken, data, input, signal, options.onTask);
     }
 
     const dataUrl = firstString(data.dataUrl);

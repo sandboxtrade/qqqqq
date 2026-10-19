@@ -13,6 +13,7 @@ import {
 import type { EmotionalState } from "../emotions/emotions";
 import type { RelationshipState } from "../relationship/relationship";
 import { getCompanionRepository } from "../storage/repository-factory";
+import { readPhotoJob, writePhotoJob, withPhotoJobLock } from "../storage/photo-jobs";
 import { saveLocalPhoto, loadLocalPhoto } from "../storage/local-photo-cache";
 import {
   applyWorldSimulationEmotion,
@@ -337,6 +338,21 @@ export async function persistGeneratedPhotoMessage(
   state?: RuntimeState,
   signals?: Pick<CloudLanguageSignals, "emotionTone" | "intimacyTone">,
 ): Promise<ConversationLine | null> {
+  return withPhotoJobLock(uid, parentReplyId, signal, () => persistGeneratedPhotoMessageUnlocked(
+    uid, signal, characterId, decision, parentReplyId, timestamp, state, signals,
+  ));
+}
+
+async function persistGeneratedPhotoMessageUnlocked(
+  uid: string | null,
+  signal: AbortSignal,
+  characterId: string,
+  decision: CloudPhotoDecision,
+  parentReplyId: string,
+  timestamp: number,
+  state?: RuntimeState,
+  signals?: Pick<CloudLanguageSignals, "emotionTone" | "intimacyTone">,
+): Promise<ConversationLine | null> {
   if (!decision.shouldSendPhoto || !decision.intent) return null;
   checkSignal(signal);
   const repository = repo(characterId, uid, signal);
@@ -346,7 +362,7 @@ export async function persistGeneratedPhotoMessage(
   if (existing) {
     const existingLine = conversationFrom([existing])[0] ?? null;
     if (!existingLine) return null;
-    const local = await loadLocalPhoto(eventId).catch(() => null);
+    const local = await loadLocalPhoto(eventId, uid).catch(() => null);
     return local?.dataUrl ? { ...existingLine, imageUrl: local.dataUrl } : existingLine;
   }
 
@@ -392,7 +408,7 @@ export async function persistGeneratedPhotoMessage(
   // A provider may have finished successfully while the Firestore/event write
   // failed or the UI lost the final response. Reuse the deterministic local
   // cache entry before paying for another image generation.
-  const recovered = await loadLocalPhoto(eventId).catch(() => null);
+  const recovered = await loadLocalPhoto(eventId, uid).catch(() => null);
   if (recovered?.dataUrl) {
     return persistReadyEvent({
       dataUrl: recovered.dataUrl,
@@ -405,6 +421,11 @@ export async function persistGeneratedPhotoMessage(
     });
   }
 
+  const savedJob = uid ? readPhotoJob(uid, parentReplyId) : null;
+  if (savedJob?.status === "starting" && !savedJob.task) {
+    throw new Error("Запуск фото прервался до получения номера задачи. Автоматический повтор отключён, чтобы не оплатить второй кадр.");
+  }
+  if (savedJob && !savedJob.task) writePhotoJob({ ...savedJob, status: "starting" });
   const generated = await generateCloudPhoto({
     character: { id: profile.id, name: profile.core.name, age: profile.core.age },
     visualProfile: profile.visualProfile,
@@ -421,13 +442,20 @@ export async function persistGeneratedPhotoMessage(
       trust: state.relationship.trust,
     } : undefined,
     signals,
-  }, signal);
+  }, signal, {
+    resume: savedJob?.task,
+    onTask: (task) => {
+      checkSignal(signal);
+      if (uid && savedJob) writePhotoJob({ ...savedJob, task, status: "polling" });
+    },
+  });
   checkSignal(signal);
   if (!generated.used || !generated.dataUrl) {
     throw new CloudPhotoGenerationError(generated);
   }
 
   await saveLocalPhoto({
+    ownerUid: uid ?? undefined,
     id: eventId,
     characterId,
     messageId: eventId,

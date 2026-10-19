@@ -1,0 +1,37 @@
+import { useEffect, useState } from "react";
+import type { PlayerProfile, VirtualWallet } from "../storage/player-data";
+import { Icon } from "./components";
+const THEMES = [{ value: "rose", label: "Розовый" }, { value: "midnight", label: "Ночной" }, { value: "ocean", label: "Синий" }, { value: "sage", label: "Зелёный" }] as const;
+export function MyProfile({ profile, wallet, loading, saving, onSave }: {
+  profile: PlayerProfile | null; wallet: VirtualWallet | null; loading: boolean; saving: boolean;
+  onSave: (profile: PlayerProfile) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<PlayerProfile | null>(profile);
+  useEffect(() => setDraft(profile), [profile]);
+  if (loading || !draft) return <section className="alex-page"><div className="alex-loading">Загружается профиль…</div></section>;
+  const edit = (changes: Partial<PlayerProfile>) => setDraft(p => p ? { ...p, ...changes } : p);
+  return <section className="alex-page alex-own-profile" aria-label="Мой профиль">
+    <div className="alex-page-heading"><span className="alex-eyebrow">МОЙ АККАУНТ</span><h1>Мой профиль</h1><p>Так тебя будут видеть девушки в соцсети, когда появится система знакомств.</p></div>
+    <div className={`alex-profile-cover theme-${draft.theme}`}>
+      <div className="alex-profile-picture">{draft.avatarUrl ? <img src={draft.avatarUrl} alt="Мой аватар" /> : draft.displayName.charAt(0).toUpperCase()}</div>
+      <strong>{draft.displayName}</strong><span>{draft.handle ? `@${draft.handle}` : "Добавь имя пользователя"}</span>
+    </div>
+    <form className="alex-profile-form" onSubmit={event => { event.preventDefault(); void onSave(draft); }}>
+      <label>Имя<input required maxLength={48} value={draft.displayName} onChange={e => edit({displayName:e.target.value})}/></label>
+      <label>Имя пользователя<input maxLength={24} value={draft.handle} placeholder="nickname" onChange={e => edit({handle:e.target.value})}/></label>
+      <label>О себе<textarea rows={3} maxLength={420} placeholder="Пара слов о себе" value={draft.bio} onChange={e => edit({bio:e.target.value})}/></label>
+      <label>Город<input maxLength={64} value={draft.city} onChange={e => edit({city:e.target.value})}/></label>
+      <label>Интересы<input maxLength={240} value={draft.interests} placeholder="Кофе, музыка, путешествия…" onChange={e => edit({interests:e.target.value})}/></label>
+      <label>Статус<input maxLength={90} value={draft.status} placeholder="Что у тебя нового?" onChange={e => edit({status:e.target.value})}/></label>
+      <label>Ссылка на аватар (HTTPS)<input type="url" value={draft.avatarUrl} placeholder="https://…" onChange={e => edit({avatarUrl:e.target.value})}/></label>
+      <label>Оформление<select value={draft.theme} onChange={e => edit({theme:e.target.value as PlayerProfile["theme"]})}>{THEMES.map(t => <option value={t.value} key={t.value}>{t.label}</option>)}</select></label>
+      <label className="alex-profile-visibility"><input type="checkbox" checked={draft.discoverable} onChange={e => edit({discoverable:e.target.checked})}/><span><strong>Показывать анкету другим персонажам</strong><small>Подготовка к будущим входящим знакомствам. Автоматический подбор и новые сообщения пока не включены.</small></span></label>
+      <button className="alex-save-button" type="submit" disabled={saving || !draft.displayName.trim()}>{saving ? "Сохранение…" : "Сохранить профиль"}</button>
+    </form>
+    <div className="alex-section-title"><h2>Кошелёк</h2><span>Виртуальная валюта</span></div>
+    <div className="alex-wallet-card"><Icon name="gift" size={25}/><div><small>Доступно</small><strong>{(wallet?.balance ?? 0).toLocaleString("ru-RU")} монет</strong></div></div>
+    <p className="alex-profile-note">Баланс тестовый, реальных платежей и пополнения нет. Начисление и списание хранятся отдельно от памяти персонажей.</p>
+    <h3 className="alex-ledger-title">Последние операции</h3>
+    {wallet?.transactions.length ? wallet.transactions.slice(0, 12).map(entry => <div className="alex-ledger-row" key={entry.id}><span>{entry.kind === "gift" ? "Подарок" : "Перевод"}: {entry.label}<small>{new Date(entry.createdAt).toLocaleString("ru-RU")}</small></span><strong>−{entry.amount.toLocaleString("ru-RU")}</strong></div>) : <p className="alex-profile-note">Операций пока нет.</p>}
+  </section>;
+}
