@@ -8,7 +8,7 @@ import { ChatScreen } from "./ui/ChatScreen";
 import { PeopleScreen } from "./ui/PeopleScreen";
 import { AlexandraSocial } from "./ui/AlexandraSocial";
 import { MyProfile } from "./ui/MyProfile";
-import { GIFT_CATALOG, TRANSFER_AMOUNTS, loadPlayerProfile, loadVirtualWallet, savePlayerProfile, spendVirtualCurrency,
+import { GIFT_CATALOG, loadPlayerProfile, loadVirtualWallet, savePlayerProfile, spendVirtualCurrency, addVirtualMoney, advanceCompanionExpenses,
   type PlayerProfile, type VirtualWallet, type VirtualTransactionKind } from "./storage/player-data";
 import "./styles.css";
 import "./social-v2.css";
@@ -87,7 +87,13 @@ export default function App() {
     let alive = true;
     setPlayerLoading(true); setPlayerError(null);
     void Promise.all([loadPlayerProfile(uid), loadVirtualWallet(uid)])
-      .then(([profile, credits]) => { if (alive) { setPlayerProfile(profile); setWallet(credits); } })
+      .then(async ([profile, credits]) => {
+        // Daily expenses are deterministic, bounded by the girl's own cash and
+        // occur only once per day while the app is opened.
+        let current = credits;
+        try { current = await advanceCompanionExpenses(uid, "alexandra_v1"); } catch { /* preserve loaded wallet */ }
+        if (alive) { setPlayerProfile(profile); setWallet(current); }
+      })
       .catch(error => { if (alive) setPlayerError(error instanceof Error ? error.message : "Не удалось загрузить профиль"); })
       .finally(() => { if (alive) setPlayerLoading(false); });
     return () => { alive = false; };
@@ -98,6 +104,11 @@ export default function App() {
     setPage("chat");
     if (activeCharacterId !== characterId) void selectCharacter(characterId);
   };
+  const openCharacterSettings = (characterId: string) => {
+    if (!isKnownCharacterId(characterId)) return;
+    if (activeCharacterId === characterId) { setPage("settings"); return; }
+    void selectCharacter(characterId).then(() => setPage("settings"));
+  };
   const saveProfile = async (draft: PlayerProfile) => {
     if (playerBusy) return;
     setPlayerBusy(true); setPlayerError(null);
@@ -105,26 +116,33 @@ export default function App() {
     catch (error) { setPlayerError(error instanceof Error ? error.message : "Не удалось сохранить профиль"); }
     finally { setPlayerBusy(false); }
   };
+  const topUp = async (amount: number): Promise<boolean> => {
+    if (playerBusy || !wallet) return false;
+    setPlayerBusy(true); setPlayerError(null);
+    try {
+      const next = await addVirtualMoney(uid, amount, `topup_${crypto.randomUUID()}`);
+      setWallet(next); return true;
+    } catch (error) { setPlayerError(error instanceof Error ? error.message : "Пополнение не удалось"); return false; }
+    finally { setPlayerBusy(false); }
+  };
   const spend = async (item: Spend): Promise<boolean> => {
     if (playerBusy || !ready || busy || !wallet || !isKnownCharacterId(item.characterId)) return false;
     const valid = item.kind === "gift"
       ? GIFT_CATALOG.some(entry => entry.label === item.label && entry.price === item.amount)
-      : item.label === "Виртуальный перевод" && TRANSFER_AMOUNTS.some(entry => entry === item.amount);
+      : item.label === "Денежный перевод" && Number.isSafeInteger(item.amount) && item.amount > 0 && item.amount <= 50000;
     if (!valid) { setPlayerError("Товар или сумма недействительны."); return false; }
     setPlayerBusy(true); setPlayerError(null);
     try {
-      const next = await spendVirtualCurrency(uid, {
-        id: crypto.randomUUID(), kind: item.kind, characterId: item.characterId,
+      const event = {
+        id: `economy_${crypto.randomUUID()}`, kind: item.kind, characterId: item.characterId,
         label: item.label, amount: item.amount, createdAt: Date.now(),
-      });
+      };
+      const next = await spendVirtualCurrency(uid, event);
       setWallet(next);
-      // Delivery is a real chat event; the girl's reaction is not forced by the transaction.
-      const text = item.kind === "gift"
-        ? `[Виртуальное событие: я отправил тебе подарок «${item.label}», потратил ${item.amount} игровых монет. Ты сама решаешь, как отреагировать.]`
-        : `[Виртуальное событие: я перевёл тебе ${item.amount} игровых монет. Это не реальные деньги; ты сама решаешь, как отреагировать.]`;
       if (activeCharacterId !== item.characterId) await selectCharacter(item.characterId);
       setPage("chat");
-      await useAppStore.getState().send(text);
+      // The game event has no user-visible text bubble; it renders as a card.
+      await useAppStore.getState().sendEconomyEvent(event);
       return true;
     } catch (error) {
       setPlayerError(error instanceof Error ? error.message : "Операция не выполнена");
@@ -153,11 +171,11 @@ export default function App() {
         ready={ready} busy={busy} onSend={send} draft={chatDraft} onDraftChange={setChatDraft}
         onRetry={retry} onRetryPhoto={retryPhoto} onDismissFailed={dismissFailed}
         hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlder} />}
-      {page === "people" && <PeopleScreen wallet={wallet} walletBusy={playerBusy} ready={ready} onChat={openChat} onSpend={spend}/>}
+      {page === "people" && <PeopleScreen wallet={wallet} walletBusy={playerBusy} ready={ready} onChat={openChat} onSettings={openCharacterSettings} onSpend={spend}/>}
       {page === "social" && <AlexandraSocial onMessage={() => openChat("alexandra_v1")} onMyProfile={() => setPage("profile")} playerProfile={playerProfile}/>}
-      {page === "profile" && <MyProfile profile={playerProfile} wallet={wallet} loading={playerLoading} saving={playerBusy} onSave={saveProfile} />}
+      {page === "profile" && <MyProfile profile={playerProfile} wallet={wallet} loading={playerLoading} saving={playerBusy} onSave={saveProfile} onTopUp={topUp} />}
       {page === "settings" && <Suspense fallback={<div className="alex-loading">Настройки…</div>}>
-        <SettingsScreen characterName={character.core.name} firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
+        <SettingsScreen key={activeCharacterId} characterName={character.core.name} firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}
           onClose={() => setPage("profile")} appCheckState={appCheckState} user={user} trace={lastTrace}
           maintenanceError={maintenanceError} onSignOut={() => void signOut()}
           onClearConversationAndMemory={clearConversationAndMemory} clearingData={resettingData}

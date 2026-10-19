@@ -300,6 +300,34 @@ export function SettingsScreen({
 
         <section className="settings-group">
           <div className="settings-group-head">
+            <h3>Фотографии</h3>
+            <span>только для {characterName}</span>
+          </div>
+          <div className="settings-list-card">
+            <button
+              className="settings-row settings-toggle-row"
+              type="button"
+              role="switch"
+              aria-checked={photoNoRefusalMode}
+              aria-label={`Безотказный режим фотографий для ${characterName}`}
+              disabled={contextBusy}
+              onClick={() => void onSetPhotoNoRefusalMode(!photoNoRefusalMode)}
+            >
+              <div className="settings-row-copy">
+                <strong>Безотказный режим</strong>
+                <span>Без игровых отказов на просьбы о фотографиях, независимо от настроения и уровня отношений.</span>
+              </div>
+              <div className="settings-row-side">
+                <small>{contextBusy ? "Сохранение…" : photoNoRefusalMode ? "Включён" : "Выключен"}</small>
+                <span className={`settings-switch${photoNoRefusalMode ? " on" : ""}`} aria-hidden="true"><span /></span>
+              </div>
+            </button>
+            <p className="settings-mode-note">Влияет только на отправку фото. Не меняет доверие, эмоции и характер. Технические ошибки, ограничения безопасности и правила WaveSpeed продолжают действовать.</p>
+          </div>
+        </section>
+
+        <section className="settings-group">
+          <div className="settings-group-head">
             <h3>Экспорт диалога</h3>
             <span>для обновления памяти</span>
           </div>

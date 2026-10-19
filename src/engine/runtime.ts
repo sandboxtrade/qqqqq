@@ -1,3 +1,4 @@
+import { loadCompanionEconomicContext } from "../storage/player-data";
 import { defaultCharacter } from "../character/character";
 import { getCharacterProfile } from "../character/character-registry";
 import { createEvent, type CharacterEvent } from "../events/event-types";
@@ -1035,7 +1036,7 @@ export async function handleUserMessage(
     type: "message",
     source: "user",
     timestamp: input.timestamp,
-    payload: { text: input.text },
+    payload: { text: input.text, ...(input.contextText ? {contextText:input.contextText} : {}) },
     importance: 0.35,
   });
 
@@ -1056,6 +1057,9 @@ export async function handleUserMessage(
     profile.defaultPersonality,
     profile.defaultMemory,
   );
+  // Financial memories are separate from the user-editable long-term chat memory.
+  // Never prevent dialogue if the economy document temporarily cannot load.
+  const financeContext = await loadCompanionEconomicContext(uid, characterId).catch(() => "ЭКОНОМИКА МИРА: средняя зарплата $2,000 в месяц.");
   const contextMs = Math.round(performance.now() - contextStarted);
   const stableHistory = history.filter((line) => line.id !== input.id);
   const recentHistory = selectBalancedRecentHistory(stableHistory, 15);
@@ -1178,10 +1182,10 @@ export async function handleUserMessage(
         dislikes: [...profile.core.dislikes],
         communicationStyle: { ...profile.core.communicationStyle },
       },
-      userText: input.text,
+      userText: input.contextText ?? input.text,
       personality: editableContext.personality,
       voiceStyle: profile.voiceProfile?.styleGuide,
-      memory: editableContext.memory,
+      memory: `${editableContext.memory}\n\n${financeContext}`,
       sceneMechanic,
       appearanceRequest: appearanceResolution.requested
         ? {
@@ -1575,7 +1579,7 @@ export async function maintainRuntime(
         userText: "",
         personality: proactiveEditableContext.personality,
         voiceStyle: profile.voiceProfile?.styleGuide,
-        memory: proactiveEditableContext.memory,
+        memory: `${proactiveEditableContext.memory}\n\n${await loadCompanionEconomicContext(uid, characterId).catch(() => "Средняя месячная зарплата в игровом мире: $2,000.")}`,
         proactive: {
           kind: "autonomous_check",
           reason: "Проверка, есть ли у персонажа естественное желание самому выйти на связь.",

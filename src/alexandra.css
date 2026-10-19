@@ -67,3 +67,103 @@
 .alex-profile-note{font-size:12px;color:#897e82;line-height:1.5}.alex-ledger-title{margin:22px 0 10px;font-size:16px}
 .alex-ledger-row{display:flex;justify-content:space-between;padding:12px 1px;border-bottom:1px solid #e9e0e3;font-size:13px;gap:10px}.alex-ledger-row span{display:flex;flex-direction:column;gap:5px}.alex-ledger-row small{color:#958c8e;font-size:11px}.alex-ledger-row strong{color:#9d4a5f}
 @media(max-width:390px){.alex-profile-form{grid-template-columns:1fr}.alex-page{padding:20px 13px 36px}.alex-person-head{align-items:flex-start}}
+
+/* v0.21.4: character-specific settings entry from the people directory. */
+.alex-person-settings { display:block; width:100%; margin-top:9px; padding:9px 11px; text-align:center;
+  background:transparent; color:#8c6376; border:1px solid #eadce2; border-radius:12px; font-size:11px; }
+.alex-person-settings:focus-visible { outline:2px solid #a55c73; outline-offset:2px; }
+
+/* v0.21.5 — cohesive near-black graphite surfaces, readable form and wallet UI */
+html:has(.alex-shell), body:has(.alex-shell), body:has(.alex-shell) #root {background:#07080a;color-scheme:dark;}
+.alex-shell {
+  --alex-accent:#a6a8b4; --alex-muted:#9495a0;
+  --dark-bg:#07080a;--dark-surface:#101115;--dark-raised:#18191e;--dark-border:#272932;
+  background:radial-gradient(ellipse at 30% -25%,#1d1f29 0%,#090a0d 41%,#07080a 100%);color:#f0f0f4;
+}
+.alex-shell .alex-header {background:#0c0d11;border-bottom:1px solid #25262b;box-shadow:0 8px 24px #0004;}
+.alex-shell .alex-header-copy span {color:#93949d;}
+.alex-shell .alex-header-avatar,.alex-shell .alex-social-avatar,.alex-shell .alex-post-icon {background:linear-gradient(140deg,#424754,#242630);border:1px solid #595d6a;color:#f5f5f8;}
+.alex-shell .alex-settings-button{background:#1b1c23;border:1px solid #30313a;color:#d6d7df;}
+.alex-shell .alex-content{background:transparent;}
+.alex-shell .alex-bottom-nav{background:#0b0c10;border-top:1px solid #272831;box-shadow:0 -10px 30px #0006;}
+.alex-shell .alex-bottom-nav button{color:#8d8f9b;}
+.alex-shell .alex-bottom-nav button.active{color:#f1f1f5;}
+.alex-shell .alex-bottom-nav button.active::before{background:#b9bccb;}
+.alex-shell .alex-page-heading h1,.alex-shell .alex-section-title h2,.alex-shell .alex-ledger-title{color:#f3f3f6;}
+.alex-shell .alex-page-heading p,.alex-shell .alex-profile-note,.alex-shell .alex-section-title span{color:#989aa5;}
+.alex-shell .alex-eyebrow{color:#a3a5b8;}
+.alex-shell .alex-wallet-strip,.alex-shell .alex-wallet-card,.alex-shell .alex-person-card,.alex-shell .alex-post,.alex-shell .alex-social-profile,.alex-shell .alex-interaction-panel,.alex-shell .alex-action-grid button,.alex-shell .alex-profile-visibility {
+  background:linear-gradient(150deg,#191a20,#101115);color:#ebebf0;border:1px solid #2c2e37;
+  box-shadow:0 6px 24px #0003,inset 0 1px #ffffff08;
+}
+.alex-shell .alex-person-head strong,.alex-shell .alex-post-header strong,.alex-shell .alex-action-grid button strong{color:#f0f0f3;}
+.alex-shell .alex-person-head span,.alex-shell .alex-person-head small,.alex-shell .alex-post-header span,.alex-shell .alex-social-profile span,.alex-shell .alex-social-profile small,.alex-shell .alex-post p,.alex-shell .alex-wallet-strip span,.alex-shell .alex-spending-panel p{color:#a1a2ad;}
+.alex-shell .alex-person-settings,.alex-shell .alex-person-actions button,.alex-shell .alex-spending-items button,.alex-shell .alex-confirm-spend button,.alex-shell .alex-social-profile button,.alex-shell .alex-options button{
+  color:#e4e4ea;background:#22232b;border:1px solid #373945;box-shadow:none;
+}
+.alex-shell .alex-person-actions button.primary,.alex-shell .alex-confirm-spend button:last-child,.alex-shell .alex-save-button{
+  background:#d1d3dc;color:#111217;border-color:#d1d3dc;
+}
+.alex-shell .alex-spending-panel{border-top-color:#303039;}
+.alex-shell .alex-confirm-spend,.alex-shell .alex-social-empty{background:#14151b;border:1px solid #333541;color:#abaeba;}
+.alex-shell .alex-social-empty strong{color:#f1f1f4;}
+.alex-shell .alex-profile-cover,.alex-shell .alex-profile-cover.theme-midnight,.alex-shell .alex-profile-cover.theme-rose,.alex-shell .alex-profile-cover.theme-ocean,.alex-shell .alex-profile-cover.theme-sage{
+  background:radial-gradient(circle at 20% 0%,#484c5d 0,#262831 35%,#111217 75%);border:1px solid #343642;
+}
+.alex-shell .alex-profile-form label {color:#bec0cb;}
+.alex-shell .alex-profile-form input:not([type="checkbox"]),.alex-shell .alex-profile-form textarea,.alex-shell .alex-profile-form select,.alex-shell .alex-topup-action input,.alex-shell .alex-custom-transfer input{
+  background:#121319;border:1px solid #333540;color:#f0f0f4;border-radius:12px;
+}
+.alex-shell .alex-profile-form input:focus,.alex-shell .alex-profile-form textarea:focus,.alex-shell .alex-profile-form select:focus{border-color:#9094ab;}
+.alex-shell .alex-profile-visibility small,.alex-shell .alex-wallet-card small,.alex-shell .alex-ledger-row small{color:#a1a3b0;}
+.alex-shell .alex-wallet-card{color:#d1d3de;}
+.alex-shell .alex-wallet-card strong{color:#fff;}
+.alex-shell .alex-ledger-row {border-bottom:1px solid #2c2e37;color:#d8d9e0;}
+.alex-shell .alex-ledger-row strong{color:#e9c5c8;}
+.alex-shell .alex-ledger-row strong.credit{color:#a4ddbc;}
+.alex-shell .alex-inline-error{background:#351e23;color:#ffc4ce;}
+.alex-shell .alex-person-settings:focus-visible{outline-color:#bcc0ce;}
+.alex-shell .chat-screen{background:#08090d;}
+.alex-shell .bubble.character{background:#1b1c22;border-color:#30313a;}
+.alex-shell .bubble.user{background:linear-gradient(140deg,#343641,#252831);color:#f4f4f7;box-shadow:none;}
+.alex-shell .composer{background:#0a0b0f;border-top:1px solid #23242e;}
+.alex-shell .composer-field{background:#171820;border-color:#323440;}
+.alex-shell .send-button{background:#d2d4de;color:#0a0b0f;box-shadow:none;}
+.alex-topup-panel,.alex-companion-account{background:linear-gradient(135deg,#191b22,#101217);border:1px solid #30323d;border-radius:17px;padding:16px;margin:10px 0 16px;}
+.alex-topup-panel>div:first-child{display:flex;flex-direction:column;gap:4px;}
+.alex-topup-panel strong{color:#f4f4f8;font-size:16px;}
+.alex-topup-panel small,.alex-companion-account small{color:#a3a6b2;font-size:11px;line-height:1.5;}
+.alex-topup-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:13px 0;}
+.alex-topup-presets button{padding:9px 2px;background:#292b34;border:1px solid #424450;border-radius:9px;color:#ededf0;font-size:11px;}
+.alex-topup-action,.alex-custom-transfer{display:flex;gap:9px;align-items:flex-end;}
+.alex-topup-action label,.alex-custom-transfer label{display:flex;flex:1;flex-direction:column;gap:6px;font-size:11px;color:#b3b5c1;}
+.alex-topup-action input,.alex-custom-transfer input{min-width:0;width:100%;padding:11px;font-size:14px;}
+.alex-topup-action button,.alex-custom-transfer button{border:0;border-radius:11px;padding:12px;color:#101115;background:#d0d2dc;font-size:12px;font-weight:700;}
+.alex-topup-action button:disabled{opacity:.5;}
+.alex-custom-transfer{grid-column:1/-1;}
+.alex-companion-account{display:flex;flex-direction:column;gap:6px;}
+.alex-companion-account span{color:#afb2be;font-size:12px;}
+.alex-companion-account strong{font-size:23px;color:#e9edf3;}
+/* Illustrated in-world financial events: no literal fake user message. */
+.alex-shell .bubble.finance-bubble{background:transparent;border:0;padding:0;max-width:min(88%,310px);box-shadow:none;}
+.game2-finance-event{width:100%;border:1px solid #343b44;border-radius:20px;overflow:hidden;background:#14181d;color:#edf3f1;box-shadow:0 12px 35px #0008;}
+.game2-finance-art{height:138px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;overflow:hidden;background:radial-gradient(ellipse at 65% 16%,#2d5347,#132521 62%,#101819);}
+.game2-finance-event.is-gift .game2-finance-art{background:radial-gradient(ellipse at 63% 16%,#51343e,#2e202b 60%,#1a171d);}
+.game2-finance-halo{position:absolute;inset:16px 48px;border:1px solid #ffffff12;border-radius:100%;transform:rotate(-12deg);}
+.game2-finance-illustration{position:relative;z-index:1;width:160px;height:108px;filter:drop-shadow(0 12px 14px #0006);}
+.game2-finance-illustration svg{width:160px;height:108px;}
+.game2-finance-art-label{position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:9px;letter-spacing:.2em;font-weight:700;color:#dceae2;}
+.game2-finance-details{padding:16px;display:flex;flex-direction:column;gap:4px;}
+.game2-finance-kind{color:#8cad9f;font-size:10px;letter-spacing:.08em;}
+.game2-finance-event.is-gift .game2-finance-kind{color:#d6a6b7;}
+.game2-finance-details strong{font-size:25px;line-height:1.1;letter-spacing:-.02em;}
+.game2-finance-details small{color:#999faa;font-size:11px;}
+.game2-finance-meaning{display:inline-block;align-self:flex-start;margin-top:8px;background:#303e3a;border:1px solid #426053;padding:5px 9px;border-radius:9px;color:#b9e5cc;font-size:10px;}
+@media(max-width:390px){.alex-topup-presets{grid-template-columns:repeat(2,1fr)}.alex-shell .alex-person-card{padding:14px;}}
+
+/* Preserve user-selected profile cover style within the charcoal palette. */
+.alex-shell .alex-profile-cover.theme-rose{background:radial-gradient(circle at 22% 0%,#563642,#2a2029 40%,#121115 85%)}
+.alex-shell .alex-profile-cover.theme-midnight{background:radial-gradient(circle at 25% 0%,#44475a,#1b1d2a 43%,#0d0f14 85%)}
+.alex-shell .alex-profile-cover.theme-ocean{background:radial-gradient(circle at 25% 0%,#294656,#17232b 45%,#0d1116 85%)}
+.alex-shell .alex-profile-cover.theme-sage{background:radial-gradient(circle at 25% 0%,#355045,#1b2923 45%,#101411 85%)}
+.alex-shell .alex-bottom-nav button.active{background:#15161c;}

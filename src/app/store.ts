@@ -1,3 +1,4 @@
+import { encodeEconomyEvent, decodeEconomyEvent, formatGameMoney, economyEventContext, type VirtualTransaction } from "../storage/player-data";
 import { create } from "zustand";
 import {
   bootstrapRuntime,
@@ -113,6 +114,7 @@ interface AppStore {
   setPhotoNoRefusalMode: (enabled: boolean) => Promise<boolean>;
   exportConversation: (limit: ConversationExportLimit) => Promise<string>;
   send: (text: string) => Promise<void>;
+  sendEconomyEvent: (event: VirtualTransaction) => Promise<void>;
   retry: (messageId: string) => Promise<void>;
   retryPhoto: (messageId: string) => Promise<void>;
   dismissFailed: (messageId: string) => Promise<void>;
@@ -158,8 +160,10 @@ function conversationPreviewFromLines(lines: readonly ConversationLine[]): Inbox
     .sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id))[0];
   if (!line) return null;
   const isImage = line.kind === "image";
+  const financial = line.role === "user" && line.id.startsWith("economy_") ? decodeEconomyEvent(line.text) : null;
   const body = isImage
     ? (line.text.trim() ? `📷 ${line.text.trim()}` : "📷 Фотография")
+    : financial ? (financial.kind === "transfer" ? `Перевод ${formatGameMoney(financial.amount)}` : `Подарок: ${financial.label}`)
     : line.text.trim();
   return {
     text: line.role === "user" ? `Вы: ${body}` : body,
@@ -1503,6 +1507,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
       role: "user",
       text: value,
       timestamp: runtimeNow(get().runtime ?? undefined),
+    });
+  },
+  sendEconomyEvent: async (event) => {
+    if (get().busy || !get().ready || event.kind === "topup") throw new Error("Диалог сейчас недоступен.");
+    // Persist one structured event, render it as a graphical transfer, keep a
+    // human-readable event description solely for GPT continuity.
+    await sendTurn({
+      id: event.id, role: "user", text: encodeEconomyEvent(event),
+      contextText: economyEventContext(event),
+      timestamp: event.createdAt,
     });
   },
   retry: async (messageId) => {

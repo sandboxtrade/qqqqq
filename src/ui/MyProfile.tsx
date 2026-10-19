@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import type { PlayerProfile, VirtualWallet } from "../storage/player-data";
+import {formatGameMoney, type PlayerProfile, type VirtualWallet} from "../storage/player-data";
 import { Icon } from "./components";
 const THEMES = [{ value: "rose", label: "Розовый" }, { value: "midnight", label: "Ночной" }, { value: "ocean", label: "Синий" }, { value: "sage", label: "Зелёный" }] as const;
-export function MyProfile({ profile, wallet, loading, saving, onSave }: {
+export function MyProfile({ profile, wallet, loading, saving, onSave, onTopUp }: {
   profile: PlayerProfile | null; wallet: VirtualWallet | null; loading: boolean; saving: boolean;
   onSave: (profile: PlayerProfile) => Promise<void>;
+  onTopUp: (amount: number) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<PlayerProfile | null>(profile);
+  const [topUpValue, setTopUpValue] = useState("1000");
+  const [adding, setAdding] = useState(false);
   useEffect(() => setDraft(profile), [profile]);
   if (loading || !draft) return <section className="alex-page"><div className="alex-loading">Загружается профиль…</div></section>;
   const edit = (changes: Partial<PlayerProfile>) => setDraft(p => p ? { ...p, ...changes } : p);
@@ -29,9 +32,18 @@ export function MyProfile({ profile, wallet, loading, saving, onSave }: {
       <button className="alex-save-button" type="submit" disabled={saving || !draft.displayName.trim()}>{saving ? "Сохранение…" : "Сохранить профиль"}</button>
     </form>
     <div className="alex-section-title"><h2>Кошелёк</h2><span>Виртуальная валюта</span></div>
-    <div className="alex-wallet-card"><Icon name="gift" size={25}/><div><small>Доступно</small><strong>{(wallet?.balance ?? 0).toLocaleString("ru-RU")} монет</strong></div></div>
-    <p className="alex-profile-note">Баланс тестовый, реальных платежей и пополнения нет. Начисление и списание хранятся отдельно от памяти персонажей.</p>
+    <div className="alex-wallet-card"><Icon name="gift" size={25}/><div><small>Твой баланс</small><strong>{formatGameMoney(wallet?.balance ?? 0)}</strong></div></div>
+    <div className="alex-topup-panel">
+      <div><strong>Добавить деньги</strong><small>Пополнение внутри игры, без реальной оплаты</small></div>
+      <div className="alex-topup-presets">{[500,2000,5000,10000].map(amount => <button type="button" key={amount} onClick={() => setTopUpValue(String(amount))}>{formatGameMoney(amount)}</button>)}</div>
+      <form className="alex-topup-action" onSubmit={event => {event.preventDefault();const amount=Number(topUpValue);if(!Number.isSafeInteger(amount)||amount<1||amount>1000000||adding)return;setAdding(true);void onTopUp(amount).finally(()=>setAdding(false));}}>
+        <label>Сумма ($)<input aria-label="Сумма пополнения" type="number" min="1" max="1000000" step="1" value={topUpValue} onChange={event=>setTopUpValue(event.target.value)}/></label>
+        <button type="submit" disabled={adding||saving||!wallet}>{adding?"Добавляем…":"Пополнить"}</button>
+      </form>
+      <small>Игровые доллары можно добавлять без ограничений по количеству операций. Это не настоящие деньги.</small>
+    </div>
+    <p className="alex-profile-note">Средняя зарплата в виртуальном мире — $2,000 в месяц. Переводы и подарки учитываются в истории персонажа, но не гарантируют симпатию.</p>
     <h3 className="alex-ledger-title">Последние операции</h3>
-    {wallet?.transactions.length ? wallet.transactions.slice(0, 12).map(entry => <div className="alex-ledger-row" key={entry.id}><span>{entry.kind === "gift" ? "Подарок" : "Перевод"}: {entry.label}<small>{new Date(entry.createdAt).toLocaleString("ru-RU")}</small></span><strong>−{entry.amount.toLocaleString("ru-RU")}</strong></div>) : <p className="alex-profile-note">Операций пока нет.</p>}
+    {wallet?.transactions.length ? wallet.transactions.slice(0, 12).map(entry => <div className="alex-ledger-row" key={entry.id}><span>{entry.kind === "gift" ? "Подарок" : entry.kind === "topup" ? "Пополнение" : "Перевод"}: {entry.label}<small>{new Date(entry.createdAt).toLocaleString("ru-RU")}</small></span><strong className={entry.kind === "topup" ? "credit" : ""}>{entry.kind === "topup" ? "+" : "−"}{formatGameMoney(entry.amount)}</strong></div>) : <p className="alex-profile-note">Операций пока нет.</p>}
   </section>;
 }

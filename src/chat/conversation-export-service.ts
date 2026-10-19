@@ -1,3 +1,4 @@
+import { decodeEconomyEvent, formatGameMoney } from "../storage/player-data";
 import { defaultCharacter } from "../character/character";
 import { checkSignal } from "../core/async";
 import type { CharacterEvent } from "../events/event-types";
@@ -23,9 +24,11 @@ function exportLine(event: CharacterEvent): ExportConversationLine | null {
         ? payload.contextText.trim()
         : "[Отправила фотографию]")
     : "";
-  const text = imageContext
-    ? `${imageContext}${rawText ? ` — ${rawText}` : ""}`
-    : rawText;
+  const finance = event.source === "user" && event.id.startsWith("economy_") ? decodeEconomyEvent(rawText) : null;
+  const text = finance ? finance.kind === "transfer"
+    ? `[Перевод ${formatGameMoney(finance.amount)} на личный счёт девушки]`
+    : `[Подарок: ${finance.label}, стоимость ${formatGameMoney(finance.amount)}]`
+    : imageContext ? `${imageContext}${rawText ? ` — ${rawText}` : ""}` : rawText;
   const silent = event.source === "character" && payload?.silent === true;
   if ((!text && !silent) || (event.source !== "user" && event.source !== "character")) return null;
   return {

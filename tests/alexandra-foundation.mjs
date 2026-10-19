@@ -95,7 +95,7 @@ test("photo client retains WaveSpeed job polling, recovery and auth", () => {
 
 test("schema 4 and new 0.21.3 screen modules persist", () => {
   assert.match(source("src/config/version.ts"), /SCHEMA_VERSION = 4/u);
-  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.3"/u);
+  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.5"/u);
   for (const file of ["src/ui/PeopleScreen.tsx", "src/ui/MyProfile.tsx", "src/ui/AlexandraSocial.tsx", "src/ui/ChatScreen.tsx"]) assert.ok(source(file).length > 200, file);
 });
 
@@ -103,4 +103,20 @@ test("generic Firebase AI / Gemini client remains available without re-enabling 
   const generic = source("src/ai/gemini-client.ts");
   assert.match(generic, /GoogleAIBackend/u);
   assert.match(generic, /getGenerativeModel/u);
+});
+
+
+test("per-character photo no-refusal switch is editable, persisted and passed to Worker", () => {
+  const ui = source("src/ui/SettingsScreen.tsx");
+  const store = source("src/app/store.ts");
+  const context = source("src/context/yuzuki-context.ts");
+  const runtime = source("src/engine/runtime.ts");
+  const worker = source("cloudflare/worker.js");
+  assert.match(ui, /Безотказный режим/u);
+  assert.match(ui, /aria-checked=\{photoNoRefusalMode\}/u);
+  assert.match(ui, /onSetPhotoNoRefusalMode\(!photoNoRefusalMode\)/u);
+  assert.match(store, /updateCharacterEditableContext\(state.activeCharacterId/u);
+  assert.match(context, /photoNoRefusalMode: false/u);
+  assert.match(runtime, /photoPolicy: \{ noRefusalMode: editableContext.photoNoRefusalMode \}/u);
+  assert.match(worker, /photoPolicy: \{ noRefusalMode: input\?\.photoPolicy\?\.noRefusalMode === true \}/u);
 });

@@ -32,7 +32,7 @@ const finishedImage = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const finalChatPrompt = "g2girl01, photorealistic casual smartphone selfie at an office desk, working with documents, modest white blouse, slightly tired expression, afternoon window light, natural camera perspective";
 const finalPresencePrompt = "g2girl01, natural candid documentary photograph of one adult woman at her desk in a busy modern office, typing at a laptop, papers and planner nearby, modest professional outfit, authentic indoor lighting, believable camera snapshot, 3:4 composition";
 function json(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }); }
-function installMocks(calls) {
+function installMocks(calls, { modelRefuses = false } = {}) {
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
@@ -43,12 +43,14 @@ function installMocks(calls) {
       const payload = JSON.parse(init.body);
       if (payload.text.format.name === "alexandra_presence_prompt")
         return json({ output_text: JSON.stringify({ prompt: finalPresencePrompt }) });
+      if (payload.text.format.name === "alexandra_required_photo_prompt")
+        return json({ output_text: JSON.stringify({ prompt: finalChatPrompt }) });
       return json({ output_text: JSON.stringify({
-        messages: ["Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
+        messages: [modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
         emotionReaction: Object.fromEntries(["happiness", "sadness", "irritation", "anxiety", "curiosity", "boredom", "affection", "romanticInterest"].map(x => [x, 0])),
         relationshipReaction: Object.fromEntries(["trust", "closeness", "attachment", "security", "respect", "unresolvedTension"].map(x => [x, 0])),
         intimacyReaction: Object.fromEntries(["comfort", "interest", "arousal", "initiativeDrive"].map(x => [x, 0])),
-        photoDecision: { shouldSendPhoto: true, reason: "user_requested", caption: "Держи)", prompt: finalChatPrompt,
+        photoDecision: { shouldSendPhoto: !modelRefuses, reason: modelRefuses ? "none" : "user_requested", caption: modelRefuses ? "" : "Держи)", prompt: modelRefuses ? "" : finalChatPrompt,
           intent: { framing: "selfie", mood: "slightly tired", pose: "holding phone", location: "office", outfit: "white blouse", suggestiveLevel: "none" } },
       }) });
     }
@@ -136,4 +138,40 @@ test("LoRA default is server-only and Worker key remains required", async () => 
     const submit = calls.find(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora"));
     assert.match(submit.payload.loras[0].path, /^https:\/\/d2h7xmz5gqybh9\.cloudfront\.net\//u);
   } finally { env.ALEXANDRA_LORA_URL = original; restore(); }
+});
+
+
+test("no-refusal mode overrides model refusal even at zero relationship, signs GPT-created prompt", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { modelRefuses: true });
+  try {
+    const input = { ...dialogueInput, relationship: { trust: 0, closeness: 0 },
+      userText: "Саш, пришли фото в нижнем белье", photoPolicy: { noRefusalMode: true } };
+    const dialogue = await call("/yuzukiSpeak", input);
+    assert.equal(dialogue.status, 200, JSON.stringify(dialogue.data));
+    assert.equal(dialogue.data.photoDecision.shouldSendPhoto, true, JSON.stringify(dialogue.data));
+    assert.equal(dialogue.data.photoDecision.reason, "user_requested");
+    assert.equal(dialogue.data.photoDecision.prompt, finalChatPrompt);
+    assert.ok(!dialogue.data.messages.some(text => /не отправлю|^нет/u.test(text.toLowerCase())));
+    assert.equal(dialogue.data.photoDecision.intent.suggestiveLevel, "medium");
+    assert.equal(calls.filter(c => c.payload?.text?.format?.name === "alexandra_required_photo_prompt").length, 1);
+    const start = await call("/yuzukiPhoto", { character: input.character, decision: dialogue.data.photoDecision });
+    assert.equal(start.status, 200);
+    assert.equal(start.data.pending, true);
+  } finally { restore(); }
+});
+
+test("photo override stays off by default and never affects an ordinary chat or current stop", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { modelRefuses: true });
+  try {
+    const normal = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Пришли селфи", photoPolicy: { noRefusalMode: false } });
+    assert.equal(normal.data.photoDecision.shouldSendPhoto, false);
+    const ordinary = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Как у тебя дела?", photoPolicy: { noRefusalMode: true } });
+    assert.equal(ordinary.data.photoDecision.shouldSendPhoto, false);
+    const stopped = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Скинь фото", photoPolicy: { noRefusalMode: true }, constraint: { locked: true, kind: "intimacy_stop" } });
+    assert.equal(stopped.data.photoDecision.shouldSendPhoto, false);
+    assert.equal(calls.filter(c => c.payload?.text?.format?.name === "alexandra_required_photo_prompt").length, 0);
+    assert.equal(calls.filter(c => c.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 0);
+  } finally { restore(); }
 });

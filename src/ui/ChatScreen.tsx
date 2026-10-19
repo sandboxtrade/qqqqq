@@ -1,3 +1,5 @@
+import { decodeEconomyEvent } from "../storage/player-data";
+import { FinanceEventCard } from "./FinanceEventCard";
 import {
   type FormEvent,
   useEffect,
@@ -167,9 +169,11 @@ export function ChatScreen({
   const messageItems = useMemo(() => (
     messages.map((message) => (
           <article key={message.id} className={`message-row ${message.role}`}>
-            <div className={`bubble ${message.role}`}>
+            <div className={`bubble ${message.role} ${message.id.startsWith("economy_") && decodeEconomyEvent(message.text) ? "finance-bubble" : ""}`}>
               {message.proactive && <span className="proactive-label">сама написала</span>}
-              {message.kind === "image" ? (
+              {message.role === "user" && message.id.startsWith("economy_") && decodeEconomyEvent(message.text) ? (
+                <FinanceEventCard message={message.text} />
+              ) : message.kind === "image" ? (
                 <figure className={`chat-photo photo-${message.imageStatus ?? "ready"}`}>
                   {message.imageStatus === "pending" ? (
                     <div className="chat-photo-placeholder" role="status">
@@ -234,7 +238,7 @@ export function ChatScreen({
                   <button type="button" disabled={busy} onClick={() => void onRetry(message.id)}>
                     Повторить
                   </button>
-                  <button
+                  {!(message.id.startsWith("economy_") && decodeEconomyEvent(message.text)) && <button
                     type="button"
                     disabled={busy}
                     onClick={() => {
@@ -244,7 +248,7 @@ export function ChatScreen({
                     }}
                   >
                     Изменить
-                  </button>
+                  </button>}
                   <button type="button" disabled={busy} onClick={() => void onDismissFailed(message.id)}>
                     Пропустить
                   </button>

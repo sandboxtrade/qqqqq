@@ -32,7 +32,7 @@ export function formatConversationExport(lines: readonly ExportConversationLine[
 
   return visible
     .map((line) => {
-      const role = line.role === "user" ? "USER" : "YUZUKI";
+      const role = line.role === "user" ? "USER" : "ALEXANDRA";
       const initiative = line.proactive ? " · INITIATIVE" : "";
       return `[${formatTime(line.timestamp)}] ${role}${initiative}:\n${line.text.trim()}`;
     })
