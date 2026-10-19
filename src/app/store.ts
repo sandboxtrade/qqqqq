@@ -50,6 +50,7 @@ import type { ConversationExportLimit } from "../chat/conversation-export";
 import type { CloudPhotoDecision, CloudLanguageSignals } from "../ai/cloud-language";
 import { listPhotoJobs, writePhotoJob, removePhotoJob, clearPhotoJobs, readPhotoJob } from "../storage/photo-jobs";
 import { loadLocalPhoto } from "../storage/local-photo-cache";
+import { rememberUnsentTurn, forgetUnsentTurn, readUnsentTurns, clearUnsentTurns } from "../storage/turn-outbox";
 import { isWaveSpeedBalanceFailureError } from "../ai/cloud-photo";
 import { getCompanionRepository } from "../storage/repository-factory";
 import type { CharacterEvent } from "../events/event-types";
@@ -651,6 +652,9 @@ function startLiveSync(version: number, user: AuthProfile | null, characterId: s
       const incoming = conversationFrom(events)
         .filter((message) => !message.silent)
         .map((message) => ({ ...message, delivery: "saved" as const }));
+      // A reply committed in another tab (or just before a network error)
+      // resolves the original locally journaled user turn as well.
+      for (const id of replyTargets(events)) forgetUnsentTurn(user.uid, characterId, id);
       if (incoming.length) markCharacterHasConversation(characterId, conversationPreviewFromLines(incoming));
       useAppStore.setState((state) => {
         const resolvedIds = replyTargets(events);
@@ -852,7 +856,16 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       controller.signal,
     );
     if (version !== epoch) return;
-    const failedMessageIds = [...new Set(result.pendingTurnIds)];
+    const locallyUnsent = readUnsentTurns(user?.uid ?? null, characterId);
+    const confirmedReplyIds = new Set(result.recentConversation
+      .filter((line) => line.role === "character")
+      .map((line) => line.id));
+    for (const item of locallyUnsent) {
+      if (confirmedReplyIds.has(`reply_${item.id}`))
+        forgetUnsentTurn(user?.uid ?? null, characterId, item.id);
+    }
+    const stillUnsent = locallyUnsent.filter((item) => !confirmedReplyIds.has(`reply_${item.id}`));
+    const failedMessageIds = [...new Set([...result.pendingTurnIds, ...stillUnsent.map((item) => item.id)])];
     const failedSet = new Set(failedMessageIds);
     useAppStore.setState({
       runtime: result.state,
@@ -861,12 +874,15 @@ async function boot(version: number, user: AuthProfile | null, characterId = use
       busy: false,
       user,
       authStatus: isFirebaseConfigured ? "signed_in" : "local",
-      messages: result.recentConversation
-        .filter((m) => !m.silent)
-        .map((m) => ({
-          ...m,
-          delivery: failedSet.has(m.id) ? "failed" : "saved",
-        })),
+      messages: mergeChatMessages(
+        result.recentConversation
+          .filter((m) => !m.silent)
+          .map((m) => ({
+            ...m,
+            delivery: failedSet.has(m.id) ? "failed" as const : "saved" as const,
+          })),
+        stillUnsent.map((m) => ({ ...m, delivery: "failed" as const })),
+      ),
       failedMessageIds,
       historyCursor: result.historyCursor,
       hasOlderMessages: result.hasOlderConversation,
@@ -996,6 +1012,13 @@ async function sendTurn(message: ChatMessage) {
   activeTurnId = message.id;
   activeTurnConfirmed = false;
   const version = epoch;
+  rememberUnsentTurn(store.user?.uid ?? null, store.activeCharacterId, {
+    id: message.id,
+    role: "user",
+    text: message.text,
+    timestamp: message.timestamp,
+    ...(message.contextText ? { contextText: message.contextText } : {}),
+  });
   const controller = new AbortController();
   active = controller;
   const timer = setTimeout(
@@ -1094,6 +1117,7 @@ async function sendTurn(message: ChatMessage) {
       },
     );
     if (version !== epoch || controller.signal.aborted) return;
+    forgetUnsentTurn(store.user?.uid ?? null, store.activeCharacterId, message.id);
     useAppStore.setState((state) => {
       const replyMessages: ConversationLine[] = result.replyMessages?.length
         ? result.replyMessages
@@ -1158,8 +1182,11 @@ async function sendTurn(message: ChatMessage) {
       reason: error instanceof Error ? error.message : String(error),
       version: ENGINE_VERSION,
     });
+    const replyConfirmed = (activeTurnId === message.id && activeTurnConfirmed) ||
+      useAppStore.getState().messages.some(m => m.id === `reply_${message.id}` && m.delivery === "saved");
+    if (replyConfirmed) forgetUnsentTurn(store.user?.uid ?? null, store.activeCharacterId, message.id);
     useAppStore.setState((state) => {
-      const confirmed = (activeTurnId === message.id && activeTurnConfirmed) || state.messages.some(m => m.id === `reply_${message.id}` && m.delivery === "saved");
+      const confirmed = replyConfirmed;
       return {
         busy: false, streamingText: "", phase: "",
         error: confirmed ? null : errorText(error),
@@ -1182,7 +1209,8 @@ async function sendTurn(message: ChatMessage) {
       // immutable and remains recoverable on the next successful run/boot.
       const failed = useAppStore.getState().failedMessageIds.includes(message.id);
       scheduleMaintenance(failed ? 30_000 : 2000);
-      flushLiveRevision?.();
+      // Do not launch a new Firestore read immediately after a failed send.
+      if (!failed) flushLiveRevision?.();
     }
   }
 }
@@ -1400,6 +1428,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const user = state.user;
     const current = state.runtime;
     if (user) clearPhotoJobs(user.uid, state.activeCharacterId);
+    clearUnsentTurns(user?.uid ?? null, state.activeCharacterId);
     // Reset is also the escape hatch for a stuck send/Firebase operation.
     // invalidate() aborts the active turn, maintenance and live refresh first.
     const version = invalidate();
@@ -1690,6 +1719,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         controller.signal,
       );
       if (version !== epoch) return;
+      forgetUnsentTurn(get().user?.uid ?? null, get().activeCharacterId, messageId);
       set((state) => ({
         failedMessageIds: state.failedMessageIds.filter((id) => id !== messageId),
         messages: state.messages.map((message) =>

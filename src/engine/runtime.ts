@@ -981,15 +981,30 @@ export async function handleUserMessage(
   const preflightMs = Math.round(performance.now() - started);
 
   if (existing) {
-    await repository.dismissPendingTurn(input.id);
-    const boot = await bootstrapRuntime(uid, signal, undefined, characterId);
+    // This reply is already committed. Cleanup and a full bootstrap are
+    // best-effort: a transient Firebase read/write failure cannot revoke it.
+    try {
+      await repository.dismissPendingTurn(input.id);
+    } catch (error) {
+      console.warn("[Game2] pending marker cleanup deferred for saved reply", {
+        code: error && typeof error === "object" && "code" in error ? String(error.code) : "",
+      });
+    }
+    let boot: Awaited<ReturnType<typeof bootstrapRuntime>> | null = null;
+    try {
+      boot = await bootstrapRuntime(uid, signal, undefined, characterId);
+    } catch (error) {
+      console.warn("[Game2] saved reply available; full refresh deferred", {
+        code: error && typeof error === "object" && "code" in error ? String(error.code) : "",
+      });
+    }
     const payload = existing.payload as {
       text?: string;
       silent?: boolean;
       appearanceAssetId?: string;
       photoDecision?: CloudPhotoDecision;
     };
-    const recoveredReplies = boot.recentConversation
+    const recoveredReplies = (boot?.recentConversation ?? [])
       .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     const replyMessages = recoveredReplies.length
@@ -1010,7 +1025,7 @@ export async function handleUserMessage(
       replyTimestamp: existing.timestamp,
       appearanceAssetId: typeof payload.appearanceAssetId === "string" ? payload.appearanceAssetId : undefined,
       photoDecision: payload.photoDecision,
-      state: boot.state,
+      state: boot?.state ?? current,
       trace: null as RuntimeTrace | null,
     };
   }
@@ -1374,14 +1389,22 @@ export async function handleUserMessage(
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "turn-already-committed") throw error;
     const saved = await repository.getEvent(replyId);
-    const boot = await bootstrapRuntime(uid, signal, undefined, characterId);
-    const savedPayload = saved!.payload as {
+    if (!saved) throw error;
+    let boot: Awaited<ReturnType<typeof bootstrapRuntime>> | null = null;
+    try {
+      boot = await bootstrapRuntime(uid, signal, undefined, characterId);
+    } catch (refreshError) {
+      console.warn("[Game2] committed reply recovered; state refresh deferred", {
+        code: refreshError && typeof refreshError === "object" && "code" in refreshError ? String(refreshError.code) : "",
+      });
+    }
+    const savedPayload = saved.payload as {
       text?: string;
       silent?: boolean;
       appearanceAssetId?: string;
       photoDecision?: CloudPhotoDecision;
     };
-    const savedReplies = boot.recentConversation
+    const savedReplies = (boot?.recentConversation ?? [])
       .filter((line) => line.role === "character" && (line.id === replyId || line.id.startsWith(`${replyId}_`)))
       .sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     return {
@@ -1392,19 +1415,28 @@ export async function handleUserMessage(
       replyTimestamp: saved!.timestamp,
       appearanceAssetId: typeof savedPayload.appearanceAssetId === "string" ? savedPayload.appearanceAssetId : undefined,
       photoDecision: savedPayload.photoDecision,
-      state: boot.state,
+      state: boot?.state ?? current,
       trace: null,
     };
   }
 
+  // The text reply, world, and primary state are already committed atomically.
+  // A secondary Firestore write must not turn this successful user message
+  // into "not sent", which previously triggered duplicate GPT attempts.
   let savedIntimacy = reactedIntimacyState;
   if (intimacy.changed || intimacyChangedByCloud) {
     try {
       savedIntimacy = await repository.commitIntimacyState(reactedIntimacyState, reactedIntimacyState.revision);
     } catch (error) {
-      const latest = await repository.loadIntimacyState();
-      if (latest) savedIntimacy = latest;
-      else if (!(error instanceof Error && error.message.includes("intimacy-state-conflict"))) throw error;
+      console.warn("[Game2] secondary intimacy save failed after committed reply", {
+        code: error && typeof error === "object" && "code" in error ? String(error.code) : "",
+      });
+      try {
+        const latest = await repository.loadIntimacyState();
+        if (latest) savedIntimacy = latest;
+      } catch {
+        // The current reply is already safely committed. Reconcile on boot.
+      }
     }
   }
   const evolvedIntimacyPreferences = evolveIntimacyPreferences(intimacyPreferences, {
@@ -1421,10 +1453,13 @@ export async function handleUserMessage(
         intimacyPreferences.revision,
       );
     } catch (error) {
-      if (!(error instanceof Error && error.message.includes("intimacy-preferences-conflict"))) throw error;
+      console.warn("[Game2] secondary intimacy preferences save failed after committed reply", {
+        code: error && typeof error === "object" && "code" in error ? String(error.code) : "",
+      });
     }
   }
-  checkSignal(signal);
+  // Do not throw for cancelled auxiliary work after the main transaction.
+  // The authoritative saved message exists regardless of secondary state.
 
   const trace: RuntimeTrace = {
     timings: {
