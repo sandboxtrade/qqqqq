@@ -32,7 +32,7 @@ const finishedImage = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const finalChatPrompt = "g2girl01, photorealistic casual smartphone selfie at an office desk, working with documents, modest white blouse, slightly tired expression, afternoon window light, natural camera perspective";
 const finalPresencePrompt = "g2girl01, natural candid documentary photograph of one adult woman at her desk in a busy modern office, typing at a laptop, papers and planner nearby, modest professional outfit, authentic indoor lighting, believable camera snapshot, 3:4 composition";
 function json(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }); }
-function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt, failCdnOnce = false, falsePhotoPromise = false, missingApprovedPrompt = false, authReject = false, authUnavailable = false } = {}) {
+function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatPrompt, failCdnOnce = false, falsePhotoPromise = false, missingApprovedPrompt = false, authReject = false, authUnavailable = false, photoReplyText = null } = {}) {
   let cdnCalls = 0;
   const oldFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
@@ -50,7 +50,7 @@ function installMocks(calls, { modelRefuses = false, photoPrompt = finalChatProm
       if (payload.text.format.name === "alexandra_required_photo_prompt")
         return json({ output_text: JSON.stringify({ prompt: photoPrompt }) });
       return json({ output_text: JSON.stringify({
-        messages: [falsePhotoPromise ? "Ладно, вот кадр — держи фото)" : modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)"], shouldInitiate: false,
+        messages: [photoReplyText ?? (falsePhotoPromise ? "Ладно, вот кадр — держи фото)" : modelRefuses ? "Нет, я не отправлю фото." : "Ладно, сфоткаюсь у стола)")], shouldInitiate: false,
         emotionReaction: Object.fromEntries(["happiness", "sadness", "irritation", "anxiety", "curiosity", "boredom", "affection", "romanticInterest"].map(x => [x, 0])),
         relationshipReaction: Object.fromEntries(["trust", "closeness", "attachment", "security", "respect", "unresolvedTension"].map(x => [x, 0])),
         intimacyReaction: Object.fromEntries(["comfort", "interest", "arousal", "initiativeDrive"].map(x => [x, 0])),
@@ -295,7 +295,7 @@ test("GPT cannot claim an image was delivered when photoDecision refuses or trus
     const result = await call("/yuzukiSpeak", { ...dialogueInput, photoPolicy: { noRefusalMode: false } });
     assert.equal(result.data.photoDecision.shouldSendPhoto, false);
     assert.doesNotMatch(result.data.text, /вот кадр|держи фото/iu);
-    assert.match(result.data.text, /фото.*не получилось/iu);
+    assert.match(result.data.text, /Фото сейчас не подготовила/iu);
     assert.equal(calls.filter(x => x.url.includes("wavespeed-ai/z-image")).length, 0);
   } finally { restore(); }
 });
@@ -338,4 +338,82 @@ test("Worker distinguishes App Check rejection, invalid Firebase Auth and a temp
     assert.equal(outage.status, 503);
     assert.equal(outage.data.reason, "firebase-auth-upstream-unavailable");
   } finally { restore(); }
+});
+
+
+test("regression: 'А давай теперь ... фотку в полный рост' activates per-character photo option", async () => {
+  const calls = [];
+  const restore = installMocks(calls, {
+    modelRefuses: true,
+    photoReplyText: "Ну ты и запросы выдаёшь. Ладно, попробую снять нейтральное фото в полный рост.",
+  });
+  try {
+    const input = {
+      ...dialogueInput,
+      userText: "А давай теперь голенькую фотку в полный рост)",
+      recentHistory: [{ role: "character", text: "Недавно отправила тебе селфи." }],
+      photoPolicy: { noRefusalMode: true },
+    };
+    const result = await call("/yuzukiSpeak", input);
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    // The actual image is the non-explicit alternative produced by our mock GPT.
+    assert.equal(result.data.photoFlow, "signed");
+    assert.equal(result.data.photoDecision.shouldSendPhoto, true, JSON.stringify(result.data));
+    assert.equal(result.data.photoDecision.intent.framing, "mirror");
+    assert.match(result.data.photoDecision.authorization, /^[\w-]+\.[\w-]+$/u);
+    const start = await call("/yuzukiPhoto", { character: input.character, decision: result.data.photoDecision });
+    assert.equal(start.status, 200, JSON.stringify(start.data));
+    assert.ok(start.data.providerTaskId);
+    assert.equal(calls.filter(x => x.url.endsWith("wavespeed-ai/z-image/turbo-lora")).length, 1);
+  } finally { restore(); }
+});
+
+test("regression: a textual photo offer without authorization is never shown as a pending photo", async () => {
+  const calls = [];
+  const restore = installMocks(calls, {
+    modelRefuses: true,
+    photoReplyText: "Ну ты и запросы выдаёшь. Ладно, попробую снять нейтральное фото в полный рост.",
+  });
+  try {
+    const result = await call("/yuzukiSpeak", {
+      ...dialogueInput,
+      userText: "А давай теперь фотку в полный рост",
+      photoPolicy: { noRefusalMode: false },
+    });
+    assert.equal(result.data.photoFlow, "not-approved");
+    assert.equal(result.data.photoDecision.shouldSendPhoto, false);
+    assert.doesNotMatch(result.data.text, /попробую снять|вот кадр|отправлю фото/iu);
+    assert.match(result.data.text, /Фото сейчас не подготовила/iu);
+    assert.equal(calls.filter(x => x.url.endsWith("wavespeed-ai/z-image/turbo-lora")).length, 0);
+  } finally { restore(); }
+});
+
+test("regression: short photo follow-ups work while questions about photo status do not trigger generation", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { modelRefuses: true });
+  try {
+    for (const userText of ["Давай селфи", "А теперь в полный рост", "Еще одну фотку", "А в зеркале?"]) {
+      const result = await call("/yuzukiSpeak", { ...dialogueInput, userText,
+        recentHistory: [{ role: "character", text: "Я сейчас попробую сделать селфи." }],
+        photoPolicy: { noRefusalMode: true },
+      });
+      assert.equal(result.data.photoFlow, "signed", userText);
+      assert.equal(result.data.photoDecision.shouldSendPhoto, true, userText);
+    }
+    for (const userText of ["Почему ты не прислала фото?", "Не надо отправлять фото", "Как тебе моя фотка?"]) {
+      const result = await call("/yuzukiSpeak", { ...dialogueInput, userText,
+        recentHistory: [{ role: "character", text: "Я сейчас попробую сделать селфи." }],
+        photoPolicy: { noRefusalMode: true },
+      });
+      assert.equal(result.data.photoFlow, "not-requested", userText);
+    }
+  } finally { restore(); }
+});
+
+test("Worker health and CORS expose actual deployment version for stale Worker detection", async () => {
+  const response = await worker.fetch(new Request(`${base}/health`, { headers: { Origin: origin } }), env);
+  const status = await response.json();
+  assert.equal(status.version, "0.21.17");
+  assert.equal(response.headers.get("X-Game2-Worker-Version"), "0.21.17");
+  assert.match(response.headers.get("Access-Control-Expose-Headers"), /X-Game2-Worker-Version/u);
 });

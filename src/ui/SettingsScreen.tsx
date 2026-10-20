@@ -6,6 +6,7 @@ import type { ConversationExportLimit } from "../chat/conversation-export";
 import { MAX_MEMORY_CHARS, MAX_PERSONALITY_CHARS } from "../context/yuzuki-context";
 import { DebugPanel } from "./components";
 import { ENGINE_VERSION } from "../config/version";
+import { runtimeCloudLanguageEndpoint } from "../config/runtime-config";
 import { lastFirebaseFailure, subscribeFirebaseDiagnostic } from "../storage/firebase-diagnostics";
 
 // Character settings share the established Firestore context format (SCHEMA_VERSION 4).
@@ -99,6 +100,23 @@ export function SettingsScreen({
 }) {
   const [firebaseFailure, setFirebaseFailure] = useState(lastFirebaseFailure);
   useEffect(() => subscribeFirebaseDiagnostic(() => setFirebaseFailure(lastFirebaseFailure())), []);
+  // The PWA and the Cloudflare Worker are deployed separately. A stale Worker
+  // silently restores old photo-intent bugs even if the client is up to date.
+  const [workerVersion, setWorkerVersion] = useState("проверяется…");
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8_000);
+    const endpoint = runtimeCloudLanguageEndpoint.replace(/\/yuzukiSpeak(?:\?.*)?$/u, "/health");
+    void fetch(endpoint, { method: "GET", cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`health-${response.status}`);
+        const health = await response.json() as { version?: unknown };
+        setWorkerVersion(typeof health.version === "string" ? health.version : "неизвестная сборка");
+      })
+      .catch(() => { if (!controller.signal.aborted) setWorkerVersion("недоступен"); })
+      .finally(() => window.clearTimeout(timer));
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, []);
   const [view, setView] = useState<SettingsView>("home");
   const [confirmReset, setConfirmReset] = useState(false);
   const [personalityDraft, setPersonalityDraft] = useState(personality);
@@ -319,7 +337,7 @@ export function SettingsScreen({
             >
               <div className="settings-row-copy">
                 <strong>Безотказный режим</strong>
-                <span>Без игровых отказов на просьбы о фотографиях, независимо от настроения и уровня отношений.</span>
+                <span>Фото по прямой просьбе не будут заворачиваться из-за настроения, неловкости или уровня отношений. Для Александры этот режим рекомендован.</span>
               </div>
               <div className="settings-row-side">
                 <small>{contextBusy ? "Сохранение…" : photoNoRefusalMode ? "Включён" : "Выключен"}</small>
@@ -362,6 +380,13 @@ export function SettingsScreen({
               <div className="setting-row"><span>Аккаунт</span><strong>{user?.email ?? "Локальный пользователь"}</strong></div>
               <div className="setting-row"><span>Firebase</span><strong>{firebaseEnabled ? "настроен" : "локальный режим"}</strong></div>
               <div className="setting-row"><span>Сборка Game2</span><strong>{ENGINE_VERSION}</strong></div>
+              <div className="setting-row"><span>Сборка Worker</span><strong>{workerVersion}</strong></div>
+              {workerVersion !== "проверяется…" && workerVersion !== ENGINE_VERSION && (
+                <div className="error-card">Версия Worker не совпадает с клиентом или не определяется. Для исправления фотографий нужно обновить именно Cloudflare Worker.</div>
+              )}
+              {trace?.cloudLanguage?.photoFlow && (
+                <div className="setting-row"><span>Последнее решение о фото</span><strong>{trace.cloudLanguage.photoFlow}</strong></div>
+              )}
               <div className="setting-row"><span>App Check</span><strong>{appCheckLabels[appCheckState]}</strong></div>
               <div className="setting-row"><span>Диалог</span><strong>{dialogueEngineLabel}</strong></div>
               <div className="setting-row"><span>Контекст GPT</span><strong>Personality + Memory + 15/15</strong></div>

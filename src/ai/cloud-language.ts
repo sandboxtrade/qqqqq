@@ -239,6 +239,8 @@ export interface CloudLanguageResult {
   intimacyReaction?: CloudIntimacyReaction;
   /** Semantic photo decision only. Actual image generation is a separate service. */
   photoDecision?: CloudPhotoDecision;
+  /** Safe diagnostic: signed/not-approved/gated, no prompt or secret. */
+  photoFlow?: string;
   reason?: string;
 }
 
@@ -264,6 +266,7 @@ interface WorkerReply {
   emotionReaction?: Record<string, unknown>;
   relationshipReaction?: Record<string, unknown>;
   intimacyReaction?: Record<string, unknown>;
+  photoFlow?: unknown;
   photoDecision?: {
     shouldSendPhoto?: unknown;
     reason?: unknown;
@@ -607,6 +610,7 @@ export async function renderCloudLanguage(
       const relationshipReaction = parseRelationshipReaction(data.relationshipReaction);
       const intimacyReaction = parseIntimacyReaction(data.intimacyReaction);
       const photoDecision = parsePhotoDecision(data.photoDecision);
+      const photoFlow = typeof data.photoFlow === "string" ? data.photoFlow.slice(0, 64) : undefined;
       const reason = responseReason(data, response.status);
 
       // Refresh only the token family rejected by the Worker. Forcing both
@@ -716,6 +720,7 @@ export async function renderCloudLanguage(
         relationshipReaction,
         intimacyReaction,
         photoDecision,
+        photoFlow,
       };
     } catch (error) {
       if (signal?.aborted) return { attempted: true, used: false, reason: "aborted" };

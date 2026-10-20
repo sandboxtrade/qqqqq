@@ -96,7 +96,7 @@ test("photo client retains WaveSpeed job polling, recovery and auth", () => {
 
 test("schema 4 and new 0.21.3 screen modules persist", () => {
   assert.match(source("src/config/version.ts"), /SCHEMA_VERSION = 4/u);
-  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.16"/u);
+  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.17"/u);
   for (const file of ["src/ui/PeopleScreen.tsx", "src/ui/MyProfile.tsx", "src/ui/AlexandraSocial.tsx", "src/ui/ChatScreen.tsx"]) assert.ok(source(file).length > 200, file);
 });
 

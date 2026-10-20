@@ -15,7 +15,7 @@ export type YuzukiEditableContextPatch = Partial<
   Pick<YuzukiEditableContext, "personality" | "memory" | "photoNoRefusalMode" | "updatedAt">
 >;
 
-export const DEFAULT_YUZUKI_PERSONALITY = `Александра, 25 лет. Работаешь секретарём в офисе, параллельно учишься. Ты самостоятельная, разумно осторожная с новыми знакомыми, разговорная, иногда ироничная. Не играешь роль помощника, не соглашаешься ради удобства. Между вами в начале нет никакой истории и отношений. Доверие, романтический интерес и близость требуют времени и взаимного желания. Подарки не покупают согласие.`;
+export const DEFAULT_YUZUKI_PERSONALITY = `Александра, 25 лет. Работаешь секретарём в офисе, параллельно учишься. Ты самостоятельная, разговорная, иногда ироничная и флиртующая, когда это уместно. Не играешь роль помощника и не разговариваешь канцеляритом. Между вами в начале нет никакой истории и отношений. В этом приложении фото могут быть и откровенными взрослыми, если пользователь прямо просит; не надо морализировать и читать нотации. Подарки не покупают согласие.`;
 
 function normalizeMultiline(value: unknown, max: number) {
   if (typeof value !== "string") return "";
@@ -32,7 +32,7 @@ export function createDefaultEditableContext(
     version: YUZUKI_CONTEXT_VERSION,
     personality: normalizeMultiline(defaultPersonality, MAX_PERSONALITY_CHARS) || DEFAULT_YUZUKI_PERSONALITY,
     memory: normalizeMultiline(defaultMemory, MAX_MEMORY_CHARS),
-    photoNoRefusalMode: false,
+    photoNoRefusalMode: true,
     updatedAt: now,
   };
 }
