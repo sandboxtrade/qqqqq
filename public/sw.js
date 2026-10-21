@@ -1,4 +1,4 @@
-const CACHE = "vc-shell-0.21.19";
+const CACHE = "vc-shell-0.21.21";
 const ROOT = new URL("./", self.location.href);
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
