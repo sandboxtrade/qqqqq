@@ -418,8 +418,8 @@ test("regression: short photo follow-ups work while questions about photo status
 test("Worker health and CORS expose actual deployment version for stale Worker detection", async () => {
   const response = await worker.fetch(new Request(`${base}/health`, { headers: { Origin: origin } }), env);
   const status = await response.json();
-  assert.equal(status.version, "0.21.19");
-  assert.equal(response.headers.get("X-Game2-Worker-Version"), "0.21.19");
+  assert.equal(status.version, "0.21.21");
+  assert.equal(response.headers.get("X-Game2-Worker-Version"), "0.21.21");
   assert.match(response.headers.get("Access-Control-Expose-Headers"), /X-Game2-Worker-Version/u);
 });
 

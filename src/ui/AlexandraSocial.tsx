@@ -1,3 +1,4 @@
+import { publicAssetUrl } from "../utils/public-asset-url";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerProfile } from "../storage/player-data";
 import { alexandraProfile, anastasiaProfile } from "../character/character-registry";
@@ -31,7 +32,7 @@ function Glyph({ name, size = 20, filled = false }: { name: string; size?: numbe
 }
 function Avatar({ name, imageUrl, size = "medium" }: { name: string; imageUrl?: string; size?: "small"|"medium"|"large" }) {
   return <span className={`g2-social-avatar g2-avatar-${size}`}>
-    {imageUrl ? <img loading="lazy" src={imageUrl} alt="" referrerPolicy="no-referrer" /> : name.charAt(0).toUpperCase()}
+    {imageUrl ? <img loading="lazy" src={publicAssetUrl(imageUrl)} alt="" referrerPolicy="no-referrer" /> : name.charAt(0).toUpperCase()}
   </span>;
 }
 function Gallery({ items }: { items: readonly { id: string; imageUrl?: string; caption: string; note?: string; objectPosition?: string; objectFit?: "cover" | "contain"; }[] }) {
@@ -40,7 +41,7 @@ function Gallery({ items }: { items: readonly { id: string; imageUrl?: string; c
     <div className="profile-gallery-grid">
       {items.map(item => <article key={item.id} className="profile-gallery-card">
         <div className="profile-gallery-media">
-          {item.imageUrl ? <img loading="lazy" src={item.imageUrl} alt={item.caption} style={{ objectPosition: item.objectPosition || "center 18%", objectFit: item.objectFit || "cover" }} referrerPolicy="no-referrer" /> : <div className="profile-gallery-placeholder"><Glyph name="plus" size={28}/><span>PHOTO</span></div>}
+          {item.imageUrl ? <img loading="lazy" src={publicAssetUrl(item.imageUrl)} alt={item.caption} style={{ objectPosition: item.objectPosition || "center 18%", objectFit: item.objectFit || "cover" }} referrerPolicy="no-referrer" /> : <div className="profile-gallery-placeholder"><Glyph name="plus" size={28}/><span>PHOTO</span></div>}
         </div>
         <div className="profile-gallery-caption"><strong>{item.caption}</strong>{item.note && <span>{item.note}</span>}</div>
       </article>)}
@@ -162,7 +163,7 @@ export function AlexandraSocial({ onMessage, onMyProfile, playerProfile, uid }: 
         }}><Glyph name="trash" size={18}/></button>}
       </header>
       {post.text && <p className="g2-post-copy">{post.text}</p>}
-      {post.imageUrl && <img className="g2-post-image" loading="lazy" src={post.imageUrl} alt="Фотография из публикации" referrerPolicy="no-referrer" />}
+      {post.imageUrl && <img className="g2-post-image" loading="lazy" src={publicAssetUrl(post.imageUrl)} alt="Фотография из публикации" referrerPolicy="no-referrer" />}
       <div className="g2-post-actions">
         <button type="button" className={liked ? "selected" : ""} aria-label={liked ? "Убрать отметку Нравится" : "Нравится"} aria-pressed={liked} onClick={()=>change(s=>({...s,likedPostIds:toggleSocialId(s.likedPostIds,post.id)}))}><Glyph name="heart" size={21} filled={liked}/><span>{liked ? "Нравится" : "Нравится"}</span></button>
         <button type="button" onClick={()=>{setExpandedComments(v=>v===post.id?null:post.id);setCommentInput("");}} aria-expanded={expandedComments===post.id}><Glyph name="comment" size={20}/><span>{comments.length ? comments.length : "Комментировать"}</span></button>
@@ -196,7 +197,7 @@ export function AlexandraSocial({ onMessage, onMyProfile, playerProfile, uid }: 
         <label className="g2-social-search"><Glyph name="search" size={19}/><input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Поиск публикаций…" aria-label="Поиск публикаций" /></label>
         <div className="g2-social-tabs" role="group" aria-label="Фильтр публикаций">{([['feed','Для тебя'],['following','Подписки'],['saved','Сохранённое'],['mine','Мои']] as const).map(([id,name])=><button type="button" key={id} className={tab===id?"selected":""} aria-pressed={tab===id} onClick={()=>setTab(id)}>{name}</button>)}</div>
       </> : <div className="g2-social-person-profile">
-        <div className="g2-social-cover" style={view !== "player" && viewedProfile.avatarUrl ? { backgroundImage: `linear-gradient(180deg, rgba(11,12,18,.12), rgba(11,12,18,.56)), url(${viewedProfile.avatarUrl})`, backgroundSize: "cover", backgroundPosition: viewedProfile.heroObjectPosition || viewedProfile.avatarObjectPosition || "center 18%" } : undefined} />
+        <div className="g2-social-cover" style={view !== "player" && viewedProfile.avatarUrl ? { backgroundImage: `linear-gradient(180deg, rgba(11,12,18,.12), rgba(11,12,18,.56)), url(${publicAssetUrl(viewedProfile.avatarUrl)})`, backgroundSize: "cover", backgroundPosition: viewedProfile.heroObjectPosition || viewedProfile.avatarObjectPosition || "center 18%" } : undefined} />
         <div className="g2-social-profile-details"><Avatar name={view==="player"?ownName:viewedProfile.core.name} imageUrl={view==="player"?playerProfile?.avatarUrl:viewedProfile.avatarUrl} size="large"/>
           <h2>{view==="player"?ownName:viewedProfile.core.name}</h2><small>{view==="player"?ownHandle:`@${viewedProfile.handle}`}</small>
           <p>{view==="player"?(playerProfile?.bio||"Добавь описание своего профиля."):viewedProfile.bio}</p>
