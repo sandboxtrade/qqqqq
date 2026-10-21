@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import * as ts from "typescript";
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 const transpile = ts.transpileModule(read("src/storage/social-feed.ts"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },

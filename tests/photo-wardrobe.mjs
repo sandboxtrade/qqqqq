@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import * as ts from "typescript";
 
 const source = readFileSync(new URL("../src/world/world.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, {
