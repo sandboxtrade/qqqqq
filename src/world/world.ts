@@ -230,6 +230,14 @@ const ACTIVITY_DETAILS: Record<WorldActivity, readonly string[]> = {
  * stored as a new field, so old saves and Firestore documents stay compatible.
  */
 const CHARACTER_ACTIVITY_DETAILS: Partial<Record<string, Partial<Record<WorldActivity, readonly string[]>>>> = {
+  anastasia_v1: {
+    personal_project: ["гуляю по магазинам и выбираю кое-что для себя", "заехала в торговый центр, смотрю новые коллекции"],
+    reading: ["дома листаю журнал и отдыхаю", "устроилась с книжкой — сегодня никуда не тороплюсь"],
+    errands: ["заехала за покупками", "гуляю по бутикам, выбираю одежду"],
+    cafe_break: ["села в кафе после прогулки", "сижу в кофейне, отдыхаю от города"],
+    relaxing: ["отдыхаю дома, домработница занимается бытовыми делами", "сижу дома с телефоном, хочется отвлечься и поболтать"],
+    walk: ["гуляю по городу без особого маршрута", "вышла пройтись и посмотреть витрины"],
+  },
   alexandra_v1: {
     personal_project: [
       "я в офисе: разбираю документы и готовлю расписание встреч",
@@ -285,6 +293,26 @@ const WEEKEND_ROUTINE: readonly RoutineWindow[] = [
   { start: 23, end: 24, activities: ["relaxing"], location: "bedroom", targetEnergy: .3 },
 ];
 
+// Домашний распорядок Анастасии не включает офис или университет.
+// Описание ребёнка остаётся только биографическим контекстом; никаких
+// сцен с ребёнком/домработницей в фотомаршрутах не создаётся.
+const ANASTASIA_WEEKDAY_ROUTINE: readonly RoutineWindow[] = [
+  { start: 0, end: 8, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .9 },
+  { start: 8, end: 10, activities: ["waking_up", "breakfast"], location: "kitchen", targetEnergy: .79 },
+  { start: 10, end: 13, activities: ["walk", "errands", "cafe_break"], location: "outside", targetEnergy: .75 },
+  { start: 13, end: 16, activities: ["cafe_break", "errands", "walk"], location: "outside", targetEnergy: .65 },
+  { start: 16, end: 19, activities: ["reading", "relaxing", "music"], location: "living_room", targetEnergy: .62 },
+  { start: 19, end: 23, activities: ["relaxing", "reading", "music"], location: "living_room", targetEnergy: .48 },
+  { start: 23, end: 24, activities: ["relaxing"], location: "bedroom", targetEnergy: .4 },
+];
+const ANASTASIA_WEEKEND_ROUTINE: readonly RoutineWindow[] = [
+  { start: 0, end: 9, activities: ["sleeping"], location: "bedroom", availability: "sleeping", targetEnergy: .9 },
+  { start: 9, end: 11, activities: ["breakfast", "relaxing"], location: "kitchen", targetEnergy: .8 },
+  { start: 11, end: 18, activities: ["walk", "errands", "cafe_break"], location: "outside", targetEnergy: .72 },
+  { start: 18, end: 23, activities: ["relaxing", "music", "reading"], location: "living_room", targetEnergy: .6 },
+  { start: 23, end: 24, activities: ["relaxing"], location: "bedroom", targetEnergy: .45 },
+];
+
 function isWeekend(timestamp: number, timeZone: string) {
   const day = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone }).format(timestamp);
   return day === "Sat" || day === "Sun";
@@ -307,7 +335,9 @@ export function resolveRoutine(
   characterId = "alexandra_v1",
 ): RoutineSlot {
   const hour = getHourInTimeZone(timestamp, timeZone);
-  const windows = isWeekend(timestamp, timeZone) ? WEEKEND_ROUTINE : WEEKDAY_ROUTINE;
+  const windows = characterId === "anastasia_v1"
+    ? (isWeekend(timestamp, timeZone) ? ANASTASIA_WEEKEND_ROUTINE : ANASTASIA_WEEKDAY_ROUTINE)
+    : (isWeekend(timestamp, timeZone) ? WEEKEND_ROUTINE : WEEKDAY_ROUTINE);
   const window = windows.find((candidate) => hour >= candidate.start && hour < candidate.end);
   if (!window) {
     return { activity: "idle", location: "unknown", availability: "free", isAwake: true, targetEnergy: .5 };

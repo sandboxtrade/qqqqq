@@ -21,7 +21,8 @@ export async function loadCharacterEditableContext(
   checkSignal(signal);
   return stored
     ? normalizeEditableContext(stored, Date.now(), profile.defaultPersonality, profile.defaultMemory)
-    : createDefaultEditableContext(Date.now(), profile.defaultPersonality, profile.defaultMemory);
+    : { ...createDefaultEditableContext(Date.now(), profile.defaultPersonality, profile.defaultMemory),
+        photoNoRefusalMode: characterId === "alexandra_v1" };
 }
 
 export async function saveCharacterEditableContext(
@@ -53,7 +54,8 @@ export async function updateCharacterEditableContext(
   const saved = await repository.updateEditableContext({
     ...patch,
     updatedAt: patch.updatedAt ?? now,
-  }, createDefaultEditableContext(now, profile.defaultPersonality, profile.defaultMemory));
+  }, { ...createDefaultEditableContext(now, profile.defaultPersonality, profile.defaultMemory),
+    photoNoRefusalMode: characterId === "alexandra_v1" });
   checkSignal(signal);
   return normalizeEditableContext(saved, saved.updatedAt, profile.defaultPersonality, profile.defaultMemory);
 }

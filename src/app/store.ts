@@ -136,7 +136,8 @@ function initialCharacterId() {
 }
 function defaultContextFor(characterId: string) {
   const profile = getCharacterProfile(characterId);
-  return createDefaultEditableContext(0, profile.defaultPersonality, profile.defaultMemory);
+  return { ...createDefaultEditableContext(0, profile.defaultPersonality, profile.defaultMemory),
+    photoNoRefusalMode: characterId === "alexandra_v1" };
 }
 
 function registryOrder(characterId: string) {

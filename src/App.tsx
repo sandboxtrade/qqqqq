@@ -167,7 +167,7 @@ export default function App() {
   return <main className="social-app-shell alex-shell" data-page={page}>
     <header className="alex-header">
       {page === "chat" ? (
-        <button className="alex-header-avatar alex-avatar-button" type="button" aria-label="Открыть профиль Александры в разделе Люди" onClick={() => setPage("people")}>{character.core.name.charAt(0)}</button>
+        <button className="alex-header-avatar alex-avatar-button" type="button" aria-label={`Открыть профиль ${character.core.name} в разделе Люди`} onClick={() => setPage("people")}>{character.core.name.charAt(0)}</button>
       ) : (
         <div className="alex-brand-mark" aria-hidden="true">G<span>2</span></div>
       )}
@@ -186,7 +186,7 @@ export default function App() {
         onRetry={retry} onRetryPhoto={retryPhoto} onDismissFailed={dismissFailed}
         hasOlderMessages={hasOlderMessages} loadingOlder={loadingOlder} onLoadOlder={loadOlder} />}
       {page === "people" && <PeopleScreen wallet={wallet} walletBusy={playerBusy} ready={ready} onChat={openChat} onSettings={openCharacterSettings} onSpend={spend}/>}
-      {page === "social" && <AlexandraSocial uid={uid} onMessage={() => openChat("alexandra_v1")} onMyProfile={() => setPage("profile")} playerProfile={playerProfile}/>}
+      {page === "social" && <AlexandraSocial uid={uid} onMessage={openChat} onMyProfile={() => setPage("profile")} playerProfile={playerProfile}/>}
       {page === "profile" && <MyProfile profile={playerProfile} wallet={wallet} loading={playerLoading} saving={playerBusy} onSave={saveProfile} onTopUp={topUp} />}
       {page === "settings" && <Suspense fallback={<div className="alex-loading">Настройки…</div>}>
         <SettingsScreen key={activeCharacterId} characterName={character.core.name} firebaseEnabled={isFirebaseConfigured && !runtimeConfigurationError}

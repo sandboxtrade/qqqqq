@@ -640,9 +640,9 @@ export function planIntimacyTurn(input: IntimacyTurnInput): IntimacyTurnResult {
     return finish();
   }
 
-  // Alexandra starts with zero relationship. A single suggestive message or gift
-  // cannot open an intimate scene while she does not yet know the user.
-  if (input.character.id === "alexandra_v1" &&
+  // Both women start as strangers. A single suggestive message or transfer
+  // must not instantly open a private encounter with an unfamiliar user.
+  if ((input.character.id === "alexandra_v1" || input.character.id === "anastasia_v1") &&
       (input.relationship.trust < 0.38 || input.relationship.closeness < 0.38)) {
     state.phase = "normal";
     state.interactionStatus = "inactive";

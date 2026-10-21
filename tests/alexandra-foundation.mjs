@@ -4,11 +4,13 @@ import { join, dirname, resolve } from "node:path";
 import { test } from "node:test";
 const source = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("single Alexandra identity and isolated persistence ID", () => {
+test("Alexandra and Anastasia have distinct stable IDs and independent profiles", () => {
   const registry = source("src/character/character-registry.ts");
   assert.match(registry, /ALEXANDRA_ID = "alexandra_v1"/u);
   assert.match(source("src/character/character.ts"), /age: 25/u);
-  assert.match(registry, /characterProfiles: readonly SocialCharacterProfile\[\] = \[alexandraProfile\]/u);
+  assert.match(registry, /ANASTASIA_ID = "anastasia_v1"/u);
+  assert.match(registry, /characterProfiles: readonly SocialCharacterProfile\[\] = \[alexandraProfile, anastasiaProfile\]/u);
+  assert.match(registry, /мама ребёнка 10 лет/u);
   assert.doesNotMatch(registry, /mika_v1|yuzuki_v1|diana_v1|alia_v1/u);
   assert.match(source("src/character/character.ts"), /id: "alexandra_v1"/u);
 });
@@ -96,7 +98,7 @@ test("photo client retains WaveSpeed job polling, recovery and auth", () => {
 
 test("schema 4 and new 0.21.3 screen modules persist", () => {
   assert.match(source("src/config/version.ts"), /SCHEMA_VERSION = 4/u);
-  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.17"/u);
+  assert.match(source("src/config/version.ts"), /ENGINE_VERSION = "0\.21\.19"/u);
   for (const file of ["src/ui/PeopleScreen.tsx", "src/ui/MyProfile.tsx", "src/ui/AlexandraSocial.tsx", "src/ui/ChatScreen.tsx"]) assert.ok(source(file).length > 200, file);
 });
 
@@ -117,7 +119,8 @@ test("per-character photo no-refusal switch is editable, persisted and passed to
   assert.match(ui, /aria-checked=\{photoNoRefusalMode\}/u);
   assert.match(ui, /onSetPhotoNoRefusalMode\(!photoNoRefusalMode\)/u);
   assert.match(store, /updateCharacterEditableContext\(state.activeCharacterId/u);
-  assert.match(context, /photoNoRefusalMode: false/u);
+  assert.match(context, /photoNoRefusalMode: true/u);
+  assert.match(source("src/context/context-service.ts"), /photoNoRefusalMode: characterId === "alexandra_v1"/u);
   assert.match(runtime, /photoPolicy: \{ noRefusalMode: editableContext.photoNoRefusalMode \}/u);
   assert.match(worker, /photoPolicy: \{ noRefusalMode: input\?\.photoPolicy\?\.noRefusalMode === true \}/u);
 });

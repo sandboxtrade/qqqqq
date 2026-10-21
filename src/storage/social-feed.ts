@@ -5,7 +5,7 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { getFirebaseDb, isFirebaseConfigured } from "./firebase";
 
-export type SocialAuthorId = "alexandra_v1" | "player";
+export type SocialAuthorId = "alexandra_v1" | "anastasia_v1" | "player";
 export interface SocialPost {
   id: string;
   authorId: SocialAuthorId;
@@ -35,6 +35,12 @@ export const ALEXANDRA_SOCIAL_POSTS: readonly SocialPost[] = [
   { id: "alex-post-study", authorId: "alexandra_v1", text: "Пытаюсь совместить работу и учёбу. Пока получается в основном пить кофе и делать списки дел.", imageUrl: "", createdAt: Date.UTC(2026, 9, 17, 21, 5) },
   { id: "alex-post-office", authorId: "alexandra_v1", text: "Иногда кажется, что мой рабочий день состоит из бесконечных встреч, которые нужно перенести на другое время. Но сегодня хотя бы всё успела.", imageUrl: "", createdAt: Date.UTC(2026, 9, 16, 16, 40) },
   { id: "alex-post-evening", authorId: "alexandra_v1", text: "Вечер без планов — редкая роскошь. Музыка, книга, телефон на беззвучном. Идеально.", imageUrl: "", createdAt: Date.UTC(2026, 9, 14, 19, 20) },
+];
+
+export const ANASTASIA_SOCIAL_POSTS: readonly SocialPost[] = [
+  { id: "nastya-post-walk", authorId: "anastasia_v1", text: "Иногда просто гулять по городу без цели — лучший план на день.", imageUrl: "", createdAt: Date.UTC(2026, 9, 19, 14, 20) },
+  { id: "nastya-post-shopping", authorId: "anastasia_v1", text: "Вышла «на пять минут» в магазин. Конечно же, вернулась через два часа)", imageUrl: "", createdAt: Date.UTC(2026, 9, 18, 17, 5) },
+  { id: "nastya-post-coffee", authorId: "anastasia_v1", text: "Дома всё спокойно, а я опять сбежала в кофейню. Нужна смена обстановки.", imageUrl: "", createdAt: Date.UTC(2026, 9, 16, 12, 10) },
 ];
 
 export function emptySocialState(): SocialState {
@@ -68,7 +74,7 @@ export function sanitizeSocialState(value: unknown): SocialState {
   return {
     version: 1, ownPosts, comments,
     likedPostIds: ids(raw.likedPostIds), bookmarkedPostIds: ids(raw.bookmarkedPostIds),
-    followingIds: ids(raw.followingIds, 30).filter(id => id === "alexandra_v1"),
+    followingIds: ids(raw.followingIds, 30).filter(id => id === "alexandra_v1" || id === "anastasia_v1"),
     updatedAt: Number.isFinite(raw.updatedAt) ? Number(raw.updatedAt) : 0,
   };
 }

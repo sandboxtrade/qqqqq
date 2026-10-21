@@ -185,7 +185,9 @@ test("photo override stays off by default and never affects an ordinary chat or 
   const calls = [];
   const restore = installMocks(calls, { modelRefuses: true });
   try {
-    const normal = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Пришли селфи", photoPolicy: { noRefusalMode: false } });
+    const normal = await call("/yuzukiSpeak", { ...dialogueInput,
+      character: { id: "anastasia_v1", name: "Анастасия", age: 30 },
+      userText: "Пришли селфи", photoPolicy: { noRefusalMode: false } });
     assert.equal(normal.data.photoDecision.shouldSendPhoto, false);
     const ordinary = await call("/yuzukiSpeak", { ...dialogueInput, userText: "Как у тебя дела?", photoPolicy: { noRefusalMode: true } });
     assert.equal(ordinary.data.photoDecision.shouldSendPhoto, false);
@@ -292,7 +294,9 @@ test("GPT cannot claim an image was delivered when photoDecision refuses or trus
   const calls = [];
   const restore = installMocks(calls, { modelRefuses: true, falsePhotoPromise: true });
   try {
-    const result = await call("/yuzukiSpeak", { ...dialogueInput, photoPolicy: { noRefusalMode: false } });
+    const result = await call("/yuzukiSpeak", { ...dialogueInput,
+      character: { id: "anastasia_v1", name: "Анастасия", age: 30 },
+      photoPolicy: { noRefusalMode: false } });
     assert.equal(result.data.photoDecision.shouldSendPhoto, false);
     assert.doesNotMatch(result.data.text, /вот кадр|держи фото/iu);
     assert.match(result.data.text, /Фото сейчас не подготовила/iu);
@@ -378,6 +382,7 @@ test("regression: a textual photo offer without authorization is never shown as 
     const result = await call("/yuzukiSpeak", {
       ...dialogueInput,
       userText: "А давай теперь фотку в полный рост",
+      character: { id: "anastasia_v1", name: "Анастасия", age: 30 },
       photoPolicy: { noRefusalMode: false },
     });
     assert.equal(result.data.photoFlow, "not-approved");
@@ -413,7 +418,53 @@ test("regression: short photo follow-ups work while questions about photo status
 test("Worker health and CORS expose actual deployment version for stale Worker detection", async () => {
   const response = await worker.fetch(new Request(`${base}/health`, { headers: { Origin: origin } }), env);
   const status = await response.json();
-  assert.equal(status.version, "0.21.17");
-  assert.equal(response.headers.get("X-Game2-Worker-Version"), "0.21.17");
+  assert.equal(status.version, "0.21.19");
+  assert.equal(response.headers.get("X-Game2-Worker-Version"), "0.21.19");
   assert.match(response.headers.get("Access-Control-Expose-Headers"), /X-Game2-Worker-Version/u);
+});
+
+test("Anastasia: distinct GPT personality, independent signed LoRA and no cross-character billing", async () => {
+  const calls = [];
+  const restore = installMocks(calls);
+  try {
+    const person = { id: "anastasia_v1", name: "Анастасия", age: 30 };
+    const dialogue = await call("/yuzukiSpeak", { ...dialogueInput, character: person,
+      userText: "Настя, сделай селфи дома", relationship: { trust: 0.6, closeness: 0.6 },
+      world: { currentActivity: "relaxing", currentLocation: "living_room", photoWardrobe: { mode: "home", outfit: "" } },
+      photoPolicy: { noRefusalMode: false },
+    });
+    assert.equal(dialogue.status, 200, JSON.stringify(dialogue.data));
+    assert.equal(dialogue.data.photoDecision.shouldSendPhoto, true);
+    assert.match(dialogue.data.photoDecision.prompt, /^g2girl03, /u);
+    const gptCall = calls.find(x => x.payload?.text?.format?.name === "alexandra_turn");
+    assert.match(gptCall.payload.instructions, /Ты — Анастасия, взрослая женщина 30 лет/u);
+    assert.doesNotMatch(gptCall.payload.instructions, /Ты — Александра/u);
+    const stolen = await call("/yuzukiPhoto", { character: dialogueInput.character,
+      decision: dialogue.data.photoDecision });
+    assert.equal(stolen.status, 403);
+    assert.equal(calls.filter(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora")).length, 0);
+    const start = await call("/yuzukiPhoto", { character: person, decision: dialogue.data.photoDecision });
+    assert.equal(start.status, 200, JSON.stringify(start.data));
+    assert.equal(start.data.pending, true);
+    const submit = calls.find(x => x.url.endsWith("/wavespeed-ai/z-image/turbo-lora"));
+    assert.match(submit.payload.loras[0].path, /3818cb28-8c31-44bd-ac6a-40b598a26bad/u);
+    assert.equal(submit.payload.loras[0].scale, 0.85);
+    assert.match(submit.payload.prompt, /^g2girl03, /u);
+    assert.doesNotMatch(submit.payload.prompt, /child|kid|minor|ребёнок/iu);
+  } finally { restore(); }
+});
+
+test("Anastasia early-stage caution is separate from later photo access", async () => {
+  const calls = [];
+  const restore = installMocks(calls, { modelRefuses: true });
+  try {
+    const character = { id: "anastasia_v1", name: "Анастасия", age: 30 };
+    const early = await call("/yuzukiSpeak", { ...dialogueInput, character,
+      relationship: { trust: 0, closeness: 0 }, photoPolicy: { noRefusalMode: false } });
+    assert.equal(early.data.photoDecision.shouldSendPhoto, false);
+    const later = await call("/yuzukiSpeak", { ...dialogueInput, character,
+      relationship: { trust: 0.7, closeness: 0.65 }, photoPolicy: { noRefusalMode: false } });
+    assert.equal(later.data.photoDecision.shouldSendPhoto, true);
+    assert.match(later.data.photoDecision.prompt, /^g2girl03, /u);
+  } finally { restore(); }
 });

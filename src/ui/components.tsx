@@ -85,8 +85,8 @@ export function AuthGate({
         <span>А</span>
       </div>
       <div className="auth-copy">
-        <span className="eyebrow">ALEXANDRA</span>
-        <h1>Ваш диалог с Александрой</h1>
+        <span className="eyebrow">GAME2</span>
+        <h1>Общение в Game2</h1>
         <p>
           Войдите через Google, чтобы память, состояние и история
           синхронизировались через Firestore.

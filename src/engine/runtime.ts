@@ -566,6 +566,7 @@ export function applyBoundedCloudReaction(
   relationship: RelationshipState,
   cloud: CloudLanguageResult,
   now: number,
+  characterId = "alexandra_v1",
 ) {
   if (cloud.used && cloud.emotionReaction && cloud.relationshipReaction) {
     const emotionDelta = Object.fromEntries(
@@ -577,7 +578,13 @@ export function applyBoundedCloudReaction(
     const relationshipDelta = Object.fromEntries(
       Object.entries(RELATIONSHIP_REACTION_LIMITS).map(([key, limit]) => [
         key,
-        normalizedReaction(cloud.relationshipReaction?.[key as keyof typeof RELATIONSHIP_REACTION_LIMITS]) * limit,
+        // Anastasia develops a relationship over many meaningful turns instead
+        // of thousands; Alexandra retains her original balance. Still capped
+        // per turn, signed reactions (including negative) and never automatic.
+        characterId === "anastasia_v1"
+          ? Math.max(-0.018, Math.min(0.018,
+              normalizedReaction(cloud.relationshipReaction?.[key as keyof typeof RELATIONSHIP_REACTION_LIMITS]) * limit * 20))
+          : normalizedReaction(cloud.relationshipReaction?.[key as keyof typeof RELATIONSHIP_REACTION_LIMITS]) * limit,
       ]),
     );
     return {
@@ -1301,6 +1308,7 @@ export async function handleUserMessage(
     before.relationship,
     cloudLanguage,
     now,
+    characterId,
   );
   emotion = stateReaction.emotion;
   relationship = stateReaction.relationship;
