@@ -167,7 +167,7 @@ export default function App() {
   return <main className="social-app-shell alex-shell" data-page={page}>
     <header className="alex-header">
       {page === "chat" ? (
-        <button className="alex-header-avatar alex-avatar-button" type="button" aria-label={`Открыть профиль ${character.core.name} в разделе Люди`} onClick={() => setPage("people")}>{character.core.name.charAt(0)}</button>
+        <button className="alex-header-avatar alex-avatar-button" type="button" aria-label={`Открыть профиль ${character.core.name} в разделе Люди`} onClick={() => setPage("people")}>{character.avatarUrl ? <img loading="lazy" src={character.avatarUrl} alt="" referrerPolicy="no-referrer" /> : character.core.name.charAt(0)}</button>
       ) : (
         <div className="alex-brand-mark" aria-hidden="true">G<span>2</span></div>
       )}

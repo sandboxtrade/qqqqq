@@ -25,7 +25,7 @@ export function PeopleScreen({ wallet, walletBusy, ready, onChat, onSettings, on
       <p>Персонажи живут своей жизнью. Общение и отношения развиваются отдельно с каждым.</p></div>
     <div className="alex-wallet-strip"><span><Icon name="gift" size={19}/> Виртуальный кошелёк</span><strong>{wallet ? formatGameMoney(balance) : "…"}</strong></div>
     {characterProfiles.map(person => <article className="alex-person-card" key={person.id}>
-      <div className="alex-person-head"><div className="alex-social-avatar">{person.core.name.charAt(0)}</div>
+      <div className="alex-person-head"><div className="alex-social-avatar">{person.avatarUrl ? <img loading="lazy" src={person.avatarUrl} alt="" referrerPolicy="no-referrer" /> : person.core.name.charAt(0)}</div>
         <div><strong>{person.core.name}, {person.core.age}</strong><span>@{person.handle} · {person.occupation}</span><small>{person.bio}</small></div></div>
       <div className="alex-person-actions">
         <button type="button" className="primary" onClick={() => onChat(person.id)}><Icon name="chat" size={17}/>Написать</button>

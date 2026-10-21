@@ -86,3 +86,6 @@
 .g2-social-composer footer button {background:#aa90d5;color:#181122;border:0;padding:11px 18px;border-radius:12px;font-size:12px;font-weight:700;}
 .g2-social-composer footer button:disabled {opacity:.4;}
 @media (min-width:650px){.g2-social-network{padding:22px 18px 90px;}.g2-social-modal-backdrop{align-items:center;}.g2-social-composer{border-radius:22px;padding:22px;}}
+
+.g2-social-cover{background-color:#1f2330;background-repeat:no-repeat;background-size:cover;background-position:center 18%;overflow:hidden;}
+.g2-social-profile-details .profile-gallery-section{width:100%;margin-top:14px;}

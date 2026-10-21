@@ -38,9 +38,9 @@ export const ALEXANDRA_SOCIAL_POSTS: readonly SocialPost[] = [
 ];
 
 export const ANASTASIA_SOCIAL_POSTS: readonly SocialPost[] = [
-  { id: "nastya-post-walk", authorId: "anastasia_v1", text: "Иногда просто гулять по городу без цели — лучший план на день.", imageUrl: "", createdAt: Date.UTC(2026, 9, 19, 14, 20) },
-  { id: "nastya-post-shopping", authorId: "anastasia_v1", text: "Вышла «на пять минут» в магазин. Конечно же, вернулась через два часа)", imageUrl: "", createdAt: Date.UTC(2026, 9, 18, 17, 5) },
-  { id: "nastya-post-coffee", authorId: "anastasia_v1", text: "Дома всё спокойно, а я опять сбежала в кофейню. Нужна смена обстановки.", imageUrl: "", createdAt: Date.UTC(2026, 9, 16, 12, 10) },
+  { id: "nastya-post-walk", authorId: "anastasia_v1", text: "Собралась буквально за пять минут и всё равно умудрилась зависнуть у зеркала дольше, чем планировала.", imageUrl: "/characters/anastasia-gallery/anastasia-gallery-02-jeans-mirror.png", createdAt: Date.UTC(2026, 9, 19, 14, 20) },
+  { id: "nastya-post-shopping", authorId: "anastasia_v1", text: "Вышла «на пять минут» по магазинам. Ну да, конечно 😌", imageUrl: "/characters/anastasia-gallery/anastasia-gallery-03-home-shorts.png", createdAt: Date.UTC(2026, 9, 18, 17, 5) },
+  { id: "nastya-post-coffee", authorId: "anastasia_v1", text: "Сегодня хочется просто выглядеть красиво и никуда не спешить.", imageUrl: "/characters/anastasia-gallery/anastasia-gallery-01-selfie.png", createdAt: Date.UTC(2026, 9, 16, 12, 10) },
 ];
 
 export function emptySocialState(): SocialState {

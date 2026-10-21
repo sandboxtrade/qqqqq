@@ -34,6 +34,19 @@ function Avatar({ name, imageUrl, size = "medium" }: { name: string; imageUrl?: 
     {imageUrl ? <img loading="lazy" src={imageUrl} alt="" referrerPolicy="no-referrer" /> : name.charAt(0).toUpperCase()}
   </span>;
 }
+function Gallery({ items }: { items: readonly { id: string; imageUrl?: string; caption: string; note?: string; objectPosition?: string; objectFit?: "cover" | "contain"; }[] }) {
+  if (!items.length) return null;
+  return <section className="profile-gallery-section">
+    <div className="profile-gallery-grid">
+      {items.map(item => <article key={item.id} className="profile-gallery-card">
+        <div className="profile-gallery-media">
+          {item.imageUrl ? <img loading="lazy" src={item.imageUrl} alt={item.caption} style={{ objectPosition: item.objectPosition || "center 18%", objectFit: item.objectFit || "cover" }} referrerPolicy="no-referrer" /> : <div className="profile-gallery-placeholder"><Glyph name="plus" size={28}/><span>PHOTO</span></div>}
+        </div>
+        <div className="profile-gallery-caption"><strong>{item.caption}</strong>{item.note && <span>{item.note}</span>}</div>
+      </article>)}
+    </div>
+  </section>;
+}
 export function AlexandraSocial({ onMessage, onMyProfile, playerProfile, uid }: {
   onMessage: (characterId: string) => void; onMyProfile: () => void; playerProfile: PlayerProfile | null; uid: string | null;
 }) {
@@ -183,12 +196,13 @@ export function AlexandraSocial({ onMessage, onMyProfile, playerProfile, uid }: 
         <label className="g2-social-search"><Glyph name="search" size={19}/><input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Поиск публикаций…" aria-label="Поиск публикаций" /></label>
         <div className="g2-social-tabs" role="group" aria-label="Фильтр публикаций">{([['feed','Для тебя'],['following','Подписки'],['saved','Сохранённое'],['mine','Мои']] as const).map(([id,name])=><button type="button" key={id} className={tab===id?"selected":""} aria-pressed={tab===id} onClick={()=>setTab(id)}>{name}</button>)}</div>
       </> : <div className="g2-social-person-profile">
-        <div className="g2-social-cover" />
+        <div className="g2-social-cover" style={view !== "player" && viewedProfile.avatarUrl ? { backgroundImage: `linear-gradient(180deg, rgba(11,12,18,.12), rgba(11,12,18,.56)), url(${viewedProfile.avatarUrl})`, backgroundSize: "cover", backgroundPosition: viewedProfile.heroObjectPosition || viewedProfile.avatarObjectPosition || "center 18%" } : undefined} />
         <div className="g2-social-profile-details"><Avatar name={view==="player"?ownName:viewedProfile.core.name} imageUrl={view==="player"?playerProfile?.avatarUrl:viewedProfile.avatarUrl} size="large"/>
           <h2>{view==="player"?ownName:viewedProfile.core.name}</h2><small>{view==="player"?ownHandle:`@${viewedProfile.handle}`}</small>
           <p>{view==="player"?(playerProfile?.bio||"Добавь описание своего профиля."):viewedProfile.bio}</p>
           <div className="g2-social-profile-stats"><span><strong>{(view==="player"?social.ownPosts.length:viewedPostCount)}</strong> публикаций</span><span><strong>{view==="player"?social.followingIds.length:(viewedFollowing?1:0)}</strong> подписок в игре</span></div>
           {view==="player"?<button type="button" className="g2-social-primary" onClick={onMyProfile}>Редактировать профиль</button>:<div className="g2-social-profile-ctas"><button type="button" className="g2-social-primary" onClick={()=>onMessage(viewedProfile.id)}>Написать</button><button type="button" className="g2-social-outline" aria-pressed={viewedFollowing} onClick={()=>change(s=>({...s,followingIds:toggleSocialId(s.followingIds,viewedProfile.id)}))}>{viewedFollowing?"Вы подписаны":"Подписаться"}</button></div>}
+          {view !== "player" && viewedProfile.gallery.length > 0 && <Gallery items={viewedProfile.gallery} />}
         </div>
       </div>}
       <div className="g2-social-posts" aria-live="polite">
