@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import * as ts from "typescript";
 
 const source = relative => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 const transpiled = ts.transpileModule(source("src/storage/firestore-operation-policy.ts"), {

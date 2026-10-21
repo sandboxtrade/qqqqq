@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import ts from 'typescript';
+import * as ts from 'typescript';
 
 const source = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 

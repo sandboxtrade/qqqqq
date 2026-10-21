@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ts from "typescript";
+import * as ts from "typescript";
 
 const source = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 

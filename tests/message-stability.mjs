@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import ts from 'typescript';
+import * as ts from 'typescript';
 
 const source = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const js = ts.transpileModule(source('src/storage/turn-outbox.ts'), {
